@@ -1,11 +1,11 @@
-// Keeps the current scene across restarts. The desktop app writes a file in
+// Keeps the current model across restarts. The desktop app writes a file in
 // its data folder (WebKit flushes localStorage lazily and can lose the last
 // edits on quit); a plain browser falls back to localStorage.
 const KEY = "3d-maker:autosave";
 const isTauri = () => Boolean(window.__TAURI_INTERNALS__);
 const invoke = (cmd, args) => import("@tauri-apps/api/core").then(({ invoke }) => invoke(cmd, args));
 
-const valid = (doc) => doc && doc.version === 1 && Array.isArray(doc.nodes);
+const valid = (doc) => doc && doc.version === 2 && typeof doc.script === "string";
 
 export async function loadAutosave() {
   try {

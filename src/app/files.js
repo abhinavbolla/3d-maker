@@ -8,9 +8,8 @@ async function tauri() {
 }
 
 const FILTERS = {
-  json: { name: "3D Maker scene", extensions: ["3dm.json", "json"] },
+  json: { name: "3D Maker model", extensions: ["json"] },
   stl: { name: "STL mesh", extensions: ["stl"] },
-  step: { name: "STEP solid", extensions: ["step", "stp"] },
 };
 
 // Returns the saved path (or file name in a browser), or null if cancelled.

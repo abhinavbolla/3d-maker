@@ -1,14 +1,14 @@
-// Three.js viewport: Z-up CAD camera, grid, shaded meshes with edges,
-// click to select, and a move/rotate/scale gizmo.
+// The 3D view: Z-up camera, soft studio light, a ground grid scaled to the
+// model, click to pick a part, and motion for parts that spin or swing.
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 const DEG = Math.PI / 180;
 const VIEWS = {
-  iso: [1, -1.2, 0.9],
+  iso: [1, -1.25, 0.8],
   top: [0, 0, 1],
   bottom: [0, 0, -1],
   front: [0, -1, 0],
@@ -16,97 +16,108 @@ const VIEWS = {
   right: [1, 0, 0],
   left: [-1, 0, 0],
 };
+const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 
-function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-export function createViewport(container, { onSelect, onTransform }) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+export function createViewport(container, { onPick }) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.toneMapping = THREE.NeutralToneMapping;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100000);
-  camera.position.set(160, -200, 140);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.9;
+  const key = new THREE.DirectionalLight(0xffffff, 1.4);
+  key.position.set(0.6, -1, 1.6);
+  scene.add(key);
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f96, 2.2));
-  const key = new THREE.DirectionalLight(0xffffff, 1.6);
-  key.position.set(1, -1.5, 2);
-  camera.add(key);
-  scene.add(camera);
+  const camera = new THREE.PerspectiveCamera(35, 1, 1, 1e6);
+  camera.position.set(300, -380, 250);
+  const orbit = new OrbitControls(camera, renderer.domElement);
+  orbit.screenSpacePanning = true;
+  orbit.enableDamping = true;
+  orbit.dampingFactor = 0.18;
+  orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
 
   const grid = new THREE.Group();
   scene.add(grid);
-  const axes = new THREE.Group();
-  scene.add(axes);
-
   const content = new THREE.Group();
   scene.add(content);
-  const ghostGroup = new THREE.Group();
-  scene.add(ghostGroup);
 
-  const orbit = new OrbitControls(camera, renderer.domElement);
-  orbit.enableDamping = false;
-  orbit.screenSpacePanning = true;
-  orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
+  let parts = new Map(); // name -> { object, mesh, part }
+  let selected = null;
+  let playing = true;
+  let fitted = false;
+  let lastBox = null;
 
-  const gizmo = new TransformControls(camera, renderer.domElement);
-  gizmo.setSize(0.8);
-  const gizmoHelper = gizmo.getHelper();
-  scene.add(gizmoHelper);
-  const pivot = new THREE.Object3D();
-  scene.add(pivot);
+  const colors = () => ({ bg: new THREE.Color(cssVar("--viewport", "#ecedef")), grid: new THREE.Color(cssVar("--grid", "#d6d9dd")), major: new THREE.Color(cssVar("--grid-major", "#c3c7cc")), accent: new THREE.Color(cssVar("--accent", "#2f6fde")) });
+  let theme = colors();
 
-  let meshes = new Map(); // id -> { group, node }
-  let selectedId = null;
-  let snap = true;
-  let dragStart = null; // { pivot: Matrix4, node: Matrix4 }
-
-  function themeColors() {
-    return {
-      bg: new THREE.Color(cssVar("--viewport") || "#e8e9eb"),
-      grid: new THREE.Color(cssVar("--grid") || "#cfd2d6"),
-      grid10: new THREE.Color(cssVar("--grid-major") || "#b6bbc1"),
-      edge: new THREE.Color(cssVar("--edge") || "#2b2f33"),
-      select: new THREE.Color(cssVar("--accent") || "#2f6fde"),
-    };
-  }
-  let colors = themeColors();
-
-  function makeGrid(size = 400) {
+  // ---- grid: 10 cells of a round size around the model ----
+  function makeGrid(box) {
+    grid.traverse((o) => o.geometry?.dispose());
     grid.clear();
-    const minor = [];
-    const major = [];
-    for (let i = -size; i <= size; i += 10) {
-      const arr = i % 50 === 0 ? major : minor;
-      arr.push(-size, i, 0, size, i, 0, i, -size, 0, i, size, 0);
+    const size = box ? Math.max(box.max.x - box.min.x, box.max.y - box.min.y, 50) : 200;
+    const step = 10 ** Math.floor(Math.log10(size / 4));
+    const half = Math.ceil((size * 1.4) / step / 2) * step;
+    const cx = box ? Math.round((box.min.x + box.max.x) / 2 / step) * step : 0;
+    const cy = box ? Math.round((box.min.y + box.max.y) / 2 / step) * step : 0;
+    const minor = [], major = [];
+    for (let v = -half; v <= half + 1e-9; v += step) {
+      const list = Math.abs(Math.round(v / step)) % 10 === 0 ? major : minor;
+      list.push(cx - half, cy + v, 0, cx + half, cy + v, 0, cx + v, cy - half, 0, cx + v, cy + half, 0);
     }
-    const line = (pts, color, opacity) => {
+    for (const [pts, color] of [[minor, theme.grid], [major, theme.major]]) {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-      return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
-    };
-    grid.add(line(minor, colors.grid, 1), line(major, colors.grid10, 1));
-    axes.clear();
-    const axis = (to, color) => {
-      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), to]);
-      return new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 }));
-    };
-    axes.add(axis(new THREE.Vector3(size / 4, 0, 0), 0xc8463d), axis(new THREE.Vector3(0, size / 4, 0), 0x4b9a3f), axis(new THREE.Vector3(0, 0, size / 8), 0x3d6fc8));
+      grid.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color })));
+    }
   }
 
   function applyTheme() {
-    colors = themeColors();
-    scene.background = colors.bg;
-    makeGrid();
-    for (const { group } of meshes.values()) {
-      const edges = group.children.find((c) => c.isLineSegments);
-      if (edges) edges.material.color.copy(colors.edge);
-    }
+    theme = colors();
+    scene.background = theme.bg;
+    makeGrid(lastBox);
     highlight();
   }
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+
+  // ---- render loop: only runs while something moves ----
+  let frame = 0;
+  const timer = new THREE.Timer();
+  let time = 0;
+  const moving = () => playing && [...parts.values()].some((p) => p.part.motion.length);
+  function tick() {
+    frame = 0;
+    timer.update();
+    const dt = timer.getDelta();
+    if (moving()) time += Math.min(dt, 0.1);
+    pose(time);
+    const damping = orbit.update();
+    renderer.render(scene, camera);
+    if (moving() || damping) render();
+  }
+  function render() {
+    if (!frame) {
+      frame = requestAnimationFrame(tick);
+    }
+  }
+  orbit.addEventListener("change", render);
+
+  function pose(t) {
+    for (const { object, part } of parts.values()) {
+      object.matrix.identity();
+      for (const m of part.motion) {
+        const angle = m.type === "spin" ? (m.rpm / 60) * 2 * Math.PI * t : m.angle * DEG * Math.sin((2 * Math.PI * t) / m.seconds);
+        const axis = new THREE.Vector3(...m.axis).normalize();
+        const c = new THREE.Vector3(...m.center);
+        const r = new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, angle)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+        object.matrix.premultiply(r);
+      }
+      object.matrixWorldNeedsUpdate = true;
+    }
+  }
 
   function resize() {
     const { clientWidth: w, clientHeight: h } = container;
@@ -120,240 +131,155 @@ export function createViewport(container, { onSelect, onTransform }) {
   }
   new ResizeObserver(resize).observe(container);
 
-  let frame = 0;
-  function render() {
-    if (frame) return;
-    frame = requestAnimationFrame(() => {
-      frame = 0;
-      renderer.render(scene, camera);
-    });
-  }
-  orbit.addEventListener("change", render);
-  gizmo.addEventListener("change", render);
-
-  // ---- meshes ----
-  function buildGroup(result, node) {
-    const group = new THREE.Group();
-    group.userData.id = result.id;
+  // ---- parts ----
+  function makeObject(part) {
+    const { positions, indices, normals } = part.mesh;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(result.vertices, 3));
-    geo.setAttribute("normal", new THREE.BufferAttribute(result.normals, 3));
-    geo.setIndex(new THREE.BufferAttribute(result.triangles, 1));
-    const mat = new THREE.MeshStandardMaterial({
-      color: node.color,
-      roughness: 0.65,
-      metalness: 0.05,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-    });
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+    geo.computeBoundingSphere();
+    const mat = new THREE.MeshStandardMaterial({ color: part.color, roughness: 0.5, metalness: 0.05 });
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.userData.id = result.id;
-    const lg = new THREE.BufferGeometry();
-    lg.setAttribute("position", new THREE.BufferAttribute(result.lines, 3));
-    const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: colors.edge, transparent: true, opacity: 0.55 }));
-    group.add(mesh, lines);
-    return group;
+    mesh.userData.name = part.name;
+    const object = new THREE.Group();
+    object.matrixAutoUpdate = false;
+    object.add(mesh);
+    return { object, mesh };
   }
 
-  function disposeGroup(group) {
-    group.traverse((o) => {
-      o.geometry?.dispose();
-      o.material?.dispose();
-    });
-  }
-
-  // nodes: top-level doc nodes; build: Map id -> worker result
-  function setScene(nodes, build, ghost) {
-    detachGizmo();
-    for (const { group } of meshes.values()) {
-      content.remove(group);
-      disposeGroup(group);
+  function setParts(list) {
+    const next = new Map();
+    for (const part of list) {
+      if (part.hidden || !part.mesh.indices.length) continue;
+      const old = parts.get(part.name);
+      if (old && old.part.mesh === part.mesh) {
+        old.mesh.material.color.set(part.color);
+        old.part = part;
+        next.set(part.name, old);
+        parts.delete(part.name);
+        continue;
+      }
+      const made = makeObject(part);
+      content.add(made.object);
+      next.set(part.name, { ...made, part });
     }
-    meshes = new Map();
-    for (const node of nodes) {
-      const r = build.get(node.id);
-      if (!r || r.error || node.visible === false) continue;
-      const group = buildGroup(r, node);
-      content.add(group);
-      meshes.set(node.id, { group, node, bounds: r.bounds });
+    for (const { object, mesh } of parts.values()) {
+      content.remove(object);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
     }
-    ghostGroup.children.forEach((c) => disposeGroup(c));
-    ghostGroup.clear();
-    if (ghost) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(ghost.vertices, 3));
-      geo.setIndex(new THREE.BufferAttribute(ghost.triangles, 1));
-      const mat = new THREE.MeshBasicMaterial({ color: colors.select, transparent: true, opacity: 0.25, depthTest: false });
-      const wire = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: colors.select, wireframe: true, transparent: true, opacity: 0.35, depthTest: false }));
-      ghostGroup.add(new THREE.Mesh(geo, mat), wire);
+    parts = next;
+    const box = modelBox();
+    if (!lastBox || !box || !box.equals(lastBox)) {
+      lastBox = box;
+      makeGrid(box);
+    }
+    if (!parts.size) {
+      // Back to a default framing, so an empty grid is not a speck far away.
+      fit();
+      fitted = false;
     }
     highlight();
-    if (selectedId) attachGizmo();
     render();
+  }
+
+  function modelBox(name) {
+    const box = new THREE.Box3();
+    for (const [n, { part }] of parts) {
+      if (name && n !== name) continue;
+      const b = part.mesh.bounds;
+      if (b) box.expandByPoint(new THREE.Vector3(b[0], b[1], b[2])).expandByPoint(new THREE.Vector3(b[3], b[4], b[5]));
+    }
+    return box.isEmpty() ? null : box;
   }
 
   function highlight() {
-    for (const [id, { group, node }] of meshes) {
-      const mesh = group.children[0];
-      const lines = group.children[1];
-      const on = id === selectedId;
-      mesh.material.emissive = on ? colors.select.clone().multiplyScalar(0.12) : new THREE.Color(0);
-      lines.material.color.copy(on ? colors.select : colors.edge);
-      lines.material.opacity = on ? 1 : 0.55;
-      mesh.material.color.set(node.color);
+    for (const [name, { mesh, part }] of parts) {
+      mesh.material.color.set(part.color);
+      mesh.material.emissive.copy(name === selected ? theme.accent : new THREE.Color(0));
+      mesh.material.emissiveIntensity = name === selected ? 0.22 : 0;
     }
     render();
   }
 
-  // ---- gizmo ----
-  function nodeMatrix(node) {
-    const m = new THREE.Matrix4();
-    const [rx, ry, rz] = node.rotation ?? [0, 0, 0];
-    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rx * DEG, ry * DEG, rz * DEG, "ZYX"));
-    const s = node.scale ?? 1;
-    m.compose(new THREE.Vector3(...(node.position ?? [0, 0, 0])), q, new THREE.Vector3(s, s, s));
-    return m;
+  function select(name) {
+    selected = name && parts.has(name) ? name : null;
+    highlight();
   }
-
-  function attachGizmo() {
-    const entry = meshes.get(selectedId);
-    if (!entry) return detachGizmo();
-    const [[a, b, c], [d, e, f]] = entry.bounds;
-    pivot.position.set((a + d) / 2, (b + e) / 2, (c + f) / 2);
-    pivot.rotation.set(0, 0, 0);
-    pivot.scale.set(1, 1, 1);
-    pivot.updateMatrixWorld(true);
-    gizmo.attach(pivot);
-    gizmoHelper.visible = true;
-  }
-
-  function detachGizmo() {
-    gizmo.detach();
-    for (const { group } of meshes.values()) {
-      if (group.parent !== content) content.attach(group);
-    }
-  }
-
-  gizmo.addEventListener("dragging-changed", (e) => {
-    orbit.enabled = !e.value;
-    const entry = meshes.get(selectedId);
-    if (!entry) return;
-    if (e.value) {
-      pivot.updateMatrixWorld(true);
-      dragStart = { pivot: pivot.matrixWorld.clone(), node: nodeMatrix(entry.node) };
-      pivot.attach(entry.group);
-    } else if (dragStart) {
-      pivot.updateMatrixWorld(true);
-      const delta = pivot.matrixWorld.clone().multiply(dragStart.pivot.clone().invert());
-      const next = delta.multiply(dragStart.node);
-      const pos = new THREE.Vector3();
-      const quat = new THREE.Quaternion();
-      const scl = new THREE.Vector3();
-      next.decompose(pos, quat, scl);
-      const eul = new THREE.Euler().setFromQuaternion(quat, "ZYX");
-      const r = (v, p = 1e4) => Math.round(v * p) / p || 0;
-      dragStart = null;
-      onTransform(selectedId, {
-        position: [r(pos.x), r(pos.y), r(pos.z)],
-        rotation: [r(eul.x / DEG, 1e3), r(eul.y / DEG, 1e3), r(eul.z / DEG, 1e3)],
-        scale: r(scl.x),
-      });
-    }
-  });
-
-  function setMode(mode) {
-    gizmo.setMode(mode);
-    render();
-  }
-
-  function setSnap(on) {
-    snap = on;
-    gizmo.setTranslationSnap(on ? 1 : null);
-    gizmo.setRotationSnap(on ? 15 * DEG : null);
-    gizmo.setScaleSnap(on ? 0.05 : null);
-  }
-  setSnap(true);
 
   // ---- picking ----
   const ray = new THREE.Raycaster();
   let down = null;
   renderer.domElement.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
   renderer.domElement.addEventListener("pointerup", (e) => {
-    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4 || e.button !== 0) return;
-    if (gizmo.dragging || gizmo.axis) return;
+    if (!down || e.button !== 0 || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
     const rect = renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-    const hit = ray.intersectObjects([...meshes.values()].map((m) => m.group.children[0]), false)[0];
-    onSelect(hit ? hit.object.userData.id : null, e);
+    content.updateMatrixWorld(true);
+    const meshes = [...parts.values()].map((p) => p.mesh);
+    // Exact point first, then a small ring around it so thin parts (blades,
+    // struts) are easy to hit.
+    let hit = null;
+    for (const [dx, dy] of [[0, 0], ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => [6 * Math.cos(i * 0.785), 6 * Math.sin(i * 0.785)])]) {
+      ray.setFromCamera(new THREE.Vector2(((e.clientX + dx - rect.left) / rect.width) * 2 - 1, -((e.clientY + dy - rect.top) / rect.height) * 2 + 1), camera);
+      hit = ray.intersectObjects(meshes, false)[0];
+      if (hit) break;
+    }
+    onPick(hit ? hit.object.userData.name : null);
   });
 
-  function select(id) {
-    selectedId = id && meshes.has(id) ? id : null;
-    detachGizmo();
-    if (selectedId) attachGizmo();
-    else gizmoHelper.visible = false;
-    highlight();
-  }
-
   // ---- camera ----
-  function sceneBox() {
-    const box = new THREE.Box3();
-    for (const { bounds } of meshes.values()) {
-      box.expandByPoint(new THREE.Vector3(...bounds[0]));
-      box.expandByPoint(new THREE.Vector3(...bounds[1]));
-    }
-    if (box.isEmpty()) box.set(new THREE.Vector3(-50, -50, 0), new THREE.Vector3(50, 50, 50));
-    return box;
-  }
-
-  function placeCamera(cam, view, box, aspect) {
+  function placeCamera(cam, view, box) {
     const dir = new THREE.Vector3(...(VIEWS[view] ?? VIEWS.iso)).normalize();
-    const center = box.getCenter(new THREE.Vector3());
-    const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10);
+    const b = box ?? new THREE.Box3(new THREE.Vector3(-100, -100, 0), new THREE.Vector3(100, 100, 100));
+    const center = b.getCenter(new THREE.Vector3());
+    const radius = Math.max(b.getSize(new THREE.Vector3()).length() / 2, 5);
     const fov = cam.fov * DEG;
-    const fit = Math.max(radius / Math.sin(fov / 2), radius / Math.sin(Math.atan(Math.tan(fov / 2) * aspect)));
-    cam.position.copy(center).addScaledVector(dir, fit * 1.05);
+    const fit = Math.max(radius / Math.sin(fov / 2), radius / Math.sin(Math.atan(Math.tan(fov / 2) * cam.aspect)));
     cam.up.set(0, 0, 1);
-    if (view === "top" || view === "bottom") cam.up.set(0, 1, 0);
+    if (view === "top") cam.up.set(0, 1, 0);
+    if (view === "bottom") cam.up.set(0, -1, 0);
+    cam.position.copy(center).addScaledVector(dir, fit * 1.02);
     cam.lookAt(center);
-    cam.near = fit / 100;
-    cam.far = fit * 100;
+    cam.near = fit / 200;
+    cam.far = fit * 200;
     cam.updateProjectionMatrix();
     return center;
   }
 
-  function setView(view = "iso") {
-    const center = placeCamera(camera, view, sceneBox(), camera.aspect);
+  function fit(view = "iso") {
+    const center = placeCamera(camera, view, modelBox());
     orbit.target.copy(center);
     orbit.update();
+    fitted = true;
     render();
   }
 
-  // Renders a fixed-size PNG from any standard view without touching the on-screen camera.
-  function screenshot({ view, width = 1024, height = 768 } = {}) {
+  // Frames the model the first time one appears, so new models are in view.
+  function fitIfNew() {
+    if (!fitted && parts.size) fit();
+  }
+
+  // A PNG from any standard view, at rest pose, without the selection tint.
+  function screenshot({ view, width = 1024, height = 768, part } = {}) {
+    if (part && !parts.has(part)) throw new Error(`There is no part named "${part}".`);
     const cam = camera.clone();
     cam.aspect = width / height;
-    if (view) placeCamera(cam, view, sceneBox(), cam.aspect);
+    if (view || part) placeCamera(cam, view ?? "iso", modelBox(part));
     else cam.updateProjectionMatrix();
     const target = new THREE.WebGLRenderTarget(width, height, { samples: 4, colorSpace: THREE.SRGBColorSpace });
-    // Show true colours: no gizmo, no selection tint, no ghost.
-    const helperWasVisible = gizmoHelper.visible;
-    const wasSelected = selectedId;
-    gizmoHelper.visible = false;
-    ghostGroup.visible = false;
-    selectedId = null;
+    const was = selected;
+    selected = null;
     highlight();
+    pose(0);
+    content.updateMatrixWorld(true);
     renderer.setRenderTarget(target);
     renderer.render(scene, cam);
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
     renderer.setRenderTarget(null);
     target.dispose();
-    gizmoHelper.visible = helperWasVisible;
-    ghostGroup.visible = true;
-    selectedId = wasSelected;
+    selected = was;
     highlight();
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -365,7 +291,30 @@ export function createViewport(container, { onSelect, onTransform }) {
     return canvas.toDataURL("image/png").split(",")[1];
   }
 
+  function setPlaying(on) {
+    playing = on;
+    timer.update();
+    render();
+  }
+
   applyTheme();
   resize();
-  return { setScene, select, setMode, setSnap, setView, screenshot, getSnap: () => snap, render };
+  return {
+    setParts,
+    select,
+    fit,
+    fitIfNew,
+    screenshot,
+    setPlaying,
+    hasMotion: () => [...parts.values()].some((p) => p.part.motion.length),
+    isPlaying: () => playing,
+    screenPosition(name) {
+      const box = modelBox(name);
+      if (!box) return null;
+      const p = box.getCenter(new THREE.Vector3()).project(camera);
+      const rect = renderer.domElement.getBoundingClientRect();
+      return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
+    },
+    resetFit: () => (fitted = false),
+  };
 }

@@ -1,47 +1,29 @@
-// Runs OpenCascade off the main thread so the UI never freezes during a rebuild.
-import opencascade from "replicad-opencascadejs";
-import wasmUrl from "replicad-opencascadejs/wasm?url";
-import { initKernel, buildScene, buildNode, exportScene } from "./kernel.js";
-import { findNode } from "../model/ops.js";
+// Kernel worker: runs model scripts and meshes parts. Several of these run in
+// parallel; each job is independent.
+import { runScript } from "./script.js";
+import { compile } from "./sdf.js";
+import { meshSDF, meshVolume, meshBounds, toSTL } from "./mesh.js";
 
-const ready = opencascade({ locateFile: () => wasmUrl, print: () => {}, printErr: () => {} }).then(initKernel);
-
-function meshExtra(doc, id) {
-  // Mesh a nested node on its own (used to show a boolean input as a ghost).
-  const found = id && findNode(doc, id);
-  if (!found || !found.parent) return null;
-  const shape = buildNode(found.node);
+self.onmessage = ({ data: job }) => {
   try {
-    const m = shape.mesh({ tolerance: 0.05, angularTolerance: 0.3 });
-    return { id, vertices: new Float32Array(m.vertices), triangles: new Uint32Array(m.triangles), normals: new Float32Array(m.normals) };
-  } finally {
-    shape.delete();
-  }
-}
-
-self.onmessage = async ({ data }) => {
-  const { reqId, type } = data;
-  try {
-    await ready;
-    if (type === "build") {
-      const results = buildScene(data.doc);
-      let ghost = null;
-      try {
-        ghost = meshExtra(data.doc, data.ghostId);
-      } catch {
-        ghost = null;
-      }
-      const transfer = [];
-      for (const r of results) if (!r.error) transfer.push(r.vertices.buffer, r.normals.buffer, r.triangles.buffer, r.lines.buffer);
-      self.postMessage({ reqId, ok: true, results, ghost }, transfer);
-    } else if (type === "export") {
-      const blob = exportScene(data.doc, data.format, data.ids);
-      const bytes = await blob.arrayBuffer();
-      self.postMessage({ reqId, ok: true, bytes }, [bytes]);
-    } else if (type === "ping") {
-      self.postMessage({ reqId, ok: true });
+    if (job.type === "run") {
+      const r = runScript(job.script, job.values);
+      // Shape trees go back as data so any worker can mesh them.
+      self.postMessage({ id: job.id, ok: true, result: r });
+    } else if (job.type === "mesh") {
+      const { f, box } = compile(job.node);
+      const m = meshSDF(f, box, { budget: job.budget, normals: job.normals });
+      const result = { ...m, volume: meshVolume(m), bounds: m.indices.length ? meshBounds(m) : null };
+      const transfer = [m.positions.buffer, m.indices.buffer];
+      if (m.normals) transfer.push(m.normals.buffer);
+      self.postMessage({ id: job.id, ok: true, result }, transfer);
+    } else if (job.type === "stl") {
+      const { f, box } = compile(job.node);
+      const m = meshSDF(f, box, { budget: job.budget });
+      const bytes = toSTL([m]);
+      self.postMessage({ id: job.id, ok: true, result: { bytes, triangles: m.indices.length / 3, bounds: meshBounds(m), volume: meshVolume(m), cellSize: m.cellSize } }, [bytes.buffer]);
     }
   } catch (err) {
-    self.postMessage({ reqId, ok: false, error: String(err?.message ?? err) });
+    self.postMessage({ id: job.id, ok: false, error: String(err?.message ?? err) });
   }
 };

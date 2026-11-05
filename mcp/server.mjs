@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// 3D Maker MCP server. Claude Code or Claude Desktop starts this over stdio;
-// it forwards tool calls to the open 3D Maker app over a local WebSocket.
+// 3D Maker MCP server. Claude Code (started by the app, or your own) or Claude
+// Desktop runs this over stdio; it forwards tool calls to the open 3D Maker
+// app over a local WebSocket.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebSocketServer } from "ws";
@@ -8,12 +9,11 @@ import { z } from "zod";
 import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve, extname } from "node:path";
-import { KINDS } from "../src/model/schema.js";
 
 const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
 // Only the app itself may connect: the desktop app, or the dev server in a browser.
 const ALLOWED_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:5173", "http://127.0.0.1:5173"]);
-const CALL_TIMEOUT_MS = 60000;
+const CALL_TIMEOUT_MS = 120000;
 const log = (...a) => console.error("[3d-maker]", ...a);
 
 // ---- bridge to the app ----
@@ -25,11 +25,7 @@ async function listen() {
   for (const port of PORTS) {
     try {
       await new Promise((ok, fail) => {
-        const wss = new WebSocketServer({
-          host: "127.0.0.1",
-          port,
-          verifyClient: ({ origin }) => ALLOWED_ORIGINS.has(origin),
-        });
+        const wss = new WebSocketServer({ host: "127.0.0.1", port, verifyClient: ({ origin }) => ALLOWED_ORIGINS.has(origin) });
         wss.once("listening", () => ok(wss));
         wss.once("error", fail);
         wss.on("connection", (ws) => {
@@ -64,14 +60,12 @@ async function listen() {
 
 async function waitForApp(ms) {
   const end = Date.now() + ms;
-  while (!app && Date.now() < end) await new Promise((r) => setTimeout(r, 200));
+  while (!app && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
   return app;
 }
 
 async function call(method, params = {}) {
-  // The app polls every few seconds, so give a freshly opened app a moment to find us.
-  if (!(await waitForApp(7000)))
-    throw new Error("The 3D Maker app is not open. Ask the user to start it (npm run app, or npm start for the browser version), then try again.");
+  if (!(await waitForApp(8000))) throw new Error("The 3D Maker app is not open. Ask the user to start it, then try again.");
   const id = ++seq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -83,35 +77,70 @@ async function call(method, params = {}) {
   });
 }
 
-// ---- tools ----
-const vec3 = z.array(z.number()).length(3);
-const edges = z.enum(["all", "top", "bottom", "vertical"]);
-const feature = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("fillet"), radius: z.number().positive(), edges: edges.optional() }),
-  z.object({ type: z.literal("chamfer"), distance: z.number().positive(), edges: edges.optional() }),
-  z.object({ type: z.literal("shell"), thickness: z.number().positive(), open: z.enum(["top", "bottom"]).optional() }),
-]);
+// ---- the modelling language, as Claude sees it ----
+const INSTRUCTIONS = `3D Maker turns a short JavaScript model script into solid 3D parts the user sees live. You write the whole script with set_model (or change part of it with edit_model), then look at it with screenshot and fix what looks wrong.
 
-const kindHelp = Object.entries(KINDS)
-  .map(([k, v]) => `- ${k}: ${v.about} params ${JSON.stringify(v.params)}`)
-  .join("\n");
+Units are millimetres, +Z is up, the ground is z = 0, angles are degrees. Model real objects at real size (a mug is about 95 mm tall, a car about 4500 mm long). Every shape is a solid; joins, cuts and blends never fail.
 
-const INSTRUCTIONS = `3D Maker is a small CAD modeller with a real B-rep kernel (OpenCascade). You build models by calling these tools while the user watches the 3D view update live.
+PRIMITIVES (all centred on the origin)
+  box(x, y, z, round?)            round = edge radius, at most half the smallest side
+  sphere(r)
+  ellipsoid(rx, ry, rz)           good for bodies, fuselages, heads, pebbles
+  cylinder(r, h, round?)          along Z
+  cone(r1, r2, h)                 along Z; r1 at the bottom, r2 at the top; either may be 0
+  torus(R, r)                     ring in the XY plane
+  capsule([x,y,z], [x,y,z], r1, r2?)   rounded rod between two points, optionally tapered. Great for struts, limbs, booms, handles, legs
+  tube([[x,y,z,r], ...], smooth?) rounded rods through several points with a radius at each point: pipes, cables, tails, skids
+  extrude([[x,y], ...], h)        polygon in XY, extruded along Z (centred: from -h/2 to h/2)
+  revolve([[r,z], ...])           closed profile of [radius, height] points spun around Z: vases, bottles, wheels, nose cones
 
-Conventions: millimetres, +Z is up, the ground plane is z=0, angles in degrees. Rotation [rx, ry, rz] is applied about the world X, then Y, then Z axes through the object's own origin, then the object is moved to position.
+COMBINING (smooth is an optional blend radius in mm; leave it out for a sharp join)
+  union(a, b, ..., smooth?)       also a.add(b, ..., smooth?)
+  subtract(a, b, ..., smooth?)    cut b, c, ... out of a; also a.cut(b, ...)
+  intersect(a, b, ..., smooth?)   keep only the overlap; also a.common(b, ...)
+  Arrays of shapes work anywhere a list of shapes is expected.
 
-Shapes (local origin before position/rotation):
-${kindHelp}
+METHODS (each returns a new shape; chain them)
+  .move(x, y, z)  .at(x, y, z)
+  .rotate(rx, ry, rz)             about world X, then Y, then Z, through the origin, so rotate before you move
+  .rotateX(d) .rotateY(d) .rotateZ(d)
+  .scale(s) or .scale(sx, sy, sz)
+  .offset(d)                      grow (d > 0) or shrink (d < 0) the surface by d
+  .shell(t)                       hollow it, keeping a wall of thickness t inside the surface; cut an opening to see in
+  .mirror("x")                    reflect across the plane x = 0 (or "y", "z")
+  .symmetric("y")                 make it symmetric across y = 0, keeping the y >= 0 side. Model one side, then mirror it
+  .radial(n, "z")                 n copies spaced evenly around the axis through the origin: blades, spokes, bolts
+  .array(n, dx, dy, dz)           n copies, each moved one step further
 
-Features run on a shape in its local frame, before position/rotation, in list order:
-- fillet {radius, edges}, chamfer {distance, edges}; edges = all | top | bottom | vertical (top/bottom = edges lying in the highest/lowest XY plane of the shape).
-- shell {thickness, open: top|bottom}: hollows inward, removing the top or bottom face. A fillet before a shell needs a radius larger than the thickness.
+PARTS, VALUES, MOTION
+  part(name, shape, { color: "#rrggbb", spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, hidden })
+    Every visible piece must be a part with a unique, plain name ("Main rotor", "Left door"). The user clicks parts to select and tweak them.
+    spin rotates the part forever around the line through center along axis (rotors, wheels, fans). swing rocks it back and forth by ±angle (doors, pendulums, wings). Motion is only shown in the app, not exported.
+  param(label, value, { min, max, step, part })
+    Returns the number to use, and gives the user a slider. Always set part to the part it mainly affects, so the slider appears when they click that part. Add 1 to 3 sliders per important part for its main dimensions (length, width, count, angle). Keep labels short ("Length", "Blades").
+  title("Name")                   names the model (used for the exported file)
+  print(...values)                values to see in the tool result, for checking measurements
 
-Booleans: boolean(op, ids) combines top-level objects into one object; ids[0] is the target and the rest are tools (for subtract, the tools are cut away from the target). The inputs stay editable inside the boolean: update_shape works on any id, including ones nested in a boolean.
+You can use normal JavaScript: const, functions, loops, Math. There is no import, file access or network.
 
-Edits that break the geometry are rejected and the scene stays as it was; read the error and adjust. Work in small steps, call screenshot (try views iso, front, top) to check your work, and give objects meaningful names.`;
+EXAMPLE
+  title("Desk lamp");
+  const armLen = param("Arm length", 320, { min: 150, max: 500, part: "Arm" });
+  const tilt = param("Tilt", 35, { min: 0, max: 80, part: "Arm" });
+  part("Base", cylinder(80, 16, 6).at(0, 0, 8), { color: "#2f3338" });
+  const top = [Math.sin(tilt * Math.PI / 180) * armLen, 0, 16 + Math.cos(tilt * Math.PI / 180) * armLen];
+  part("Arm", capsule([0, 0, 16], top, 9), { color: "#9aa3ad" });
+  const shade = cone(70, 25, 90).shell(2).cut(cylinder(68, 20).at(0, 0, -45)).rotateY(110).at(top[0] + 40, 0, top[2] - 20);
+  part("Shade", shade, { color: "#b8483e" });
 
-const server = new McpServer({ name: "3d-maker", version: "0.1.0" }, { instructions: INSTRUCTIONS });
+HOW TO WORK
+- For a new model, plan the main parts and their real proportions first, then write the whole script in one set_model call. For changes, prefer edit_model.
+- Build recognisable silhouettes from smooth blends of ellipsoids, capsules, tubes and revolves; add detail (windows, panels, bolts) with subtract and small shapes; use symmetric() for anything with left and right sides.
+- After every change, call screenshot (try "iso", then "front", "top" or "right" as needed) and fix anything that looks wrong: parts floating apart, poking through each other, wrong proportions, missing pieces. A part listed as empty, or one much thinner than its detail_mm, needs to be thicker.
+- If the user has selected a part, "this" and "it" mean that part.
+- When done, answer in one or two short sentences: what you made or changed. Do not paste the script.`;
+
+const server = new McpServer({ name: "3d-maker", version: "0.2.0" }, { instructions: INSTRUCTIONS });
 
 const json = (v) => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (err) => ({ isError: true, content: [{ type: "text", text: String(err?.message ?? err) }] });
@@ -124,66 +153,28 @@ const tool = (name, description, inputSchema, handler) =>
     }
   });
 
-tool("get_scene", "Return every object with its id, parameters, transform, features, bounding box (mm) and volume.", {}, async () => json(await call("get_scene")));
+tool("get_model", "Return the current model script, slider values, each part's size, bounds, volume and motion, the sliders, and which part the user has selected.", {}, async () => json(await call("get_model")));
 
 tool(
-  "add_shape",
-  `Add a solid. kind is one of ${Object.keys(KINDS).join(", ")}. Unspecified params use defaults. Returns the new id and the scene.`,
-  {
-    kind: z.enum(Object.keys(KINDS)),
-    params: z.record(z.string(), z.any()).optional().describe("Shape parameters, see the server instructions for each kind."),
-    name: z.string().optional(),
-    position: vec3.optional(),
-    rotation: vec3.optional().describe("Degrees about world X, Y, Z."),
-    scale: z.number().positive().optional(),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-    features: z.array(feature).optional(),
-  },
-  async (a) => json(await call("add_shape", a)),
+  "set_model",
+  "Replace the whole model script and rebuild. Returns each part's bounds, size and volume, or the script error (with a line number) if it failed, in which case the model is left unchanged.",
+  { script: z.string().describe("The complete model script, in the language described in the server instructions.") },
+  async (a) => json(await call("set_model", a)),
 );
 
 tool(
-  "update_shape",
-  "Change any object, including one nested inside a boolean. params are merged into the existing params; features replaces the whole feature list.",
-  {
-    id: z.string(),
-    params: z.record(z.string(), z.any()).optional(),
-    name: z.string().optional(),
-    position: vec3.optional(),
-    rotation: vec3.optional(),
-    scale: z.number().positive().optional(),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-    visible: z.boolean().optional(),
-    features: z.array(feature).optional(),
-    op: z.enum(["union", "subtract", "intersect"]).optional().describe("Booleans only."),
-  },
-  async (a) => json(await call("update_shape", a)),
+  "edit_model",
+  "Replace one exact piece of the current script (old_text must appear exactly once) and rebuild. Use this for small changes.",
+  { old_text: z.string(), new_text: z.string() },
+  async (a) => json(await call("edit_model", a)),
 );
-
-tool("delete_shape", "Delete an object.", { id: z.string() }, async (a) => json(await call("delete_shape", a)));
-
-tool(
-  "boolean",
-  "Combine top-level objects into one. ids[0] is the target; for subtract the other objects are cut from it.",
-  { op: z.enum(["union", "subtract", "intersect"]), ids: z.array(z.string()).min(2), name: z.string().optional() },
-  async (a) => json(await call("boolean", a)),
-);
-
-tool("split_boolean", "Undo a boolean structurally: its inputs become separate top-level objects again.", { id: z.string() }, async (a) => json(await call("split_boolean", a)));
-
-tool("add_feature", "Append a fillet, chamfer or shell to an object.", { id: z.string(), feature }, async (a) => json(await call("add_feature", a)));
-
-tool("duplicate", "Copy a top-level object, optionally moved by offset [dx, dy, dz].", { id: z.string(), offset: vec3.optional() }, async (a) => json(await call("duplicate", a)));
-
-tool("undo", "Undo the last change (the user's or yours).", {}, async () => json(await call("undo")));
-tool("redo", "Redo the last undone change.", {}, async () => json(await call("redo")));
-tool("new_scene", "Clear the scene (undoable). Ask the user before clearing work they made.", {}, async () => json(await call("new_scene")));
 
 tool(
   "screenshot",
-  "Render the model and return a PNG so you can see it. view: iso, top, bottom, front, back, left, right, or omit to use the user's current camera.",
+  "Render the model and return a PNG so you can see it. view: iso, top, bottom, front, back, left or right; omit it to use the user's current camera. part: frame just that part.",
   {
     view: z.enum(["iso", "top", "bottom", "front", "back", "left", "right"]).optional(),
+    part: z.string().optional(),
     width: z.number().int().min(256).max(2048).optional(),
     height: z.number().int().min(256).max(2048).optional(),
   },
@@ -194,21 +185,17 @@ tool(
 );
 
 tool(
-  "export_model",
-  "Export visible objects (or just ids) to a file. STL is a mesh for 3D printing; STEP is an exact solid for other CAD tools. path defaults to ~/Downloads/<scene name>.<format>.",
-  {
-    format: z.enum(["stl", "step"]).optional(),
-    path: z.string().optional().describe("Absolute path, or relative to the home folder."),
-    ids: z.array(z.string()).optional(),
-  },
-  async ({ format = "stl", path, ids }) => {
-    const r = await call("export_model", { format, ids });
+  "export_stl",
+  "Export all visible parts as one closed STL mesh for 3D printing. path defaults to ~/Downloads/<title>.stl. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => {
+    const r = await call("export_stl");
     const base = (r.name || "model").replace(/[^\w.-]+/g, "-");
-    let out = path ? resolve(homedir(), path.replace(/^~(?=\/|$)/, homedir())) : resolve(homedir(), "Downloads", `${base}.${format}`);
-    if (!extname(out)) out += `.${format}`;
+    let out = path ? resolve(homedir(), path.replace(/^~(?=\/|$)/, homedir())) : resolve(homedir(), "Downloads", `${base}.stl`);
+    if (!extname(out)) out += ".stl";
     await mkdir(dirname(out), { recursive: true });
     await writeFile(out, Buffer.from(r.base64, "base64"));
-    return json({ path: out, format, bytes: r.bytes });
+    return json({ path: out, triangles: r.triangles, bytes: r.bytes });
   },
 );
 
