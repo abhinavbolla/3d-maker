@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Maker</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <span class="brand">3D Maker</span>
+      <span class="file-name" id="file-name">Untitled</span>
+      <div class="group">
+        <button data-action="new" title="New scene">New</button>
+        <button data-action="open" title="Open (⌘O)">Open</button>
+        <button data-action="save" title="Save (⌘S)">Save</button>
+      </div>
+      <div class="group">
+        <button data-action="undo" title="Undo (⌘Z)">Undo</button>
+        <button data-action="redo" title="Redo (⇧⌘Z)">Redo</button>
+      </div>
+      <div class="group">
+        <button data-action="export-stl" title="Export STL for 3D printing">Export STL</button>
+        <button data-action="export-step" title="Export STEP for other CAD tools">Export STEP</button>
+      </div>
+      <div class="spacer"></div>
+      <span class="claude-status" id="claude-status"><span class="dot"></span><span class="label">Claude not connected</span></span>
+      <button data-action="connect" class="primary">Connect Claude</button>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel left">
+        <section>
+          <h2>Add</h2>
+          <div class="add-grid" id="add-grid"></div>
+        </section>
+        <section class="grow">
+          <h2>Objects</h2>
+          <ul class="tree" id="tree"></ul>
+          <p class="hint" id="tree-hint">Add a shape, or ask Claude to build something.</p>
+        </section>
+        <section>
+          <h2>Combine</h2>
+          <p class="hint">⇧-click objects. The first one is the target.</p>
+          <div class="row-buttons">
+            <button data-action="union">Union</button>
+            <button data-action="subtract">Subtract</button>
+            <button data-action="intersect">Intersect</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="viewport" id="viewport">
+        <div class="overlay top-left">
+          <div class="seg" id="modes">
+            <button data-mode="translate" class="on" title="Move (W)">Move</button>
+            <button data-mode="rotate" title="Rotate (E)">Rotate</button>
+            <button data-mode="scale" title="Scale (R)">Scale</button>
+          </div>
+          <button id="snap" class="on" title="Snap to 1 mm and 15°">Snap</button>
+        </div>
+        <div class="overlay top-right">
+          <div class="seg" id="views">
+            <button data-view="iso">Persp</button>
+            <button data-view="top">Top</button>
+            <button data-view="front">Front</button>
+            <button data-view="right">Right</button>
+          </div>
+        </div>
+        <div class="overlay center" id="loading">Loading geometry kernel…</div>
+      </section>
+
+      <aside class="panel right" id="props"></aside>
+    </main>
+
+    <footer class="statusbar">
+      <span id="message"></span>
+      <span class="spacer"></span>
+      <span id="activity"></span>
+      <span class="muted">mm · Z up</span>
+    </footer>
+
+    <dialog id="connect">
+      <form method="dialog" class="dialog">
+        <h2>Connect Claude</h2>
+        <p>3D Maker has no AI bill of its own. Claude uses your own Claude plan through a local MCP server, and the model updates here as Claude works.</p>
+        <h3>Claude Code</h3>
+        <p>Run once in a terminal:</p>
+        <div class="copy"><code id="cmd-code"></code><button type="button" data-copy="cmd-code">Copy</button></div>
+        <h3>Claude Desktop</h3>
+        <p>Add this to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> and restart Claude Desktop:</p>
+        <div class="copy"><pre id="cmd-desktop"></pre><button type="button" data-copy="cmd-desktop">Copy</button></div>
+        <h3>Then</h3>
+        <p>Keep this window open and ask Claude, for example: “In 3D Maker, model a coffee mug with a handle, 80 mm wide.”</p>
+        <p class="muted" id="connect-state"></p>
+        <div class="dialog-actions"><button value="close" class="primary">Done</button></div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
