@@ -3,14 +3,14 @@
 // edits that break a shape that was fine before.
 import { emptyDoc } from "../model/schema.js";
 import { findNode } from "../model/ops.js";
+import { autosave } from "./autosave.js";
 
-const AUTOSAVE_KEY = "3d-maker:autosave";
 const HISTORY_LIMIT = 200;
 
-export function createStore(kernel) {
+export function createStore(kernel, initialDoc) {
   const listeners = new Set();
   const state = {
-    doc: loadAutosave() ?? emptyDoc(),
+    doc: initialDoc ?? emptyDoc(),
     past: [],
     future: [],
     selection: null, // node id
@@ -110,22 +110,4 @@ export function createStore(kernel) {
     },
     rebuild: () => serial(rebuild),
   };
-}
-
-function loadAutosave() {
-  try {
-    const raw = localStorage.getItem(AUTOSAVE_KEY);
-    const doc = raw && JSON.parse(raw);
-    return doc && doc.version === 1 && Array.isArray(doc.nodes) ? doc : null;
-  } catch {
-    return null;
-  }
-}
-
-function autosave(doc) {
-  try {
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(doc));
-  } catch {
-    // Storage may be unavailable; autosave is a convenience only.
-  }
 }

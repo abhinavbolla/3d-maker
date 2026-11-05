@@ -4,12 +4,13 @@ import { createViewport } from "./app/viewport.js";
 import { createCommands } from "./app/commands.js";
 import { startBridge } from "./app/bridge.js";
 import { saveBytes, openText } from "./app/files.js";
+import { loadAutosave } from "./app/autosave.js";
 import * as ops from "./model/ops.js";
 import { KINDS, emptyDoc, EDGE_SETS } from "./model/schema.js";
 
 const $ = (sel) => document.querySelector(sel);
 const kernel = createKernelClient();
-const store = createStore(kernel);
+const store = createStore(kernel, await loadAutosave());
 const s = store.state;
 
 // Objects picked for a boolean, in click order. ids[0] is the target.

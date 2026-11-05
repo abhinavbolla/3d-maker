@@ -2,6 +2,8 @@
 
 A small CAD modeller you can drive with Claude. It runs on a real B-rep kernel (OpenCascade), so models are exact solids with fillets, chamfers, shells and booleans, and it exports STL for printing and STEP for other CAD tools.
 
+![A mug Claude modelled in 3D Maker](docs/mug.png)
+
 Claude connects through a local MCP server and uses your own Claude plan, so the app has no AI bill and no API key. You watch the model update while Claude works, and you can edit anything it makes by hand.
 
 ## Run it
@@ -37,7 +39,7 @@ Keep the app open, then ask Claude something like “In 3D Maker, model a coffee
 - Click an object to select it. Edit exact values in the right panel, or use the gizmo: W move, E rotate, R scale. **Snap** rounds to 1 mm and 15°.
 - **Combine**: ⇧-click two or more objects, then Union, Subtract or Intersect. The first one you click is the target. The inputs stay editable inside the boolean, and **Split** undoes it.
 - **Features**: fillet, chamfer (all, top, bottom or vertical edges) and shell (hollow with an open top or bottom).
-- ⌘Z / ⇧⌘Z undo and redo, ⌘S save, ⌘O open, ⌘D duplicate, F fits the view. The scene is also autosaved locally.
+- ⌘Z / ⇧⌘Z undo and redo, ⌘S save, ⌘O open, ⌘D duplicate, F fits the view. The scene is also autosaved and restored on the next start.
 
 Edits that would break a solid, such as a fillet too large for its edges, are rejected and the model stays as it was.
 
@@ -66,7 +68,16 @@ The bridge only accepts connections from the app itself (checked by WebSocket or
 ```bash
 node test/kernel.test.mjs   # kernel: every shape, a mug, STL and STEP export
 node test/mcp.test.mjs      # MCP end to end; needs the app open
+node test/check-stl.mjs model.stl   # checks an STL is well formed and closed
 ```
+
+## Not done yet
+
+- Sketches and curves: no 2D sketching with constraints, splines, or NURBS surfaces (loft, sweep). The kernel supports them; the app does not expose them yet.
+- Edge picking: fillets and chamfers select edge groups (all, top, bottom, vertical), not individual edges you click.
+- Rhino-style precision tools: object snaps, a command line, multiple viewports, layers.
+- Packaging: the desktop app runs from this folder (`npm run app`), and the MCP server needs Node. There is no signed installer yet, and the app icon is Tauri's placeholder.
+- An in-app chat panel. Claude works through your own Claude Code or Claude Desktop.
 
 ## Licenses
 
