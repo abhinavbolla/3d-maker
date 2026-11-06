@@ -65,6 +65,7 @@ function countActivity(run, method, phase, message) {
   if (phase === "error") run.failed.push(message ?? method);
   else if (phase === "ok" && (method === "set_model" || method === "edit_model")) run.changes++;
   else if (phase === "ok" && method === "screenshot") run.looks++;
+  else if (phase === "ok" && method === "finish_step") (run.steps++, run.looks++);
 }
 function receiptFor(run) {
   const changed = store.state.doc.script !== run.before;
@@ -74,9 +75,15 @@ function receiptFor(run) {
     const n = store.state.result?.parts.length ?? 0;
     parts.push(`Model changed in this window: ${plural(run.changes, "change", "changes")}, now ${plural(n, "part", "parts")}.`);
   } else parts.push("The model in this window was not changed.");
+  const plan = store.state.doc.plan;
+  if (plan && run.steps) {
+    const done = plan.steps.filter((s) => s.done).length;
+    const open = plan.steps.filter((s) => !s.done).map((s) => s.name);
+    parts.push(done === plan.steps.length ? `Plan: all ${plan.steps.length} steps done and checked.` : `Plan: ${done} of ${plan.steps.length} steps done; not done: ${open.join(", ")}.`);
+  }
   if (run.looks) parts.push(`Claude looked at it ${plural(run.looks, "time", "times")}.`);
   if (run.failed.length) parts.push(`${plural(run.failed.length, "step", "steps")} failed and ${run.failed.length === 1 ? "was" : "were"} not applied.`);
-  lastReceipt = { changed, changes: run.changes, looks: run.looks, failed: run.failed.slice(), seconds: Math.round((Date.now() - run.started) / 1000) };
+  lastReceipt = { changed, changes: run.changes, looks: run.looks, steps: run.steps, failed: run.failed.slice(), seconds: Math.round((Date.now() - run.started) / 1000) };
   return parts.join(" ");
 }
 let lastReceipt = null;
@@ -95,7 +102,7 @@ async function send() {
   if (!text || working) return;
   const sel = store.state.selected;
   const prompt = sel ? `The user has selected the part "${sel}".\n\n${text}` : text;
-  working = { prompt: text, status: "Thinking", started: Date.now(), before: store.state.doc.script, changes: 0, looks: 0, failed: [] };
+  working = { prompt: text, status: "Thinking", started: Date.now(), before: store.state.doc.script, changes: 0, looks: 0, steps: 0, failed: [] };
   $("input").value = "";
   fitInput();
   $("reply").hidden = true;
@@ -198,6 +205,19 @@ function renderSend() {
   btn.disabled = !working && !$("input").value.trim();
 }
 
+// A big model's build plan: "5 of 20 done · Stationary swashplate".
+function renderProgress() {
+  const plan = store.state.doc.plan;
+  const done = plan ? plan.steps.filter((s) => s.done).length : 0;
+  const show = Boolean(plan) && (Boolean(working) || done < plan.steps.length);
+  $("progress").hidden = !show;
+  if (!show) return;
+  const next = plan.steps.find((s) => !s.done);
+  $("progress-text").textContent = next ? `${done} of ${plan.steps.length} done · ${working ? "now" : "next"}: ${next.name}` : `All ${plan.steps.length} steps done · checking the whole model`;
+  $("progress-bar").firstElementChild.style.width = `${(100 * done) / plan.steps.length}%`;
+  $("progress").title = plan.steps.map((s) => `${s.done ? "✓" : "·"} ${s.name}`).join("\n");
+}
+
 function renderStatus() {
   let text = note;
   if (working) text = `${working.status} · ${Math.round((Date.now() - working.started) / 1000)} s`;
@@ -228,6 +248,7 @@ function renderAll() {
   renderCard();
   renderSend();
   renderStatus();
+  renderProgress();
 }
 store.subscribe(renderAll);
 
@@ -308,10 +329,12 @@ if (import.meta.env.DEV) {
   window.__3dmaker = {
     windowId: bridge.windowId,
     busy: () => Boolean(working),
+    plan: () => store.state.doc.plan,
     state: () => ({ script: store.state.doc.script, title: store.state.result?.title ?? "", parts: store.state.result?.parts.map((p) => p.name) ?? [], selected: store.state.selected, session: store.state.doc.session }),
     summary: () => commands.get_model({}),
     select: (name) => store.select(name),
     exportSTL: () => commands.export_stl({}),
+    call: (name, args = {}) => commands[name](args),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
   };
 }

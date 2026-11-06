@@ -19,6 +19,7 @@ npm start          # or the same app in your browser, at http://localhost:5173
 ## Using it
 
 - Type what you want in the box at the bottom and press Enter, for example "a desk lamp with a weighted base" or "a helicopter whose rotors spin". Claude writes the model, looks at it from a few angles, and fixes what looks wrong.
+- Big or mechanical things (a helicopter, a rotor head, an engine) are built with a plan: Claude lists the sub-assemblies and their parts, then builds and checks them one at a time. A line above the prompt shows progress, like "5 of 20 done · now: Stationary swashplate". The app only lets a step count as done once all its parts exist and are solid.
 - Under Claude's reply, a grey line says what this window saw happen: whether the model changed, how many changes and looks, and any step that failed. It is counted by the app, not taken from Claude's words.
 - Click a part to select it. Its sliders appear in the top-right corner, and the prompt box now talks about that part ("make this longer").
 - Parts that spin or swing move in the view. Pause stops them.
@@ -49,14 +50,15 @@ claude mcp add --scope user 3d-maker -- node /path/to/3d-maker/mcp/server.mjs
 ## Tests
 
 ```bash
-npm test                               # kernel and window routing; no app or Claude needed
+npm test                               # kernel, window routing, plan tools; no Claude needed (needs Chrome)
 npm run test:e2e                       # the real prompt box with your real Claude Code (see below)
+npm run try -- "a rotor head"          # one prompt, saves pictures, script and plan in runs/
 node test/mcp.test.mjs                 # the MCP tools against an open app
 node test/check-stl.mjs model.stl      # checks an STL is well formed and closed
 cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude Code
 ```
 
-`npm run test:e2e` opens two app windows in headless Chrome, types two prompts into the first ("a 30 mm cube with a 10 mm hole", then, with it selected, "make this 50 mm wide") and checks the result by measuring it, not by reading Claude's reply: the part's size from its mesh, the hole from its volume, a closed STL, and that the second window was not touched. It needs Google Chrome and uses a little of your Claude plan. It does not drive the desktop window itself (WebDriver for Tauri does not run on macOS); the desktop app's way of starting Claude is covered by the Rust test.
+`npm run test:e2e` opens two app windows in headless Chrome, types two prompts into the first ("a 30 mm cube with a 10 mm hole", then, with it selected, "make this 50 mm wide") and checks the result by measuring it, not by reading Claude's reply: the part's size from its mesh, the hole from its volume, a closed STL, and that the second window was not touched. A third prompt (a desk fan) must be built with a plan, with every step finished and every planned part present. It needs Google Chrome and uses a little of your Claude plan. It does not drive the desktop window itself (WebDriver for Tauri does not run on macOS); the desktop app's way of starting Claude is covered by the Rust test.
 
 ## Not done yet
 

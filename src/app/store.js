@@ -2,7 +2,9 @@
 // slider values; every build runs the script and meshes the parts.
 import { autosave } from "./autosave.js";
 
-export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null });
+// plan: null, or { steps: [{ name, parts: [part names], done }] } while
+// Claude builds a big model step by step.
+export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null, plan: null });
 const HISTORY_LIMIT = 200;
 
 export function createStore(kernel, initial) {
@@ -104,6 +106,13 @@ export function createStore(kernel, initial) {
     autosave(state.doc);
   }
 
+  // The plan is progress, not part of the model, so it is not in undo history.
+  function setPlan(plan) {
+    state.doc = { ...state.doc, plan };
+    autosave(state.doc);
+    emit();
+  }
+
   return {
     state,
     subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
@@ -114,6 +123,7 @@ export function createStore(kernel, initial) {
     setValue,
     select,
     setSession,
+    setPlan,
     reload: () => commit(state.doc, { history: false }),
     load: (doc, fileName) => {
       state.fileName = fileName ?? null;

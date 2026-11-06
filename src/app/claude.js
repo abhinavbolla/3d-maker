@@ -7,9 +7,9 @@
 /* global __MCP_SERVER_PATH__, __NODE_PATH__ */
 const isTauri = () => Boolean(window.__TAURI_INTERNALS__);
 
-const TOOLS = ["get_model", "set_model", "edit_model", "screenshot", "export_stl"].map((t) => `mcp__3d-maker__${t}`);
+const TOOLS = ["get_model", "set_model", "edit_model", "append_to_model", "set_plan", "finish_step", "screenshot", "export_stl"].map((t) => `mcp__3d-maker__${t}`);
 
-const APP_PROMPT = `You are the modelling assistant inside the 3D Maker app. The user types requests into the app and watches the 3D view while you work. Use only the 3d-maker tools: call get_model before changing an existing model, build or change it, check it with screenshot from a few views, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.`;
+const APP_PROMPT = `You are the modelling assistant inside the 3D Maker app. The user types requests into the app and watches the 3D view while you work. Use only the 3d-maker tools: call get_model before changing an existing model, follow the server's HOW TO WORK (big or mechanical models are built step by step with set_plan and finish_step), check your work with screenshots, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.`;
 
 export function args(prompt, { session, model, windowId }) {
   const mcp = { mcpServers: { "3d-maker": { command: __NODE_PATH__, args: [__MCP_SERVER_PATH__, ...(windowId ? ["--app", windowId] : [])] } } };
@@ -23,6 +23,9 @@ const TOOL_STATUS = {
   get_model: "Reading the model",
   set_model: "Building the model",
   edit_model: "Changing the model",
+  append_to_model: "Adding parts",
+  set_plan: "Planning",
+  finish_step: "Checking the step",
   screenshot: "Looking at it",
   export_stl: "Exporting",
 };

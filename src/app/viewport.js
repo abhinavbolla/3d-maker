@@ -184,10 +184,11 @@ export function createViewport(container, { onPick }) {
     render();
   }
 
-  function modelBox(name) {
+  function modelBox(names) {
+    if (typeof names === "string") names = [names];
     const box = new THREE.Box3();
     for (const [n, { part }] of parts) {
-      if (name && n !== name) continue;
+      if (names && !names.includes(n)) continue;
       const b = part.mesh.bounds;
       if (b) box.expandByPoint(new THREE.Vector3(b[0], b[1], b[2])).expandByPoint(new THREE.Vector3(b[3], b[4], b[5]));
     }
@@ -244,6 +245,19 @@ export function createViewport(container, { onPick }) {
     cam.near = fit / 200;
     cam.far = fit * 200;
     cam.updateProjectionMatrix();
+    // The bounding sphere leaves a flat model small in the frame. Move in
+    // until the box's corners fill about 90% of the view.
+    if (box) {
+      const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => new THREE.Vector3(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z));
+      for (let k = 0; k < 3; k++) {
+        cam.updateMatrixWorld(true);
+        const extent = Math.max(...corners.map((c) => c.clone().project(cam)).map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))));
+        if (!(extent > 0) || Math.abs(extent - 0.9) < 0.02) break;
+        const dist = cam.position.distanceTo(center) * Math.min(Math.max(extent / 0.9, 0.3), 3);
+        cam.position.copy(center).addScaledVector(dir, Math.max(dist, radius * 1.05));
+      }
+      cam.updateProjectionMatrix();
+    }
     return center;
   }
 
@@ -261,12 +275,23 @@ export function createViewport(container, { onPick }) {
   }
 
   // A PNG from any standard view, at rest pose, without the selection tint.
-  function screenshot({ view, width = 1024, height = 768, part } = {}) {
-    if (part && !parts.has(part)) throw new Error(`There is no part named "${part}".`);
+  // parts: frame just these parts. ghost: show the other parts faintly, so
+  // the framed ones stand out but you can still see what they attach to.
+  function screenshot({ view, width = 1024, height = 768, parts: only, ghost = false } = {}) {
+    const unknown = (only ?? []).filter((n) => !parts.has(n));
+    if (unknown.length) throw new Error(`There is no part named ${unknown.map((n) => `"${n}"`).join(", ")}.`);
     const cam = camera.clone();
     cam.aspect = width / height;
-    if (view || part) placeCamera(cam, view ?? "iso", modelBox(part));
+    if (view || only) placeCamera(cam, view ?? "iso", modelBox(only));
     else cam.updateProjectionMatrix();
+    const ghosted = [];
+    if (only && ghost) {
+      for (const [n, { mesh }] of parts) {
+        if (only.includes(n) || !mesh.visible) continue;
+        ghosted.push([mesh.material, mesh.material.transparent, mesh.material.opacity, mesh.material.depthWrite]);
+        Object.assign(mesh.material, { transparent: true, opacity: 0.12, depthWrite: false, needsUpdate: true });
+      }
+    }
     const target = new THREE.WebGLRenderTarget(width, height, { samples: 4, colorSpace: THREE.SRGBColorSpace });
     const was = selected;
     selected = null;
@@ -279,6 +304,7 @@ export function createViewport(container, { onPick }) {
     renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
     renderer.setRenderTarget(null);
     target.dispose();
+    for (const [m, transparent, opacity, depthWrite] of ghosted) Object.assign(m, { transparent, opacity, depthWrite, needsUpdate: true });
     selected = was;
     highlight();
     const canvas = document.createElement("canvas");

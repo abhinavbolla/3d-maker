@@ -27,10 +27,21 @@ export function summarize(state) {
   if (res.warnings?.length) out.warnings = res.warnings;
   if (res.prints?.length) out.printed = res.prints;
   if (state.selected) out.selected_by_user = state.selected;
+  if (state.doc.plan) out.plan = planProgress(state.doc.plan);
   return out;
 }
 
+export function planProgress(plan) {
+  const done = plan.steps.filter((s) => s.done).length;
+  const next = plan.steps.find((s) => !s.done);
+  return { done, total: plan.steps.length, next: next?.name ?? null, steps: plan.steps.map((s) => ({ name: s.name, parts: s.parts, done: s.done })) };
+}
+
+const MAX_STEPS = 40;
+
 export function createCommands({ store, viewport, kernel }) {
+  const partsByName = () => new Map((store.state.result?.parts ?? []).map((p) => [p.name, p]));
+
   const setScript = async (script) => {
     if (typeof script !== "string" || !script.trim()) throw new Error("script is empty");
     try {
@@ -39,10 +50,66 @@ export function createCommands({ store, viewport, kernel }) {
       throw new Error(`${err.message}\nThe model was not changed.`);
     }
     viewport.fitIfNew();
+    // A plan for a different model (none of its parts are here) is stale.
+    const plan = store.state.doc.plan;
+    if (plan && !plan.steps.some((s) => s.parts.some((p) => partsByName().has(p)))) store.setPlan(null);
     return summarize(store.state);
   };
 
   return {
+    set_plan: ({ steps }) => {
+      if (!Array.isArray(steps) || steps.length < 2) throw new Error("A plan needs at least 2 steps.");
+      if (steps.length > MAX_STEPS) throw new Error(`A plan can have at most ${MAX_STEPS} steps; group smaller pieces into one step.`);
+      const old = new Map((store.state.doc.plan?.steps ?? []).map((s) => [s.name, s]));
+      const names = new Set();
+      const owner = new Map();
+      const plan = {
+        steps: steps.map((s, i) => {
+          const name = String(s?.name ?? "").trim();
+          if (!name) throw new Error(`Step ${i + 1} has no name.`);
+          if (names.has(name)) throw new Error(`Two steps are named "${name}".`);
+          names.add(name);
+          const parts = [...new Set((s.parts ?? []).map((p) => String(p).trim()).filter(Boolean))];
+          if (!parts.length) throw new Error(`Step "${name}" lists no parts. Name the parts it will create, exactly as you will pass them to part().`);
+          for (const p of parts) {
+            if (owner.has(p)) throw new Error(`Part "${p}" is in two steps ("${owner.get(p)}" and "${name}"). Each part belongs to one step.`);
+            owner.set(p, name);
+          }
+          const prev = old.get(name);
+          const same = prev && prev.parts.length === parts.length && prev.parts.every((p) => parts.includes(p));
+          return { name, parts, done: Boolean(same && prev.done) };
+        }),
+      };
+      store.setPlan(plan);
+      return planProgress(plan);
+    },
+    finish_step: async ({ step }) => {
+      const plan = store.state.doc.plan;
+      if (!plan) throw new Error("There is no plan. Call set_plan first.");
+      const s = plan.steps.find((x) => x.name === step);
+      if (!s) throw new Error(`There is no step named "${step}". Steps: ${plan.steps.map((x) => x.name).join(", ")}.`);
+      const have = partsByName();
+      const missing = s.parts.filter((p) => !have.has(p));
+      const empty = s.parts.filter((p) => have.has(p) && !have.get(p).mesh.bounds);
+      if (missing.length || empty.length) {
+        const why = [missing.length && `missing: ${missing.join(", ")}`, empty.length && `empty (no surface): ${empty.join(", ")}`].filter(Boolean).join("; ");
+        throw new Error(`Step "${step}" is not finished. Its parts are ${why}. Add or fix them, then call finish_step again. Part names must match the plan exactly.`);
+      }
+      const updated = { steps: plan.steps.map((x) => (x === s ? { ...x, done: true } : x)) };
+      store.setPlan(updated);
+      const summary = summarize(store.state);
+      return {
+        step: s.name,
+        parts: summary.parts.filter((p) => s.parts.includes(p.name)),
+        plan: planProgress(updated),
+        png: viewport.screenshot({ view: "iso", parts: s.parts, ghost: true, width: 900, height: 700 }),
+      };
+    },
+    append_to_model: ({ code }) => {
+      if (typeof code !== "string" || !code.trim()) throw new Error("code is empty");
+      const s = store.state.doc.script;
+      return setScript(s ? `${s.replace(/\s*$/, "")}\n\n${code.trim()}\n` : code);
+    },
     get_model: async () => ({ script: store.state.doc.script, values: store.state.doc.values, ...summarize(store.state) }),
     set_model: ({ script }) => setScript(script),
     edit_model: ({ old_text, new_text }) => {
@@ -52,7 +119,7 @@ export function createCommands({ store, viewport, kernel }) {
       if (s.indexOf(old_text, at + 1) >= 0) throw new Error("old_text appears more than once; include more surrounding text.");
       return setScript(s.slice(0, at) + new_text + s.slice(at + old_text.length));
     },
-    screenshot: async ({ view, width, height, part } = {}) => ({ png: viewport.screenshot({ view, width, height, part }) }),
+    screenshot: async ({ view, width, height, part, parts } = {}) => ({ png: viewport.screenshot({ view, width, height, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async () => {
       const r = await kernel.exportSTL(store.state.result?.parts ?? []);
       let bin = "";

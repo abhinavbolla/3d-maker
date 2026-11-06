@@ -145,13 +145,21 @@ EXAMPLE
   part("Shade", shade, { color: "#b8483e" });
 
 HOW TO WORK
-- For a new model, plan the main parts and their real proportions first, then write the whole script in one set_model call. For changes, prefer edit_model.
+- Small things (up to about 5 parts: a mug, a bracket, a lamp): write the whole script with one set_model call, then screenshot and fix.
+- Anything bigger or mechanical (vehicles, machines, mechanisms, robots, a rotor head, an engine): build it with a plan, the way an engineer builds an assembly.
+  1. Work out the real object first: its sub-assemblies, the real pieces in each (bolts, links, bearings, clamps, brackets) and their real dimensions.
+  2. Call set_plan with 6 to 30 steps in build order, from the core outwards. Each step is one sub-assembly and lists the part names it will create, exactly as you will pass them to part(). Every part belongs to one step.
+  3. Step 1: set_model with title(), the shared dimensions as constants at the top (and sliders for the main ones), and the first step's parts. Later steps: append_to_model with that step's code, reusing the constants so pieces line up.
+  4. After each step call finish_step. It checks the step's parts exist and are solid and shows you just those parts against the rest. Look hard: fix anything floating, intersecting wrongly, mis-sized or crude with edit_model, then move on. Never skip finish_step, and finish every step.
+  5. When all steps are done, screenshot the whole model from two or three views and fix what is still wrong.
+- Model real pieces as separate named parts, not one blob: a hub, each clamp, each link, each damper. Detail is what makes it look real: bolts, fillets, lightening holes, chamfers, bearing races.
+- For changes to an existing model, prefer edit_model. If the model has an unfinished plan (get_model shows plan), continue it.
 - Build recognisable silhouettes from smooth blends of ellipsoids, capsules, tubes and revolves; add detail (windows, panels, bolts) with subtract and small shapes; use symmetric() for anything with left and right sides.
 - After every change, call screenshot (try "iso", then "front", "top" or "right" as needed) and fix anything that looks wrong: parts floating apart, poking through each other, wrong proportions, missing pieces. A part listed as empty, or one much thinner than its detail_mm, needs to be thicker.
 - If the user has selected a part, "this" and "it" mean that part.
 - When done, answer in one or two short sentences: what you made or changed. Do not paste the script.`;
 
-const server = new McpServer({ name: "3d-maker", version: "0.2.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "3d-maker", version: "0.3.0" }, { instructions: INSTRUCTIONS });
 
 const json = (v) => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (err) => ({ isError: true, content: [{ type: "text", text: String(err?.message ?? err) }] });
@@ -181,11 +189,41 @@ tool(
 );
 
 tool(
+  "set_plan",
+  "Plan a big model as build steps before writing it. Each step is a sub-assembly and lists the exact part names it will create. The user sees the steps and your progress. Calling it again replaces the plan; steps with the same name and parts keep their done state.",
+  {
+    steps: z
+      .array(z.object({ name: z.string().describe("Short name of the sub-assembly, e.g. \"Stationary swashplate\""), parts: z.array(z.string()).min(1).describe("Part names this step creates, exactly as passed to part()") }))
+      .min(2)
+      .max(40),
+  },
+  async (a) => json(await call("set_plan", a)),
+);
+
+tool(
+  "append_to_model",
+  "Add code to the end of the current script and rebuild: use it to add a plan step's parts. Constants and functions defined earlier in the script can be used. Returns the model summary, or the script error (the model is then left unchanged).",
+  { code: z.string() },
+  async (a) => json(await call("append_to_model", a)),
+);
+
+tool(
+  "finish_step",
+  "Mark a plan step done after building it. Checks every part the step lists exists and has a surface (if not, it says what is missing and the step stays open), then returns those parts' sizes, the plan's progress and a picture of the step's parts with the rest of the model shown faintly. Look at the picture and fix problems before the next step.",
+  { step: z.string().describe("The step's name, exactly as in set_plan") },
+  async (a) => {
+    const { png, ...rest } = await call("finish_step", a);
+    return { content: [{ type: "text", text: JSON.stringify(rest, null, 1) }, { type: "image", data: png, mimeType: "image/png" }] };
+  },
+);
+
+tool(
   "screenshot",
-  "Render the model and return a PNG so you can see it. view: iso, top, bottom, front, back, left or right; omit it to use the user's current camera. part: frame just that part.",
+  "Render the model and return a PNG so you can see it. view: iso, top, bottom, front, back, left or right; omit it to use the user's current camera. part: frame just that part. parts: frame these parts and show the rest faintly.",
   {
     view: z.enum(["iso", "top", "bottom", "front", "back", "left", "right"]).optional(),
     part: z.string().optional(),
+    parts: z.array(z.string()).optional(),
     width: z.number().int().min(256).max(2048).optional(),
     height: z.number().int().min(256).max(2048).optional(),
   },

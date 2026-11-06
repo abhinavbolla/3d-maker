@@ -72,7 +72,9 @@ export function createKernel() {
     const t0 = performance.now();
     const r = await run(doc.script, doc.values);
     if (r.error) return { error: r.error, params: r.params, prints: r.prints };
-    const budget = QUALITY[quality](r.parts.length);
+    // Rounded up to a power of two, so adding a part to a growing model does
+    // not change every part's budget and re-mesh them all.
+    const budget = QUALITY[quality](2 ** Math.ceil(Math.log2(Math.max(1, r.parts.length))));
     const keep = new Set();
     const parts = await Promise.all(
       r.parts.map(async (p) => {

@@ -1,0 +1,46 @@
+// Types one prompt into a fresh app window (headless Chrome, your real Claude
+// Code) and saves what came out: pictures, the script, the plan and the
+// app's receipt. For trying hard prompts and comparing results over time.
+// Usage: node test/run-prompt.mjs "a Black Hawk-style rotor head" [outDir]
+import { startHarness } from "./harness.mjs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const text = process.argv[2];
+if (!text) {
+  console.error('Usage: node test/run-prompt.mjs "prompt" [outDir]');
+  process.exit(2);
+}
+const out = process.argv[3] ?? join(process.cwd(), "runs", new Date().toISOString().replace(/[:.]/g, "-"));
+mkdirSync(out, { recursive: true });
+const h = await startHarness({ port: 5177 });
+let code = 0;
+try {
+  const w = await h.openWindow();
+  const t = Date.now();
+  let lastLine = "";
+  const reply = await h.prompt(w, text, {
+    timeoutMs: 45 * 60 * 1000,
+    async onTick() {
+      const line = `${await w('document.getElementById("status").textContent')} | ${await w('document.getElementById("progress").hidden ? "" : document.getElementById("progress-text").textContent')}`;
+      if (line.replace(/\d+ s/, "") !== lastLine.replace(/\d+ s/, "")) console.log(`  ${line}`);
+      lastLine = line;
+    },
+  });
+  const summary = await w("window.__3dmaker.summary()");
+  for (const view of ["iso", "front", "top"]) {
+    const shot = await h.command(w, "screenshot", { view, width: 1400, height: 1000 });
+    if (shot.result) writeFileSync(join(out, `${view}.png`), Buffer.from(shot.result.png, "base64"));
+  }
+  const stl = await h.stlIsClosed(w);
+  writeFileSync(join(out, "model.js"), summary.script);
+  writeFileSync(join(out, "result.json"), JSON.stringify({ prompt: text, seconds: Math.round((Date.now() - t) / 1000), reply, stl, summary: { ...summary, script: undefined } }, null, 1));
+  console.log(`\n${Math.round((Date.now() - t) / 1000)} s · ${summary.parts.length} parts · plan ${summary.plan ? `${summary.plan.done} of ${summary.plan.total}` : "none"} · STL ${stl.closed ? "closed" : "NOT closed"}`);
+  console.log(`Claude: ${reply.text}\nReceipt: ${JSON.stringify(reply.receipt)}\nSaved in ${out}`);
+} catch (err) {
+  console.error(err);
+  code = 1;
+} finally {
+  await h.close();
+}
+process.exit(code);
