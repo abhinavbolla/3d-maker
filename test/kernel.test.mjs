@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compile } from "../src/kernel/sdf.js";
-import { meshSDF, meshVolume, openEdges, toSTL, displayMesh } from "../src/kernel/mesh.js";
+import { meshSDF, meshVolume, meshBounds, openEdges, toSTL, displayMesh } from "../src/kernel/mesh.js";
 import { runScript } from "../src/kernel/script.js";
 
 const mesh = (node, budget = 40000) => {
@@ -126,6 +126,86 @@ test("big parts are meshed as finely as asked, whatever the budget", () => {
   assert.equal(openEdges(fine), 0);
 });
 
+// Volume of a one-part script, meshed finely; also checks the mesh is closed.
+const volumeOf = (script, budget = 120000) => {
+  const r = runScript(script);
+  assert.equal(r.error, undefined, r.error);
+  const m = meshOf(r.parts[0].node, { budget });
+  assert.equal(openEdges(m), 0, `${script} is not closed`);
+  return meshVolume(m);
+};
+const meshBoundsOf = (r) => meshBounds(meshOf(r.parts[0].node, { budget: 40000 }));
+const close = (got, exact, tol, what) => assert.ok(Math.abs(got / exact - 1) < tol, `${what}: ${got.toFixed(1)}, expected ${exact.toFixed(1)} (${((got / exact - 1) * 100).toFixed(2)}%)`);
+
+test("profiles: circles, rects, arcs, curves, rounded corners and cut-outs have exact areas", () => {
+  const area = (profile) => volumeOf(`part("A", extrude(${profile}, 10))`) / 10;
+  close(area("circle(10)"), Math.PI * 100, 0.004, "circle");
+  close(area("rect(40, 20, 5)"), 800 - (4 - Math.PI) * 25, 0.004, "rounded rect");
+  close(area("path([0, -10]).line(50, -10).radiusArc(50, 10, 10).line(0, 10).radiusArc(0, -10, 10).close()"), 1000 + Math.PI * 100, 0.004, "slot from radius arcs");
+  close(area("path([-10, 0]).arc([0, 10], [10, 0]).close()"), (Math.PI * 100) / 2, 0.004, "half disc from a three-point arc");
+  close(area("path([0, 0]).line(20, 0).tangentArc(20, 20).close()"), 200 + (Math.PI * 100) / 2, 0.004, "tangent arc");
+  close(area("path([0, 0]).curve([10, 20], [20, 0]).close()"), (2 / 3) * 200, 0.006, "quadratic curve");
+  close(area("polygon([[0, 0], [20, 0], [20, 20], [0, 20]], 4)"), 400 - (4 - Math.PI) * 16, 0.004, "polygon with rounded corners");
+  close(area("rect(40, 40).cut(circle(10))"), 1600 - Math.PI * 100, 0.004, "rect with a hole");
+  close(area("circle(10).add(circle(10).move(15, 0))"), 2 * Math.PI * 100 - (2 * 100 * Math.acos(0.75) - 7.5 * Math.sqrt(100 - 56.25) * 2), 0.006, "two joined circles");
+  close(area('airfoil("0012", 100)'), 822, 0.01, "NACA 0012 (0.0822 x chord squared)");
+  // A spline goes through every point it is given.
+  const r = runScript('part("A", extrude(path([0, 0]).spline([[30, 10], [60, 0], [30, 40]]).close(), 1))');
+  const { f } = compile(r.parts[0].node);
+  for (const [x, y] of [[0, 0], [30, 10], [60, 0], [30, 40]]) assert.ok(Math.abs(f(x, y, 0)) < 1e-3, `spline misses [${x}, ${y}]`);
+});
+
+test("revolve through part of a turn", () => {
+  close(volumeOf('part("A", revolve(rect(10, 20).move(30, 0), 180))'), 200 * 30 * Math.PI, 0.004, "half turn");
+  close(volumeOf('part("A", revolve([[20, 0], [40, 0], [40, 10], [20, 10]], 90))'), (Math.PI / 4) * (1600 - 400) * 10, 0.004, "quarter turn");
+});
+
+test("sweep: rings, mitred frames, springs, twists and flat ends", () => {
+  // Pappus: area x distance travelled by its centre.
+  close(volumeOf('part("A", sweep(circle(5), path([0, 0]).radiusArc(100, 0, 50).radiusArc(0, 0, 50).close()))'), Math.PI * 25 * 2 * Math.PI * 50, 0.006, "swept ring");
+  close(volumeOf('part("A", sweep(rect(20, 10), [[0, 0, 0], [200, 0, 0], [200, 150, 0], [0, 150, 0]], { closed: true, smooth: false }))'), 200 * 700, 0.004, "mitred picture frame");
+  close(volumeOf('part("A", sweep(rect(10, 10), [[0, 0, 0], [100, 0, 0]]))'), 10000, 0.004, "straight sweep with flat ends");
+  close(volumeOf('part("A", sweep(rect(20, 6), [[0, 0, 0], [0, 0, 100]], { twist: 90 }))'), 12000, 0.006, "twisted bar");
+  const L = 5 * Math.hypot(2 * Math.PI * 20, 8);
+  close(volumeOf('part("A", sweep(circle(2), helix(20, 8, 5)))'), Math.PI * 4 * L, 0.01, "coil spring");
+  // The profile's y axis points up: a 20 wide, 6 tall rect swept along X is 6 tall.
+  const b = meshBoundsOf(runScript('part("A", sweep(rect(20, 6), [[0, 0, 0], [100, 0, 0]]))'));
+  assert.ok(Math.abs(b[5] - 3) < 0.1 && Math.abs(b[4] - 10) < 0.1, `top at z = ${b[5]}, side at y = ${b[4]}`);
+});
+
+test("loft: tapers are exact, and a wing's sections stay in proportion", () => {
+  close(volumeOf('part("A", loft([[0, circle(30)], [100, circle(50)]]))'), ((Math.PI * 100) / 3) * (900 + 2500 + 1500), 0.005, "cone frustum from two circles");
+  close(volumeOf('part("A", loft([[0, rect(20, 20)], [100, rect(40, 40)]]))'), (100 / 3) * (400 + 1600 + 800), 0.005, "pyramid frustum from two squares");
+  // Similar airfoils (root 200, tip 100, tip moved back): a frustum too.
+  const A1 = volumeOf('part("A", extrude(airfoil("0012", 200), 1))'), A2 = A1 / 4;
+  close(volumeOf('part("A", loft([[0, airfoil("0012", 200)], [300, airfoil("0012", 100).move(50, 0)]]))'), (300 / 3) * (A1 + A2 + Math.sqrt(A1 * A2)), 0.01, "tapered wing");
+  // A smooth loft through three sections never bulges past them.
+  const r = runScript('part("A", loft([[0, circle(20)], [50, circle(40)], [100, circle(20)]]))');
+  const { f } = compile(r.parts[0].node);
+  for (let z = 0; z <= 100; z += 5) assert.ok(f(40.01, 0, z) > 0, `bulges past radius 40 at z = ${z}`);
+  assert.ok(f(30, 0, 25) < 0 && f(30, 0, 75) < 0, "it is smooth, not pinched, between sections");
+});
+
+test("profile and path mistakes are explained", () => {
+  assert.match(runScript('part("A", extrude(path([0, 0]).line(10, 0).line(10, 10), 5))').error, /not closed\. End it with \.close\(\)/);
+  assert.match(runScript('part("A", extrude(box(1, 1, 1), 5))').error, /expects a profile .* got a 3D shape/);
+  assert.match(runScript('part("A", loft([[10, circle(5)], [0, circle(5)]]))').error, /heights must increase/);
+  assert.match(runScript('part("A", sweep(circle(1), [[0, 0, 0]]))').error, /at least 2 points/);
+  assert.match(runScript('part("A", extrude(path([0, 0]).radiusArc(100, 0, 10).close(), 1))').error, /too small to reach/);
+});
+
+test("the documented profile, sweep and loft example runs and every part is closed", () => {
+  const doc = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8");
+  const src = doc.match(/EXAMPLE: profiles, sweep and loft\n([\s\S]*?)\n\n/)[1].split("\n").map((l) => l.trim()).join("\n");
+  const r = runScript(src);
+  assert.equal(r.error, undefined, r.error);
+  assert.deepEqual(r.parts.map((p) => p.name), ["Glass", "Rail", "Spring", "Wing", "Bracket"]);
+  for (const p of r.parts) {
+    const m = meshOf(p.node, { budget: 20000 });
+    assert.ok(m.indices.length > 0 && openEdges(m) === 0, `${p.name} is not a closed solid`);
+  }
+});
+
 test("random shapes always give closed meshes", () => {
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -153,6 +233,44 @@ test("random shapes always give closed meshes", () => {
       count++;
       assert.equal(openEdges(m), 0, `scene ${s} budget ${budget}: open or shared edges`);
       assert.ok(closedByPosition(m), `scene ${s} budget ${budget}: not closed by position`);
+    }
+  }
+  console.log(`    ${count} meshes`);
+});
+
+test("random profiles, sweeps, lofts and partial revolves always give closed meshes", () => {
+  let seed = 11;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const R = (a, b) => (a + (b - a) * rnd()).toFixed(2);
+  const prof = () =>
+    [
+      () => `circle(${R(2, 12)})`,
+      () => `rect(${R(4, 20)}, ${R(4, 20)}, ${R(0, 1.5)})`,
+      () => `polygon([${Array.from({ length: 7 }, (_, i) => `[${(Math.cos(i * 0.9) * R(4, 12)).toFixed(2)}, ${(Math.sin(i * 0.9) * R(4, 12)).toFixed(2)}]`).join(", ")}], ${R(0, 2)})`,
+      () => `path([0, 0]).line(${R(8, 16)}, 0).tangentArc(${R(8, 16)}, ${R(6, 12)}).curve([${R(0, 8)}, ${R(10, 16)}], [0, ${R(4, 10)}]).close()`,
+      () => `airfoil("${["0012", "2412", "4415"][Math.floor(rnd() * 3)]}", ${R(10, 30)}).move(-10, 0)`,
+      () => `rect(${R(10, 20)}, ${R(10, 20)}).cut(circle(${R(1, 4)}))`,
+    ][Math.floor(rnd() * 6)]();
+  const solid = () =>
+    [
+      () => `extrude(${prof()}, ${R(2, 30)})`,
+      () => `revolve(${prof()}.move(${R(12, 20)}, 0), ${R(30, 360)})`,
+      () => `sweep(${prof()}.scale(0.4), [[0, 0, 0], [${R(-30, 30)}, ${R(-30, 30)}, ${R(10, 30)}], [${R(-30, 30)}, ${R(-30, 30)}, ${R(30, 50)}]], { twist: ${R(0, 180)} })`,
+      () => `sweep(circle(${R(0.8, 3)}), helix(${R(8, 15)}, ${R(4, 10)}, ${R(1, 3)}))`,
+      () => `loft([[0, ${prof()}], [${R(10, 30)}, ${prof()}], [${R(35, 60)}, ${prof()}]], { smooth: ${rnd() < 0.5} })`,
+    ][Math.floor(rnd() * 5)]();
+  let count = 0;
+  for (let s = 0; s < 120; s++) {
+    const op = ["union", "subtract", "intersect"][Math.floor(rnd() * 3)];
+    const script = `part("A", ${op}(${solid()}.rotate(${R(0, 90)}, ${R(0, 90)}, 0), ${solid()}.move(${R(-10, 10)}, ${R(-10, 10)}, ${R(-10, 10)})${rnd() < 0.5 ? `, ${R(1, 5)}` : ""}))`;
+    const r = runScript(script);
+    assert.equal(r.error, undefined, `${script}: ${r.error}`);
+    for (const budget of [1500, 6000]) {
+      const m = meshOf(r.parts[0].node, { budget });
+      if (!m.indices.length) continue;
+      count++;
+      assert.equal(openEdges(m), 0, `scene ${s} budget ${budget}: open or shared edges\n${script}`);
+      assert.ok(closedByPosition(m), `scene ${s} budget ${budget}: not closed by position\n${script}`);
     }
   }
   console.log(`    ${count} meshes`);

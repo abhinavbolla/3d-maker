@@ -69,6 +69,346 @@ function polygon2D(pts) {
   };
 }
 
+// ---- bounding volume trees over line segments, for long outlines and paths ----
+// Segments are given as flat arrays of start and end points (dim 2 or 3).
+// Leaves hold up to 4 segments; inner nodes have two children.
+function buildTree(ax, bx, dim) {
+  const n = ax.length / dim;
+  const order = Int32Array.from({ length: n }, (_, i) => i);
+  const lo = [], hi = [], kids = [], start = [], count = [];
+  const cen = (i, d) => (ax[i * dim + d] + bx[i * dim + d]) / 2;
+  const make = (s, e) => {
+    const id = start.length;
+    const l = new Array(dim).fill(Infinity), h = new Array(dim).fill(-Infinity);
+    for (let k = s; k < e; k++) {
+      const i = order[k];
+      for (let d = 0; d < dim; d++) {
+        l[d] = min(l[d], ax[i * dim + d], bx[i * dim + d]);
+        h[d] = max(h[d], ax[i * dim + d], bx[i * dim + d]);
+      }
+    }
+    lo.push(...l);
+    hi.push(...h);
+    kids.push(-1, -1);
+    start.push(s);
+    count.push(e - s);
+    if (e - s > 4) {
+      let axis = 0;
+      for (let d = 1; d < dim; d++) if (h[d] - l[d] > h[axis] - l[axis]) axis = d;
+      const part = Array.from(order.subarray(s, e)).sort((i, j) => cen(i, axis) - cen(j, axis));
+      order.set(part, s);
+      const m = (s + e) >> 1;
+      kids[id * 2] = make(s, m);
+      kids[id * 2 + 1] = make(m, e);
+      count[id] = 0;
+    }
+    return id;
+  };
+  make(0, n);
+  return { lo: Float64Array.from(lo), hi: Float64Array.from(hi), kids: Int32Array.from(kids), start: Int32Array.from(start), count: Int32Array.from(count), order };
+}
+
+// Exact signed distance to a closed outline [[x, y], ...] (even-odd inside).
+function outline2D(pts) {
+  const n = pts.length;
+  if (n <= 24) return polygon2D(pts);
+  const ax = new Float64Array(n * 2), bx = new Float64Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    ax[i * 2] = pts[i][0];
+    ax[i * 2 + 1] = pts[i][1];
+    bx[i * 2] = pts[j][0];
+    bx[i * 2 + 1] = pts[j][1];
+  }
+  const { lo, hi, kids, start, count, order } = buildTree(ax, bx, 2);
+  const stack = new Int32Array(256);
+  return (px, py) => {
+    let best = Infinity;
+    let inside = false;
+    let sp = 0;
+    stack[sp++] = 0;
+    while (sp) {
+      const node = stack[--sp];
+      const dx = max(lo[node * 2] - px, px - hi[node * 2], 0);
+      const dy = max(lo[node * 2 + 1] - py, py - hi[node * 2 + 1], 0);
+      // Visit for distance if it could hold a nearer segment; for inside/out
+      // if a ray from the point towards +x could cross one of its segments.
+      if (dx * dx + dy * dy >= best && !(lo[node * 2 + 1] <= py && hi[node * 2 + 1] > py && hi[node * 2] >= px)) continue;
+      if (kids[node * 2] < 0) {
+        for (let k = start[node], e = k + count[node]; k < e; k++) {
+          const i = order[k];
+          const x0 = ax[i * 2], y0 = ax[i * 2 + 1], x1 = bx[i * 2], y1 = bx[i * 2 + 1];
+          const ex = x1 - x0, ey = y1 - y0, wx = px - x0, wy = py - y0;
+          const t = min(max((wx * ex + wy * ey) / (ex * ex + ey * ey || 1), 0), 1);
+          const qx = wx - ex * t, qy = wy - ey * t;
+          best = min(best, qx * qx + qy * qy);
+          if (y0 > py !== y1 > py && px < x0 + ((py - y0) * ex) / ey) inside = !inside;
+        }
+      } else {
+        stack[sp++] = kids[node * 2];
+        stack[sp++] = kids[node * 2 + 1];
+      }
+    }
+    return (inside ? -1 : 1) * sqrt(best);
+  };
+}
+
+// ---- 2D profiles: { f(x, y), box: [minx, miny, maxx, maxy] } ----
+// Used by extrude, revolve, sweep and loft. Same rules as 3D: negative inside,
+// never changing faster than distance.
+const EMPTY2 = [Infinity, Infinity, -Infinity, -Infinity];
+const isEmpty2 = (b) => !(b[0] <= b[2] && b[1] <= b[3]);
+export function compile2(node) {
+  const c = COMPILERS2[node.t];
+  if (!c) throw new Error(`Unknown profile "${node.t}"`);
+  return c(node);
+}
+const COMPILERS2 = {
+  circle2: ({ r }) => ({ box: [-r, -r, r, r], f: (x, y) => sqrt(x * x + y * y) - r }),
+  rect2({ w, h, r = 0 }) {
+    const bx = w / 2 - r, by = h / 2 - r;
+    return {
+      box: [-w / 2, -h / 2, w / 2, h / 2],
+      f: (x, y) => {
+        const qx = abs(x) - bx, qy = abs(y) - by;
+        return hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - r;
+      },
+    };
+  },
+  poly2({ pts }) {
+    const b = pts.reduce((q, [x, y]) => [min(q[0], x), min(q[1], y), max(q[2], x), max(q[3], y)], EMPTY2);
+    return { box: b, f: outline2D(pts) };
+  },
+  union2({ c, k = 0 }) {
+    const kids = c.map(compile2).filter((q) => !isEmpty2(q.box));
+    if (!kids.length) return { box: EMPTY2, f: () => Infinity };
+    const box = kids.reduce((b, q) => [min(b[0], q.box[0]), min(b[1], q.box[1]), max(b[2], q.box[2]), max(b[3], q.box[3])], EMPTY2);
+    const fs = kids.map((q) => q.f);
+    return { box, f: (x, y) => fs.reduce((d, f) => smin(d, f(x, y), k), Infinity) };
+  },
+  subtract2({ a, b, k = 0 }) {
+    const A = compile2(a);
+    const fs = b.map(compile2).map((q) => q.f);
+    return { box: A.box, f: (x, y) => fs.reduce((d, f) => smax(d, -f(x, y), k), A.f(x, y)) };
+  },
+  intersect2({ c, k = 0 }) {
+    const kids = c.map(compile2);
+    const box = kids.reduce((b, q) => [max(b[0], q.box[0]), max(b[1], q.box[1]), min(b[2], q.box[2]), min(b[3], q.box[3])], [-Infinity, -Infinity, Infinity, Infinity]);
+    const fs = kids.map((q) => q.f);
+    return { box: isEmpty2(box) ? EMPTY2 : box, f: (x, y) => fs.reduce((d, f) => smax(d, f(x, y), k), -Infinity) };
+  },
+  move2({ v: [vx, vy], c }) {
+    const C = compile2(c);
+    const b = C.box;
+    return { box: [b[0] + vx, b[1] + vy, b[2] + vx, b[3] + vy], f: (x, y) => C.f(x - vx, y - vy) };
+  },
+  rotate2({ deg, c }) {
+    const C = compile2(c);
+    const ca = cos(deg * DEG), sa = sin(deg * DEG);
+    const b = C.box;
+    const cs = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(([x, y]) => [ca * x - sa * y, sa * x + ca * y]);
+    const box = cs.reduce((q, [x, y]) => [min(q[0], x), min(q[1], y), max(q[2], x), max(q[3], y)], EMPTY2);
+    return { box: isEmpty2(b) ? EMPTY2 : box, f: (x, y) => C.f(ca * x + sa * y, -sa * x + ca * y) };
+  },
+  scale2({ s: [sx, sy], c }) {
+    const C = compile2(c);
+    const b = C.box;
+    const xs = [b[0] * sx, b[2] * sx], ys = [b[1] * sy, b[3] * sy];
+    const m = min(abs(sx), abs(sy));
+    return { box: [min(...xs), min(...ys), max(...xs), max(...ys)], f: (x, y) => C.f(x / sx, y / sy) * m };
+  },
+  offset2({ d, c }) {
+    const C = compile2(c);
+    const b = C.box;
+    return { box: [b[0] - max(d, 0), b[1] - max(d, 0), b[2] + max(d, 0), b[3] + max(d, 0)], f: (x, y) => C.f(x, y) - d };
+  },
+};
+// The old point-list form of extrude and revolve.
+const profileOf = (node) => compile2(node.p ?? { t: "poly2", pts: node.pts });
+// Distance for a 2D distance d2 extended by a slab distance dz (negative inside).
+const slab = (d2, dz) => min(max(d2, dz), 0) + hypot(max(d2, 0), max(dz, 0));
+
+// ---- sweep: a profile carried along a path of 3D points ----
+// The profile's y axis starts pointing towards `up` (default +Z, or +Y when
+// the path starts vertical), x = y cross the path direction. Frames are
+// carried along the path without twisting (rotation minimising), plus `twist`
+// degrees spread over the length. Each point is measured in the frame of the
+// nearest path segment; at a corner, the bisecting (mitre) plane decides.
+function sweep3({ p, path, closed = false, twist = 0, up }) {
+  const P = compile2(p);
+  const n = path.length;
+  const m = closed ? n : n - 1;
+  const A = new Float64Array(m * 3), B = new Float64Array(m * 3);
+  const T = [], len = [], S = [0];
+  for (let i = 0; i < m; i++) {
+    const a = path[i], b = path[(i + 1) % n];
+    for (let d = 0; d < 3; d++) (A[i * 3 + d] = a[d]), (B[i * 3 + d] = b[d]);
+    const v = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const l = hypot(...v) || 1e-12;
+    T.push(v.map((x) => x / l));
+    len.push(l);
+    S.push(S[i] + l);
+  }
+  const L = S[m];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const unit = (a) => { const l = hypot(...a) || 1; return a.map((x) => x / l); };
+  // Minimal rotation taking direction a to direction b, applied to v.
+  const carry = (v, a, b) => {
+    const k = cross(a, b), s = hypot(...k), c = dot(a, b);
+    if (s < 1e-12) return c > 0 ? v : v.map((x) => -x);
+    const u = k.map((x) => x / s), ang = Math.atan2(s, c);
+    const ca = cos(ang), sa = sin(ang), uv = cross(u, v), ud = dot(u, v);
+    return [0, 1, 2].map((i) => v[i] * ca + uv[i] * sa + u[i] * ud * (1 - ca));
+  };
+  let upv = up ?? [0, 0, 1];
+  if (abs(dot(unit(upv), T[0])) > 0.999) upv = [0, 1, 0];
+  let Y = unit(upv.map((x, i) => x - dot(upv, T[0]) * T[0][i]));
+  const X = [], Yv = [];
+  for (let i = 0; i < m; i++) {
+    if (i) Y = unit(carry(Y, T[i - 1], T[i]));
+    Yv.push(Y);
+    X.push(cross(Y, T[i]));
+  }
+  // A closed path's frame comes back turned; spread the correction over it.
+  let turnRad = twist * DEG;
+  if (closed && m > 1) {
+    const back = carry(Yv[m - 1], T[m - 1], T[0]);
+    turnRad -= Math.atan2(dot(cross(Yv[0], back), T[0]), dot(Yv[0], back));
+  }
+  const { lo, hi, kids, start, count, order } = buildTree(A, B, 3);
+  const R = max(...[[P.box[0], P.box[1]], [P.box[2], P.box[1]], [P.box[2], P.box[3]], [P.box[0], P.box[3]]].map(([x, y]) => hypot(x, y)));
+  // Twisting stretches distances far from the path; scale back to stay safe.
+  const lip = sqrt(1 + (R * abs(turnRad / (L || 1))) ** 2);
+  const stack = new Int32Array(256);
+  const box = grow(boxOf(path), R);
+  return {
+    box,
+    f: (x, y, z) => {
+      let best = Infinity, seg = 0, bt = 0;
+      let sp = 0;
+      stack[sp++] = 0;
+      while (sp) {
+        const node = stack[--sp];
+        const dx = max(lo[node * 3] - x, x - hi[node * 3], 0);
+        const dy = max(lo[node * 3 + 1] - y, y - hi[node * 3 + 1], 0);
+        const dz = max(lo[node * 3 + 2] - z, z - hi[node * 3 + 2], 0);
+        if (dx * dx + dy * dy + dz * dz >= best) continue;
+        if (kids[node * 2] < 0) {
+          for (let k = start[node], e = k + count[node]; k < e; k++) {
+            const i = order[k];
+            const ex = B[i * 3] - A[i * 3], ey = B[i * 3 + 1] - A[i * 3 + 1], ez = B[i * 3 + 2] - A[i * 3 + 2];
+            const wx = x - A[i * 3], wy = y - A[i * 3 + 1], wz = z - A[i * 3 + 2];
+            const t = min(max((wx * ex + wy * ey + wz * ez) / (ex * ex + ey * ey + ez * ez || 1), 0), 1);
+            const qx = wx - ex * t, qy = wy - ey * t, qz = wz - ez * t;
+            const d = qx * qx + qy * qy + qz * qz;
+            if (d < best) (best = d), (seg = i), (bt = t);
+          }
+        } else {
+          stack[sp++] = kids[node * 2];
+          stack[sp++] = kids[node * 2 + 1];
+        }
+      }
+      // At a corner, the mitre plane decides which segment's frame to use.
+      if (bt === 0 && (closed || seg > 0)) {
+        const pr = (seg - 1 + m) % m;
+        const q = [x - A[seg * 3], y - A[seg * 3 + 1], z - A[seg * 3 + 2]];
+        if (dot(q, [T[pr][0] + T[seg][0], T[pr][1] + T[seg][1], T[pr][2] + T[seg][2]]) < 0) (seg = pr), (bt = 1);
+      } else if (bt === 1 && (closed || seg < m - 1)) {
+        const nx = (seg + 1) % m;
+        const q = [x - B[seg * 3], y - B[seg * 3 + 1], z - B[seg * 3 + 2]];
+        if (dot(q, [T[seg][0] + T[nx][0], T[seg][1] + T[nx][1], T[seg][2] + T[nx][2]]) >= 0) (seg = nx), (bt = 0);
+      }
+      const o = bt === 1 ? B : A;
+      const q = [x - o[seg * 3], y - o[seg * 3 + 1], z - o[seg * 3 + 2]];
+      // The point on the path (corners use the corner itself).
+      if (bt > 0 && bt < 1) for (let d = 0; d < 3; d++) q[d] = [x, y, z][d] - (A[seg * 3 + d] + (B[seg * 3 + d] - A[seg * 3 + d]) * bt);
+      const ang = turnRad * ((S[seg] + bt * len[seg]) / (L || 1));
+      const ca = cos(ang), sa = sin(ang);
+      const Xs = X[seg], Ys = Yv[seg];
+      const u0 = dot(q, Xs), v0 = dot(q, Ys);
+      const u = ca * u0 + sa * v0, v = -sa * u0 + ca * v0;
+      const d2 = P.f(u, v) / lip;
+      if (!closed) {
+        const w = dot(q, T[seg]);
+        if (seg === 0 && bt === 0 && w < 0) return slab(d2, -w);
+        if (seg === m - 1 && bt === 1 && w > 0) return slab(d2, w);
+      }
+      return d2;
+    },
+  };
+}
+
+// ---- loft: a solid through profiles stacked along Z ----
+// Each section's box (centre and size) is interpolated with height, and every
+// section is stretched onto that box before their distances are blended, so a
+// wing's chord, thickness and sweep change smoothly from root to tip instead
+// of the middle shrinking. Smooth lofts use monotone cubics, which never
+// overshoot their neighbours. The blend is scaled back by how fast it changes
+// with height, so it stays a safe distance.
+function loft3({ s, smooth = true }) {
+  const secs = s.map(({ z, p }) => ({ z, ...compile2(p) }));
+  const n = secs.length;
+  const zs = secs.map((q) => q.z);
+  const z0 = zs[0], z1 = zs[n - 1];
+  const cubic = smooth && n > 2;
+  const P = [0, 1, 2, 3].map((i) =>
+    secs.map(({ box: b }) => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2, max(b[2] - b[0], 1e-6), max(b[3] - b[1], 1e-6)][i]),
+  );
+  // Fritsch-Carlson slope at section i for values v (a function of section index).
+  const slopeAt = (v, i) => {
+    if (i === 0) return (v(1) - v(0)) / (zs[1] - zs[0]);
+    if (i === n - 1) return (v(n - 1) - v(n - 2)) / (zs[n - 1] - zs[n - 2]);
+    const h0 = zs[i] - zs[i - 1], h1 = zs[i + 1] - zs[i];
+    const d0 = (v(i) - v(i - 1)) / h0, d1 = (v(i + 1) - v(i)) / h1;
+    if (d0 * d1 <= 0) return 0;
+    const w1 = 2 * h1 + h0, w2 = h1 + 2 * h0;
+    return (w1 + w2) / (w1 / d0 + w2 / d1);
+  };
+  const slopes = P.map((vals) => zs.map((_, i) => slopeAt((j) => vals[j], i)));
+  const herm = (a, b, m0, m1, t, h) => {
+    const t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * a + (t3 - 2 * t2 + t) * h * m0 + (-2 * t3 + 3 * t2) * b + (t3 - t2) * h * m1;
+  };
+  const b2 = secs.reduce((b, q) => [min(b[0], q.box[0]), min(b[1], q.box[1]), max(b[2], q.box[2]), max(b[3], q.box[3])], EMPTY2);
+  const cache = new Map();
+  // Blended distance at height z (within the loft).
+  const at = (x, y, z) => {
+    let k = 0;
+    while (k < n - 2 && z > zs[k + 1]) k++;
+    const h = zs[k + 1] - zs[k];
+    const t = (z - zs[k]) / h;
+    const box = P.map((vals, i) => (cubic ? herm(vals[k], vals[k + 1], slopes[i][k], slopes[i][k + 1], t, h) : vals[k] + (vals[k + 1] - vals[k]) * t));
+    cache.clear();
+    const d = (j) => {
+      let v = cache.get(j);
+      if (v === undefined) {
+        const sx = P[2][j] / box[2], sy = P[3][j] / box[3];
+        v = secs[j].f(P[0][j] + (x - box[0]) * sx, P[1][j] + (y - box[1]) * sy) / max(sx, sy);
+        cache.set(j, v);
+      }
+      return v;
+    };
+    if (!cubic) return d(k) + (d(k + 1) - d(k)) * t;
+    return herm(d(k), d(k + 1), slopeAt(d, k), slopeAt(d, k + 1), t, h);
+  };
+  const dz = (z1 - z0) * 1e-4;
+  return {
+    box: [b2[0], b2[1], z0, b2[2], b2[3], z1],
+    f: (x, y, z) => {
+      const zc = min(max(z, z0), z1);
+      const v = at(x, y, zc);
+      let d2 = v;
+      if (z === zc) {
+        const za = max(z - dz, z0), zb = min(z + dz, z1);
+        const g = (at(x, y, zb) - at(x, y, za)) / (zb - za);
+        d2 = v / sqrt(1 + g * g);
+      }
+      return slab(d2, max(z0 - z, z - z1));
+    },
+  };
+}
+
 // ---- compile ----
 // Returns { f, box } for a node.
 export function compile(node) {
@@ -168,24 +508,39 @@ const COMPILERS = {
     const o = R + r;
     return { box: [-o, -o, -r, o, o, r], f: (x, y, z) => hypot(sqrt(x * x + y * y) - R, z) - r };
   },
-  extrude({ pts, h }) {
-    const d2 = polygon2D(pts);
-    const b = boxOf(pts.map(([x, y]) => [x, y, 0]));
-    const hh = h / 2;
+  extrude(node) {
+    const P = profileOf(node);
+    const b = P.box, hh = node.h / 2;
+    return { box: [b[0], b[1], -hh, b[2], b[3], hh], f: (x, y, z) => slab(P.f(x, y), abs(z) - hh) };
+  },
+  // A profile of [radius, height] spun around Z, all the way or through
+  // `angle` degrees counterclockwise from +X.
+  revolve(node) {
+    const P = profileOf(node);
+    const R = max(abs(P.box[0]), abs(P.box[2]));
+    const box = [-R, -R, P.box[1], R, R, P.box[3]];
+    const A = (node.angle ?? 360) * DEG;
+    if (A >= 2 * Math.PI - 1e-9) return { box, f: (x, y, z) => P.f(sqrt(x * x + y * y), z) };
+    const ends = [0, A].map((a) => [cos(a), sin(a)]);
     return {
-      box: [b[0], b[1], -hh, b[3], b[4], hh],
+      box,
       f: (x, y, z) => {
-        const wx = d2(x, y), wz = abs(z) - hh;
-        return min(max(wx, wz), 0) + hypot(max(wx, 0), max(wz, 0));
+        let phi = Math.atan2(y, x);
+        if (phi < 0) phi += 2 * Math.PI;
+        let best = Infinity, edge = Infinity;
+        for (const [c, s] of ends) {
+          const r = x * c + y * s, perp = -x * s + y * c;
+          best = min(best, hypot(max(P.f(r, z), 0), perp));
+          edge = min(edge, r >= 0 ? abs(perp) : hypot(x, y));
+        }
+        // Inside the wedge: the full revolve, cut by the two end planes.
+        if (phi <= A) return max(P.f(sqrt(x * x + y * y), z), -edge);
+        return best;
       },
     };
   },
-  revolve({ pts }) {
-    const d2 = polygon2D(pts);
-    const R = max(...pts.map((p) => abs(p[0])));
-    const zs = pts.map((p) => p[1]);
-    return { box: [-R, -R, min(...zs), R, R, max(...zs)], f: (x, y, z) => d2(sqrt(x * x + y * y), z) };
-  },
+  sweep: (node) => sweep3(node),
+  loft: (node) => loft3(node),
 
   union({ c, k = 0 }) {
     const kids = c.map(compile).filter((k) => !isEmpty(k.box));

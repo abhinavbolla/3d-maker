@@ -2,6 +2,7 @@
 // Code) and saves what came out: pictures, the script, the plan and the
 // app's receipt. For trying hard prompts and comparing results over time.
 // Usage: node test/run-prompt.mjs "a Black Hawk-style rotor head" [outDir]
+// (PORT=5176 to run several at once)
 import { startHarness } from "./harness.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ if (!text) {
 }
 const out = process.argv[3] ?? join(process.cwd(), "runs", new Date().toISOString().replace(/[:.]/g, "-"));
 mkdirSync(out, { recursive: true });
-const h = await startHarness({ port: 5177 });
+const h = await startHarness({ port: Number(process.env.PORT ?? 5177) });
 let code = 0;
 try {
   const w = await h.openWindow();

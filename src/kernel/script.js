@@ -156,12 +156,335 @@ const torus = (R, r) => {
   num(r, "torus minor radius", { positive: true });
   return new Shape({ t: "torus", R, r });
 };
-const extrude = (pts, h) => new Shape({ t: "extrude", pts: points2(pts, "extrude"), h: num(h, "extrude height", { positive: true }) });
-function revolve(pts) {
-  const p = points2(pts, "revolve");
-  p.forEach(([r], i) => r < 0 && fail(`revolve point ${i} has a negative radius ${r}; use [radius, z] with radius >= 0`));
-  return new Shape({ t: "revolve", pts: p });
+// ---- profiles: flat outlines in their own XY plane ----
+// Used by extrude, revolve, sweep and loft. Curves are turned into fine
+// point lists here, so the shape tree stays plain data.
+const R5 = (v) => Math.round(v * 1e5) / 1e5;
+class Profile {
+  constructor(node) {
+    this.node = node;
+  }
+  move(...a) {
+    const [x, y] = Array.isArray(a[0]) ? pt2(a[0], "profile move") : [num(a[0] ?? 0, "profile move x"), num(a[1] ?? 0, "profile move y")];
+    return new Profile({ t: "move2", v: [x, y], c: this.node });
+  }
+  at(...a) {
+    return this.move(...a);
+  }
+  rotate(deg) {
+    return new Profile({ t: "rotate2", deg: num(deg, "profile rotate"), c: this.node });
+  }
+  scale(sx, sy = sx) {
+    num(sx, "profile scale");
+    num(sy, "profile scale");
+    if (!sx || !sy) fail("profile scale cannot be 0");
+    return new Profile({ t: "scale2", s: [sx, sy], c: this.node });
+  }
+  mirror(axis) {
+    if (axis !== "x" && axis !== "y") fail(`profile mirror axis must be "x" or "y", got ${what(axis)}`);
+    return new Profile({ t: "scale2", s: axis === "x" ? [-1, 1] : [1, -1], c: this.node });
+  }
+  offset(d) {
+    return new Profile({ t: "offset2", d: num(d, "profile offset"), c: this.node });
+  }
+  add(...a) {
+    const { nodes, k } = profilesAndSmooth([this, ...a], "add");
+    return new Profile({ t: "union2", c: nodes, k });
+  }
+  cut(...a) {
+    const { nodes, k } = profilesAndSmooth([this, ...a], "cut");
+    if (nodes.length < 2) fail("cut needs at least one profile to cut away");
+    return new Profile({ t: "subtract2", a: nodes[0], b: nodes.slice(1), k });
+  }
+  common(...a) {
+    const { nodes, k } = profilesAndSmooth([this, ...a], "common");
+    if (nodes.length < 2) fail("common needs at least two profiles");
+    return new Profile({ t: "intersect2", c: nodes, k });
+  }
 }
+const pt2 = (p, where) => {
+  if (!Array.isArray(p) || p.length !== 2) fail(`${where} must be [x, y], got ${what(p)}`);
+  return [num(p[0], where), num(p[1], where)];
+};
+const profileNode = (p, where) => {
+  if (p instanceof Profile) return p.node;
+  if (p instanceof Path) fail(`${where}: this path is not closed. End it with .close() to make a profile`);
+  fail(`${where} expects a profile (circle, rect, polygon, path(...).close(), airfoil), got ${p instanceof Shape ? "a 3D shape" : what(p)}`);
+};
+const profilesAndSmooth = (args, where) => {
+  const list = args.flat(Infinity);
+  let k = 0;
+  if (typeof list.at(-1) === "number") k = num(list.pop(), `${where} smooth`, { nonneg: true });
+  return { nodes: list.map((p) => profileNode(p, where)), k };
+};
+const outline = (pts) => new Profile({ t: "poly2", pts: pts.map(([x, y]) => [R5(x), R5(y)]) });
+
+const circle = (r) => new Profile({ t: "circle2", r: num(r, "circle radius", { positive: true }) });
+function rect(w, h = w, round = 0) {
+  num(w, "rect width", { positive: true });
+  num(h, "rect height", { positive: true });
+  num(round, "rect round", { nonneg: true });
+  if (round * 2 > Math.min(w, h)) fail(`rect round ${round} is more than half the smallest side (${Math.min(w, h)})`);
+  return new Profile({ t: "rect2", w, h, r: round });
+}
+// Corners rounded with arcs of radius r (each limited to fit its edges).
+function roundCorners(pts, r) {
+  if (!r) return pts;
+  const n = pts.length, out = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], a = pts[(i - 1 + n) % n], b = pts[(i + 1) % n];
+    const ua = [a[0] - p[0], a[1] - p[1]], ub = [b[0] - p[0], b[1] - p[1]];
+    const la = Math.hypot(...ua), lb = Math.hypot(...ub);
+    if (!la || !lb) continue;
+    const ang = Math.acos(Math.max(-1, Math.min(1, (ua[0] * ub[0] + ua[1] * ub[1]) / (la * lb))));
+    if (ang > Math.PI - 1e-3) {
+      out.push(p);
+      continue;
+    }
+    // Distance from the corner to where the arc meets each edge.
+    let t = r / Math.tan(ang / 2);
+    const lim = Math.min(la, lb) / 2;
+    const rr = t > lim ? lim * Math.tan(ang / 2) : r;
+    t = Math.min(t, lim);
+    const p1 = [p[0] + (ua[0] / la) * t, p[1] + (ua[1] / la) * t], p2 = [p[0] + (ub[0] / lb) * t, p[1] + (ub[1] / lb) * t];
+    const bis = [ua[0] / la + ub[0] / lb, ua[1] / la + ub[1] / lb], bl = Math.hypot(...bis);
+    const dc = rr / Math.sin(ang / 2);
+    const c = [p[0] + (bis[0] / bl) * dc, p[1] + (bis[1] / bl) * dc];
+    let s0 = Math.atan2(p1[1] - c[1], p1[0] - c[0]), s1 = Math.atan2(p2[1] - c[1], p2[0] - c[0]);
+    let sw = s1 - s0;
+    while (sw > Math.PI) sw -= 2 * Math.PI;
+    while (sw < -Math.PI) sw += 2 * Math.PI;
+    const k = Math.max(2, Math.ceil(Math.abs(sw) / (3 * DEG)));
+    for (let j = 0; j <= k; j++) out.push([c[0] + rr * Math.cos(s0 + (sw * j) / k), c[1] + rr * Math.sin(s0 + (sw * j) / k)]);
+  }
+  return out;
+}
+function polygon(pts, round = 0) {
+  return outline(roundCorners(points2(pts, "polygon"), num(round, "polygon round", { nonneg: true })));
+}
+
+// A NACA 4-digit airfoil ("2412": 2% camber at 40% chord, 12% thick), leading
+// edge at the origin, chord along +x, upper surface towards +y.
+function airfoil(code, chord) {
+  const c = String(code);
+  if (!/^\d{4}$/.test(c)) fail(`airfoil code must be 4 digits like "2412" or "0012", got ${what(code)}`);
+  num(chord, "airfoil chord", { positive: true });
+  const m = +c[0] / 100, pp = +c[1] / 10, th = +c.slice(2) / 100;
+  if (!th) fail("airfoil thickness (last two digits) must be more than 0");
+  const N = 60, up = [], lo = [];
+  for (let i = 0; i <= N; i++) {
+    const x = (1 - Math.cos((Math.PI * i) / N)) / 2;
+    const yt = 5 * th * (0.2969 * Math.sqrt(x) - 0.126 * x - 0.3516 * x * x + 0.2843 * x ** 3 - 0.1036 * x ** 4);
+    let yc = 0, dy = 0;
+    if (m && pp) {
+      if (x < pp) (yc = (m / pp ** 2) * (2 * pp * x - x * x)), (dy = ((2 * m) / pp ** 2) * (pp - x));
+      else (yc = (m / (1 - pp) ** 2) * (1 - 2 * pp + 2 * pp * x - x * x)), (dy = ((2 * m) / (1 - pp) ** 2) * (pp - x));
+    }
+    const a = Math.atan(dy);
+    up.push([(x - yt * Math.sin(a)) * chord, (yc + yt * Math.cos(a)) * chord]);
+    lo.push([(x + yt * Math.sin(a)) * chord, (yc - yt * Math.cos(a)) * chord]);
+  }
+  // Trailing edge to leading edge along the top, back along the bottom.
+  return outline([...up.reverse(), ...lo.slice(1, -1)]);
+}
+
+// Smooth curve through points (centripetal Catmull-Rom), k points per span.
+function catmull(pts, closed, perSpan) {
+  const n = pts.length, dim = pts[0].length, out = [];
+  const get = (i) => (closed ? pts[(i + n) % n] : pts[Math.min(Math.max(i, 0), n - 1)]);
+  const spans = closed ? n : n - 1;
+  for (let i = 0; i < spans; i++) {
+    const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2);
+    const d = (a, b) => Math.max(Math.sqrt(Math.hypot(...a.map((v, j) => v - b[j]))), 1e-6);
+    const t0 = 0, t1 = t0 + d(p0, p1), t2 = t1 + d(p1, p2), t3 = t2 + d(p2, p3);
+    const k = typeof perSpan === "function" ? perSpan(p1, p2) : perSpan;
+    for (let j = 0; j < k; j++) {
+      const t = t1 + ((t2 - t1) * j) / k;
+      const lerp = (a, b, ta, tb) => a.map((v, q) => ((tb - t) * v + (t - ta) * b[q]) / (tb - ta || 1));
+      const A1 = lerp(p0, p1, t0, t1), A2 = lerp(p1, p2, t1, t2), A3 = lerp(p2, p3, t2, t3);
+      const B1 = lerp(A1, A2, t0, t2), B2 = lerp(A2, A3, t1, t3);
+      out.push(lerp(B1, B2, t1, t2).slice(0, dim));
+    }
+  }
+  if (!closed) out.push(pts[n - 1]);
+  return out;
+}
+
+// path([x, y]).line(...).arc(...)... : an outline drawn piece by piece.
+// .close() makes it a profile; an open path can be a sweep path (in XY).
+class Path {
+  constructor(p) {
+    this.pts = [pt2(p, "path start")];
+  }
+  get last() {
+    return this.pts[this.pts.length - 1];
+  }
+  xy(a, where) {
+    return Array.isArray(a[0]) ? pt2(a[0], where) : [num(a[0], where), num(a[1], where)];
+  }
+  line(...a) {
+    this.pts.push(this.xy(a, "line"));
+    return this;
+  }
+  lineBy(...a) {
+    const [dx, dy] = this.xy(a, "lineBy");
+    this.pts.push([this.last[0] + dx, this.last[1] + dy]);
+    return this;
+  }
+  // Arc from the current point through `via` to `to`.
+  arc(via, to) {
+    const [a, b, c] = [this.last, pt2(via, "arc through point"), pt2(to, "arc end")];
+    const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+    if (Math.abs(d) < 1e-9) return this.line(to);
+    const sq = (p) => p[0] * p[0] + p[1] * p[1];
+    const cx = (sq(a) * (b[1] - c[1]) + sq(b) * (c[1] - a[1]) + sq(c) * (a[1] - b[1])) / d;
+    const cy = (sq(a) * (c[0] - b[0]) + sq(b) * (a[0] - c[0]) + sq(c) * (b[0] - a[0])) / d;
+    const ang = (p) => Math.atan2(p[1] - cy, p[0] - cx);
+    const s0 = ang(a), sb = ang(b), s1 = ang(c);
+    const ccw = d > 0;
+    const norm = (x) => ((x % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const sweep = ccw ? norm(s1 - s0) : -norm(s0 - s1);
+    return this.arcPoints(cx, cy, Math.hypot(a[0] - cx, a[1] - cy), s0, sweep, c);
+  }
+  // Arc of radius r to (x, y): r > 0 bends left (counterclockwise), r < 0 right.
+  radiusArc(x, y, r) {
+    const to = [num(x, "radiusArc x"), num(y, "radiusArc y")], a = this.last;
+    num(r, "radiusArc radius");
+    const dx = to[0] - a[0], dy = to[1] - a[1], ch = Math.hypot(dx, dy);
+    if (!ch) return this;
+    if (Math.abs(r) < ch / 2) fail(`radiusArc radius ${Math.abs(r)} is too small to reach a point ${R5(ch)} away (needs at least ${R5(ch / 2)})`);
+    const h = Math.sqrt(r * r - (ch / 2) ** 2) * Math.sign(r);
+    const cx = (a[0] + to[0]) / 2 - (dy / ch) * h, cy = (a[1] + to[1]) / 2 + (dx / ch) * h;
+    const s0 = Math.atan2(a[1] - cy, a[0] - cx), s1 = Math.atan2(to[1] - cy, to[0] - cx);
+    let sw = s1 - s0;
+    if (r > 0) while (sw < 0) sw += 2 * Math.PI;
+    else while (sw > 0) sw -= 2 * Math.PI;
+    return this.arcPoints(cx, cy, Math.abs(r), s0, sw, to);
+  }
+  // Arc to (x, y) that continues smoothly from the last piece.
+  tangentArc(...a) {
+    const to = this.xy(a, "tangentArc"), p = this.last;
+    if (this.pts.length < 2) fail("tangentArc needs a piece before it to continue from");
+    const q = this.pts[this.pts.length - 2];
+    const t = [p[0] - q[0], p[1] - q[1]], tl = Math.hypot(...t);
+    const c = [to[0] - p[0], to[1] - p[1]];
+    const cr = t[0] * c[1] - t[1] * c[0];
+    if (Math.abs(cr) < 1e-9 * tl * Math.hypot(...c)) return this.line(to);
+    // Centre on the normal at p, equally far from p and the end point.
+    const nrm = [-t[1] / tl, t[0] / tl];
+    const r = (c[0] * c[0] + c[1] * c[1]) / (2 * (c[0] * nrm[0] + c[1] * nrm[1]));
+    const cx = p[0] + nrm[0] * r, cy = p[1] + nrm[1] * r;
+    const s0 = Math.atan2(p[1] - cy, p[0] - cx), s1 = Math.atan2(to[1] - cy, to[0] - cx);
+    let sw = s1 - s0;
+    if (cr > 0) while (sw < 0) sw += 2 * Math.PI;
+    else while (sw > 0) sw -= 2 * Math.PI;
+    return this.arcPoints(cx, cy, Math.abs(r), s0, sw, to);
+  }
+  arcPoints(cx, cy, r, s0, sw, to) {
+    const k = Math.max(2, Math.ceil(Math.abs(sw) / (2 * DEG)));
+    for (let j = 1; j < k; j++) this.pts.push([cx + r * Math.cos(s0 + (sw * j) / k), cy + r * Math.sin(s0 + (sw * j) / k)]);
+    this.pts.push(to);
+    return this;
+  }
+  // Bezier curve: one control point (quadratic) or two (cubic), then the end.
+  curve(...a) {
+    const ps = a.map((p, i) => pt2(p, `curve point ${i + 1}`));
+    if (ps.length < 2 || ps.length > 3) fail("curve takes one or two control points, then the end point: curve([cx, cy], [x, y]) or curve([c1x, c1y], [c2x, c2y], [x, y])");
+    const ctl = [this.last, ...ps];
+    const k = 32;
+    for (let j = 1; j <= k; j++) {
+      let q = ctl.map((p) => [...p]);
+      const t = j / k;
+      while (q.length > 1) q = q.slice(1).map((p, i) => [q[i][0] + (p[0] - q[i][0]) * t, q[i][1] + (p[1] - q[i][1]) * t]);
+      this.pts.push(q[0]);
+    }
+    return this;
+  }
+  // Smooth curve through these points.
+  spline(pts) {
+    const ps = points2(pts, "spline", 1);
+    this.pts.push(...catmull([this.last, ...ps], false, 16).slice(1));
+    return this;
+  }
+  close(round = 0) {
+    let p = this.pts.filter((q, i, all) => i === 0 || Math.hypot(q[0] - all[i - 1][0], q[1] - all[i - 1][1]) > 1e-9);
+    if (p.length > 1 && Math.hypot(p[0][0] - p.at(-1)[0], p[0][1] - p.at(-1)[1]) < 1e-9) p = p.slice(0, -1);
+    if (p.length < 3) fail("a closed path needs at least 3 points");
+    return outline(roundCorners(p, num(round, "close round", { nonneg: true })));
+  }
+}
+const path = (...a) => new Path(Array.isArray(a[0]) ? a[0] : [a[0], a[1]]);
+
+// A helix around Z: radius r, rising `pitch` per turn, starting at (r, 0, 0).
+function helix(r, pitch, turns) {
+  num(r, "helix radius", { positive: true });
+  num(pitch, "helix pitch");
+  num(turns, "helix turns", { positive: true });
+  if (turns > 500) fail("helix turns must be at most 500");
+  const n = Math.max(8, Math.ceil(turns * 72));
+  return Array.from({ length: n + 1 }, (_, i) => {
+    const a = (2 * Math.PI * turns * i) / n;
+    return [R5(r * Math.cos(a)), R5(r * Math.sin(a)), R5((pitch * turns * i) / n)];
+  });
+}
+
+function extrude(p, h) {
+  num(h, "extrude height", { positive: true });
+  if (Array.isArray(p)) return new Shape({ t: "extrude", pts: points2(p, "extrude"), h });
+  return new Shape({ t: "extrude", p: profileNode(p, "extrude"), h });
+}
+function revolve(p, angle = 360) {
+  num(angle, "revolve angle", { positive: true });
+  if (angle > 360) fail(`revolve angle must be at most 360, got ${angle}`);
+  if (Array.isArray(p)) {
+    const pts = points2(p, "revolve");
+    pts.forEach(([r], i) => r < 0 && fail(`revolve point ${i} has a negative radius ${r}; use [radius, z] with radius >= 0`));
+    return new Shape(angle < 360 ? { t: "revolve", pts, angle } : { t: "revolve", pts });
+  }
+  const node = profileNode(p, "revolve");
+  return new Shape(angle < 360 ? { t: "revolve", p: node, angle } : { t: "revolve", p: node });
+}
+
+// sweep(profile, path, { smooth, closed, twist, up })
+// path: [[x, y, z], ...] (smoothed through the points unless smooth: false),
+// helix(...), an open path(...) in the XY plane, or a closed one (a profile
+// made with path(...).close() or polygon) for a ring.
+function sweep(profile, through, opts = {}) {
+  const p = profileNode(profile, "sweep profile");
+  if (typeof opts !== "object" || opts === null) fail("sweep options must be { smooth, closed, twist, up }");
+  let pts, closed = Boolean(opts.closed), dense = false;
+  if (through instanceof Path) (pts = through.pts.map(([x, y]) => [x, y, 0])), (dense = true);
+  else if (through instanceof Profile && through.node.t === "poly2") (pts = through.node.pts.map(([x, y]) => [x, y, 0])), (closed = true), (dense = true);
+  else if (Array.isArray(through)) {
+    if (through.length < 2) fail("sweep path needs at least 2 points [[x, y, z], ...]");
+    pts = through.map((q, i) => vec(q, `sweep path point ${i}`));
+  } else fail(`sweep path must be points [[x, y, z], ...], helix(...) or path(...), got ${what(through)}`);
+  pts = pts.filter((q, i) => i === 0 || Math.hypot(q[0] - pts[i - 1][0], q[1] - pts[i - 1][1], q[2] - pts[i - 1][2]) > 1e-9);
+  if (closed && pts.length > 2 && Math.hypot(...pts[0].map((v, i) => v - pts.at(-1)[i])) < 1e-9) pts.pop();
+  if (pts.length < 2) fail("sweep path points must not all be the same");
+  const smooth = opts.smooth ?? !dense;
+  if (smooth && pts.length > 2) {
+    // Enough points per span to follow the curve closely.
+    pts = catmull(pts, closed, (a, b) => Math.min(24, Math.max(2, Math.ceil(Math.hypot(...a.map((v, i) => v - b[i])) / 2))));
+  }
+  if (pts.length > 40000) fail("sweep path is too long or too finely divided (over 40000 points)");
+  const node = { t: "sweep", p, path: pts.map((q) => q.map(R5)), closed };
+  if (opts.twist !== undefined) node.twist = num(opts.twist, "sweep twist");
+  if (opts.up !== undefined) node.up = vec(opts.up, "sweep up");
+  return new Shape(node);
+}
+
+// loft([[z, profile], ...], { smooth }): a solid through profiles at heights z.
+function loft(sections, opts = {}) {
+  if (!Array.isArray(sections) || sections.length < 2) fail("loft needs at least 2 sections: loft([[z, profile], [z, profile], ...])");
+  const s = sections.map((q, i) => {
+    if (!Array.isArray(q) || q.length !== 2) fail(`loft section ${i} must be [z, profile], got ${what(q)}`);
+    return { z: num(q[0], `loft section ${i} height`), p: profileNode(q[1], `loft section ${i}`) };
+  });
+  for (let i = 1; i < s.length; i++) if (!(s[i].z > s[i - 1].z)) fail(`loft section heights must increase: section ${i} is at ${s[i].z}, after ${s[i - 1].z}`);
+  return new Shape({ t: "loft", s, smooth: opts.smooth ?? true });
+}
+
 // A smooth tube through points [[x, y, z, radius], ...]: round cones joined end to end.
 function tube(pts, smooth = 0) {
   if (!Array.isArray(pts) || pts.length < 2) fail("tube needs at least 2 points [[x, y, z, radius], ...]");
@@ -190,7 +513,7 @@ function intersect(...args) {
   return new Shape({ t: "intersect", c: nodes, k });
 }
 
-const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
+const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "circle", "rect", "polygon", "path", "airfoil", "helix", "sweep", "loft", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
 const DEG = Math.PI / 180;
 // A joint may open by this much (mm) over the loop before it is reported.
 export const JOINT_TOLERANCE_MM = 1;
@@ -317,7 +640,7 @@ export function runScript(source, values = {}) {
   const loop = (seconds) => (loopSeconds = num(seconds, "loop seconds", { positive: true }));
   const print = (...a) => prints.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 
-  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
+  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, helix, sweep, loft, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
   try {
     const fn = new Function(...API_NAMES, ...BLOCKED, `"use strict";\n${source}\n//# sourceURL=model.js`);
     fn(...API_NAMES.map((n) => api[n]), ...BLOCKED.map(() => undefined));

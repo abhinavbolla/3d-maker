@@ -102,8 +102,37 @@ PRIMITIVES (all centred on the origin)
   torus(R, r)                     ring in the XY plane
   capsule([x,y,z], [x,y,z], r1, r2?)   rounded rod between two points, optionally tapered. Great for struts, limbs, booms, handles, legs
   tube([[x,y,z,r], ...], smooth?) rounded rods through several points with a radius at each point: pipes, cables, tails, skids
-  extrude([[x,y], ...], h)        polygon in XY, extruded along Z (centred: from -h/2 to h/2)
-  revolve([[r,z], ...])           closed profile of [radius, height] points spun around Z: vases, bottles, wheels, nose cones
+  extrude(profile, h)             a profile (below) pushed along Z (centred: from -h/2 to h/2). A list of [x, y] points also works
+  revolve(profile, angle?)        a profile drawn as [radius, height] (x >= 0) spun around Z, all the way or through angle degrees from +X: vases, glasses, wheels, nose cones, pipe bends
+  sweep(profile, path, { smooth, closed, twist, up })
+                                  a profile carried along a path: handrails, frames, gaskets, hoses, wires, springs, bent tubes, mouldings, coils.
+                                  path: [[x,y,z], ...] (a smooth curve through the points; smooth: false keeps straight runs with mitred corners), helix(r, pitch, turns), or path(...) in the XY plane (closed with .close() for a ring).
+                                  The profile's y axis points up (+Z, or up: [x,y,z]) and it stays square to the path. closed: true joins the ends. twist: degrees of twist from start to end.
+  loft([[z, profile], ...], { smooth })
+                                  a solid through profiles at increasing heights z (smooth by default): wings and blades (airfoil sections), fuselages, hulls, bottles, shoes, handles, transitions from round to square.
+                                  Sections morph into each other in proportion, so chord, thickness and sweep change smoothly. Loft along Z, then rotate it into place.
+
+PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and loft)
+  circle(r)    rect(w, h, round?)    polygon([[x,y], ...], round?)     round = corner radius
+  airfoil("2412", chord)          NACA 4-digit wing section: leading edge at the origin, chord along +x, upper surface up. "0012" is symmetric; "4415" is thick and cambered
+  path([x, y])                    an outline drawn piece by piece, chained:
+    .line(x, y)  .lineBy(dx, dy)  straight
+    .arc([x, y], [x2, y2])        arc through the first point to the second
+    .radiusArc(x, y, r)           arc of radius r to (x, y); r > 0 bends left, r < 0 right
+    .tangentArc(x, y)             arc to (x, y) continuing smoothly from the last piece
+    .curve([cx, cy], [x, y])  .curve([c1x, c1y], [c2x, c2y], [x, y])   Bezier curves
+    .spline([[x, y], ...])        a smooth curve through these points
+    .close(round?)                back to the start: makes it a profile (round = corner radius)
+  Profile methods: .move(x, y) .rotate(deg) .scale(s) or .scale(sx, sy) .mirror("x"|"y") .offset(d)
+    .add(other, ..., smooth?)  .cut(other, ...)  .common(other, ...)    combine outlines before making a solid: holes, slots, keyways
+
+  EXAMPLE: profiles, sweep and loft
+    const glass = path([0, 0]).line(35, 0).line(35, 3).line(4, 8).line(4, 90).curve([40, 100], [38, 170]).line(35, 170).curve([37, 103], [0, 96]).close();
+    part("Glass", revolve(glass));
+    part("Rail", sweep(circle(6), [[0, 0, 0], [100, 0, 40], [200, 60, 40], [260, 60, 0]]).at(-100, -80, 0));
+    part("Spring", sweep(circle(2), helix(15, 8, 6)).at(300, 0, 0));
+    part("Wing", loft([[0, airfoil("2412", 300)], [900, airfoil("0012", 120).move(150, 0)]]).rotateX(-90).at(0, 300, 0));
+    part("Bracket", extrude(rect(80, 40, 6).cut(circle(6).move(-25, 0), circle(6).move(25, 0)), 8).at(0, -150, 4));
 
 COMBINING (smooth is an optional blend radius in mm; leave it out for a sharp join)
   union(a, b, ..., smooth?)       also a.add(b, ..., smooth?)
@@ -179,7 +208,8 @@ HOW TO WORK
 - Mechanisms (anything where parts drive each other: rotor heads, engines, linkages, landing gear, robot arms): use LINKED MOTION, declare a joint() at every connection, and finish only when every joint's max_gap_mm and every link's max_stretch_mm is under 1, there are no motion warnings, and screenshots at two or three moments look right. Make each moving piece its own part.
 - Model real pieces as separate named parts, not one blob: a hub, each clamp, each link, each damper. Detail is what makes it look real: bolts, fillets, lightening holes, chamfers, bearing races.
 - For changes to an existing model, prefer edit_model. If the model has an unfinished plan (get_model shows plan), continue it.
-- Build recognisable silhouettes from smooth blends of ellipsoids, capsules, tubes and revolves; add detail (windows, panels, bolts) with subtract and small shapes; use symmetric() for anything with left and right sides.
+- Pick the operation the real part is made by: turned parts with revolve, plates and brackets with extrude of a profile with holes, bent tube, wire, rails and seals with sweep, wings, blades, hulls and fuselages with loft, springs with sweep along a helix. Draw real outlines with path() curves rather than stacking boxes.
+- Build recognisable silhouettes from smooth blends of ellipsoids, capsules, tubes, revolves and lofts; add detail (windows, panels, bolts) with subtract and small shapes; use symmetric() for anything with left and right sides.
 - After every change, call screenshot (try "iso", then "front", "top" or "right" as needed) and fix anything that looks wrong: parts floating apart, poking through each other, wrong proportions, missing pieces. A part listed as empty, or one much thinner than its detail_mm, needs to be thicker.
 - If the user has selected a part, "this" and "it" mean that part.
 - When done, answer in one or two short sentences: what you made or changed. Do not paste the script.`;
