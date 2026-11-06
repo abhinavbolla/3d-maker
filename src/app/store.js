@@ -16,6 +16,7 @@ export function createStore(kernel, initial) {
     result: null, // last good build
     error: null, // why the last change was not applied
     building: false,
+    refining: null, // promise while the fine pass runs
     selected: null, // part name
     fileName: null,
   };
@@ -27,8 +28,29 @@ export function createStore(kernel, initial) {
   let latestDraft = 0;
 
   async function build(doc, quality) {
+    kernel.cancelRefine?.();
     if (!doc.script.trim()) return { parts: [], params: [], prints: [], warnings: [], title: "" };
     return kernel.build(doc, quality);
+  }
+
+  // After a change, the same model is meshed again at fine detail in the
+  // background and swapped in if nothing changed in the meantime.
+  // state.refining is the promise while that runs.
+  function refine(doc, result) {
+    if (!kernel.refine || !result.parts.length) return;
+    const p = kernel
+      .refine(result)
+      .then((fine) => {
+        if (fine && state.doc === doc && state.result === result) {
+          state.result = fine;
+          emit();
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (state.refining === p) state.refining = null;
+      });
+    state.refining = p;
   }
 
   function apply(doc, result, history) {
@@ -58,6 +80,7 @@ export function createStore(kernel, initial) {
           throw new Error(result.error);
         }
         apply(doc, result, history);
+        refine(doc, result);
         return result;
       } finally {
         state.building = false;

@@ -42,6 +42,9 @@ const MAX_STEPS = 40;
 
 export function createCommands({ store, viewport, kernel }) {
   const partsByName = () => new Map((store.state.result?.parts ?? []).map((p) => [p.name, p]));
+  // Pictures for Claude show the fine detail: wait for the background pass
+  // (at most 15 s; after that the preview is shown).
+  const fineDetail = () => store.state.refining && Promise.race([store.state.refining, new Promise((r) => setTimeout(r, 15000))]);
 
   const setScript = async (script) => {
     if (typeof script !== "string" || !script.trim()) throw new Error("script is empty");
@@ -96,6 +99,7 @@ export function createCommands({ store, viewport, kernel }) {
         const why = [missing.length && `missing: ${missing.join(", ")}`, empty.length && `empty (no surface): ${empty.join(", ")}`].filter(Boolean).join("; ");
         throw new Error(`Step "${step}" is not finished. Its parts are ${why}. Add or fix them, then call finish_step again. Part names must match the plan exactly.`);
       }
+      await fineDetail();
       const updated = { steps: plan.steps.map((x) => (x === s ? { ...x, done: true } : x)) };
       store.setPlan(updated);
       const summary = summarize(store.state);
@@ -120,7 +124,7 @@ export function createCommands({ store, viewport, kernel }) {
       if (s.indexOf(old_text, at + 1) >= 0) throw new Error("old_text appears more than once; include more surrounding text.");
       return setScript(s.slice(0, at) + new_text + s.slice(at + old_text.length));
     },
-    screenshot: async ({ view, width, height, part, parts, at } = {}) => ({ png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
+    screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async () => {
       const r = await kernel.exportSTL(store.state.result?.parts ?? []);
       let bin = "";

@@ -156,7 +156,7 @@ LINKED MOTION (mechanisms whose parts drive each other)
     joint("Rod", "Crank", pin);
     joint("Rod", "Piston", top);
 
-  ROTOR HEADS: the hub spins. Each blade, with its cuff and pitch horn, is its own part ("Blade 1", "Blade 2", ...) that follows the hub and turns about its own feathering axis. The stationary swashplate tilts (cyclic) and slides up and down (collective), driven by sliders; the rotating swashplate follows it and spins with the hub. Each pitch link is link(lower, upper, where("Rotating swashplate", lower, t), where("Blade 1", upper, t)). Work each blade's pitch out from where its pitch link's lower end is, so the link reaches the horn: pitch = asin((height of the lower ball in the hub's frame - its rest height) / horn arm length). Declare joints at both ends of every pitch link.
+  DRIVEN LEVERS: when a rod moves a lever that turns about its own axis (pitch horns, steering arms, rocker arms, suspension), work the lever's angle out from where the rod's driven end is, so the rod keeps its length: for a lever arm of length a, angle = asin((height of the rod end in the lever's frame - its rest height) / a). Give the lever its motion from that angle and the rod link(...) between where() of its two ends. Declare joints at both ends of every rod.
 
 EXAMPLE
   title("Desk lamp");

@@ -69,6 +69,21 @@ try {
   await call("set_model", { script: 'part("Cube", box(20, 20, 20));' });
   check((await w("window.__3dmaker.plan()")) === null && (await w('document.getElementById("progress").hidden')), "a new, unrelated model clears the old plan");
 
+  // Detail: after a change the model is meshed again finely in the
+  // background, and Claude's pictures wait for it.
+  const plate = 'part("Plate", box(400, 400, 10));\nfor (let i = 0; i < 31; i++) part("Bolt " + i, cylinder(3, 8).at(-150 + i * 10, 0, 9));';
+  const detail = async () => (await w("window.__3dmaker.summary()")).parts.find((p) => p.name === "Plate")?.detail_mm;
+  await call("set_model", { script: plate });
+  const coarse = await detail();
+  await call("screenshot", { view: "top", width: 300, height: 300 });
+  const finer = await detail();
+  check(finer > 0 && finer < coarse, `the big part is meshed finer in the background (${coarse} mm cells, then ${finer} mm)`);
+  // A newer change wins over a fine pass that was still running.
+  await call("set_model", { script: plate.replace("400, 400", "300, 300") });
+  await call("set_model", { script: 'part("Cube", box(20, 20, 20));' });
+  await call("screenshot", { width: 300, height: 300 });
+  check(JSON.stringify(await w("window.__3dmaker.state().parts")) === '["Cube"]', "a fine pass that finishes late does not bring back an old model");
+
   // Linked motion: the crank from the docs plays, and screenshots at
   // different moments show different poses.
   const crank = await call("set_model", {

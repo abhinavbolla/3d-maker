@@ -37,7 +37,7 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
 ```
 
 - **Models are short scripts.** Claude writes JavaScript in a small modelling language (`sphere`, `capsule`, `revolve`, `union(..., smooth)`, `.symmetric("y")`, `.radial(4)`, `part(...)`, `param(...)`). Motion is part of the script too: a part can `follow` another, move by any function of time (`turn`, `slide`, `link` for rigid rods, `where` to track a point on another part), and `joint` declares connections the app checks. The full reference is the instructions in [mcp/server.mjs](mcp/server.mjs). Sliders are `param()` values, so a tweak re-runs the script and nothing downstream breaks.
-- **Our own geometry kernel** ([src/kernel](src/kernel)). Shapes are signed distance fields: a function that says how far any point is from the surface. Joining, cutting, blending and hollowing are a line of math each and cannot fail. The mesher refines coarse to fine near the surface, uses dual contouring so sharp edges stay sharp, adds detail where parts are thin, and repairs pinched spots, so every mesh is closed.
+- **Our own geometry kernel** ([src/kernel](src/kernel)). Shapes are signed distance fields: a function that says how far any point is from the surface. Joining, cutting, blending and hollowing are a line of math each and cannot fail. The mesher refines coarse to fine near the surface, uses dual contouring so sharp edges stay sharp, adds detail where parts are thin, and repairs pinched spots, so every mesh is closed. Detail is shared out by surface area, so a big part is as detailed as a small one; each change shows a quick preview first, then the same model meshed finer in the background (Claude's screenshots wait for that). In the view, vertices are split along sharp edges, so each face is shaded flat to its edge instead of smearing into the next.
 - **The prompt box** starts your own `claude -p` with this app's MCP server and only its tools allowed. The desktop app does this from Rust ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)); the browser version uses a small endpoint in the dev server ([vite.config.js](vite.config.js)). Follow-up prompts continue the same Claude conversation.
 - Each window has its own id. A Claude run started from a window drives only that window, even with several windows or browser tabs open. The bridge only accepts the app itself (checked by WebSocket origin) on localhost.
 
@@ -63,7 +63,7 @@ cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude C
 ## Not done yet
 
 - No exact CAD surfaces: export is STL only (no STEP), and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where nothing fails.
-- Very fine detail on very large models (a 1 mm logo on a 10 m helicopter) is limited by mesh detail. The view uses lighter meshes than the export.
+- Very fine detail on very large models (a 1 mm logo on a 10 m helicopter) is limited by mesh detail, and features smaller than a mesh cell (a 5 mm bevel on a 7 mm cell) come out saw-toothed. The view uses lighter meshes than the export.
 - No dragging parts around in the view; changes are sliders or prompts.
 - Motion checks cover joints, not collisions: two moving parts passing through each other is not detected yet.
 - Packaging: the app runs from this folder. It finds the MCP server and Node here, so there is no installer, no signing and no real icon yet.

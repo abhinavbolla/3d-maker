@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compile } from "../src/kernel/sdf.js";
-import { meshSDF, meshVolume, openEdges, toSTL } from "../src/kernel/mesh.js";
+import { meshSDF, meshVolume, openEdges, toSTL, displayMesh } from "../src/kernel/mesh.js";
 import { runScript } from "../src/kernel/script.js";
 
 const mesh = (node, budget = 40000) => {
@@ -68,6 +68,62 @@ test("sharp corners stay sharp", () => {
   const tol = m.cellSize * 0.06;
   for (let i = 0; i < m.positions.length; i += 3) if ([0, 1, 2].every((a) => Math.abs(Math.abs(m.positions[i + a]) - [20, 15, 10][a]) < tol)) corner++;
   assert.equal(corner, 8);
+});
+
+// How wrong the shading is: the angle between the normal the screen
+// interpolates across each triangle and the true surface normal there,
+// sampled at four points per triangle. Returns sorted angles in degrees.
+function shadingError(f, { positions: P, indices: I, normals: N }) {
+  const out = [];
+  for (let n = 0; n < I.length; n += 3) {
+    const [a, b, c] = [I[n] * 3, I[n + 1] * 3, I[n + 2] * 3];
+    for (const [wa, wb, wc] of [[1 / 3, 1 / 3, 1 / 3], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]) {
+      const [x, y, z] = [0, 1, 2].map((i) => wa * P[a + i] + wb * P[b + i] + wc * P[c + i]);
+      const nn = [0, 1, 2].map((i) => wa * N[a + i] + wb * N[b + i] + wc * N[c + i]);
+      const e = 1e-3;
+      const g = [f(x + e, y, z) - f(x - e, y, z), f(x, y + e, z) - f(x, y - e, z), f(x, y, z + e) - f(x, y, z - e)];
+      const cos = (nn[0] * g[0] + nn[1] * g[1] + nn[2] * g[2]) / (Math.hypot(...nn) * Math.hypot(...g));
+      out.push((Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI);
+    }
+  }
+  return out.sort((x, y) => x - y);
+}
+const pct = (arr, q) => arr[Math.floor(arr.length * q)];
+const meshOf = (node, opts) => {
+  const { f, box } = compile(node);
+  return meshSDF(f, box, opts);
+};
+
+test("sharp edges are drawn sharp, smooth surfaces smooth", () => {
+  // A machined block: flat faces, sharp edges, a bore and a round boss.
+  const node = { t: "subtract", a: { t: "union", c: [{ t: "box", s: [80, 60, 30] }, { t: "move", v: [0, 0, 20], c: { t: "cylinder", r: 15, h: 20 } }] }, b: [{ t: "cylinder", r: 8, h: 100 }] };
+  const { f, box } = compile(node);
+  const m = meshSDF(f, box, { budget: 6000, normals: true });
+  const d = displayMesh(m);
+  // Same surface: every triangle corner is where it was.
+  assert.equal(d.indices.length, m.indices.length);
+  for (let n = 0; n < m.indices.length; n++) for (let a = 0; a < 3; a++) assert.equal(d.positions[d.indices[n] * 3 + a], m.positions[m.indices[n] * 3 + a]);
+  const before = shadingError(f, m);
+  const after = shadingError(f, d);
+  assert.ok(pct(after, 0.9) < 2, `shading error p90 ${pct(after, 0.9).toFixed(1)} deg`);
+  assert.ok(pct(after, 0.9) < pct(before, 0.9) / 4, `p90 ${pct(before, 0.9).toFixed(1)} -> ${pct(after, 0.9).toFixed(1)} deg`);
+  // A box corner gets three copies, each facing straight out of one face.
+  const b = displayMesh(meshOf({ t: "box", s: [40, 30, 20] }, { normals: true }));
+  const at = [];
+  for (let i = 0; i < b.positions.length; i += 3) if (Math.hypot(b.positions[i] - 20, b.positions[i + 1] - 15, b.positions[i + 2] - 10) < 0.5) at.push([...b.normals.slice(i, i + 3)].map((v) => Math.round(v * 10) / 10));
+  assert.deepEqual(at.map(String).sort(), ["0,0,1", "0,1,0", "1,0,0"]);
+  // A sphere has no edges, so no vertex is split.
+  const s = meshOf({ t: "sphere", r: 20 }, { normals: true });
+  assert.equal(displayMesh(s).positions.length, s.positions.length);
+});
+
+test("big parts are meshed as finely as asked, whatever the budget", () => {
+  const { f, box } = compile({ t: "box", s: [1000, 1000, 20] });
+  const coarse = meshSDF(f, box, { budget: 2000 });
+  const fine = meshSDF(f, box, { budget: 2000, maxCell: 10 });
+  assert.ok(coarse.cellSize > 10, `budget alone gives ${coarse.cellSize} mm cells`);
+  assert.ok(fine.cellSize <= 10 * Math.SQRT2 && fine.cellSize > 10 / Math.SQRT2, `maxCell 10 gives ${fine.cellSize} mm cells`);
+  assert.equal(openEdges(fine), 0);
 });
 
 test("random shapes always give closed meshes", () => {

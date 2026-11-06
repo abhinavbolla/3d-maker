@@ -67,7 +67,11 @@ for (let a = 0; a < 3; a++) {
 
 const EMPTY_MESH = () => ({ positions: new Float32Array(0), indices: new Uint32Array(0), normals: new Float32Array(0), cellSize: 0 });
 
-export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals = false, minCell = 0 } = {}) {
+// budget: about how many surface cells to aim for. maxCell: refine, even past
+// the budget, until cells are about this small (mm; cells halve each level,
+// so they end up at most 1.41x maxCell), so the big parts of a model are as
+// detailed as the small ones. maxCells: hard cap.
+export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals = false, minCell = 0, maxCell = Infinity } = {}) {
   const ext = [box[3] - box[0], box[4] - box[1], box[5] - box[2]];
   const L = Math.max(...ext);
   if (!(L > 0) || !Number.isFinite(L)) return EMPTY_MESH();
@@ -98,7 +102,7 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
     // A finer level has about 4x the cells, and closing the surface visits
     // some neighbours too; stop while that still fits in maxCells.
     if (count * 4 * 1.5 > maxCells) break;
-    if (count * 4 > budget) {
+    if (count * 4 > budget && c <= maxCell * Math.SQRT2) {
       // Over budget, but keep going (up to a cap) while thin walls or blades
       // still slip between the grid corners.
       if (count * 4 > budget * THIN_CAP || missedDetail(f, O, c, kept, centres) <= 0.002) break;
@@ -321,6 +325,88 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
     out.normals = nrm;
   }
   return out;
+}
+
+// A copy of a mesh for drawing, with normals that keep sharp edges sharp.
+// Around each vertex, neighbouring triangles that meet at less than the
+// crease angle are one smooth patch; each patch gets its own copy of the
+// vertex and its own normal. On a smooth patch the true surface normal
+// (passed in, from the distance function) is used where it agrees with the
+// triangles; at an edge or corner the patch's average is used instead, so the
+// shading of one face no longer bleeds across the edge into the next.
+export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg = 40) {
+  const nv = P.length / 3;
+  const nt = I.length / 3;
+  const fn = new Float64Array(nt * 3); // area-weighted face normals
+  const un = new Float64Array(nt * 3); // unit face normals
+  for (let t = 0; t < nt; t++) {
+    const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+    const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+    const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+    const x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx;
+    const l = Math.hypot(x, y, z) || 1;
+    fn[t * 3] = x; fn[t * 3 + 1] = y; fn[t * 3 + 2] = z;
+    un[t * 3] = x / l; un[t * 3 + 1] = y / l; un[t * 3 + 2] = z / l;
+  }
+  // Triangles around each vertex (CSR).
+  const start = new Uint32Array(nv + 1);
+  for (let n = 0; n < I.length; n++) start[I[n] + 1]++;
+  for (let v = 0; v < nv; v++) start[v + 1] += start[v];
+  const fill = start.slice(0, nv);
+  const around = new Uint32Array(I.length);
+  for (let n = 0; n < I.length; n++) around[fill[I[n]]++] = n; // corner index (t * 3 + r)
+
+  const cosCrease = Math.cos((creaseDeg * Math.PI) / 180);
+  const cosAgree = Math.cos((20 * Math.PI) / 180);
+  const pos = [];
+  const nrm = [];
+  const corner = new Uint32Array(I.length); // new vertex index per corner
+  const parent = [];
+  const find = (x) => {
+    while (parent[x] !== x) x = parent[x] = parent[parent[x]];
+    return x;
+  };
+  const dot = (t, s) => un[t * 3] * un[s * 3] + un[t * 3 + 1] * un[s * 3 + 1] + un[t * 3 + 2] * un[s * 3 + 2];
+  for (let v = 0; v < nv; v++) {
+    const s0 = start[v], s1 = start[v + 1];
+    const k = s1 - s0;
+    if (!k) continue;
+    parent.length = k;
+    for (let i = 0; i < k; i++) parent[i] = i;
+    // Triangles sharing an edge (v, x) are neighbours; join them if smooth.
+    const byOther = new Map();
+    for (let i = 0; i < k; i++) {
+      const cn = around[s0 + i];
+      const t = (cn / 3) | 0;
+      const r = cn - t * 3;
+      for (const o of [I[t * 3 + ((r + 1) % 3)], I[t * 3 + ((r + 2) % 3)]]) {
+        const j = byOther.get(o);
+        if (j === undefined) byOther.set(o, i);
+        else if (dot(t, (around[s0 + j] / 3) | 0) >= cosCrease) parent[find(i)] = find(j);
+      }
+    }
+    const groups = new Map();
+    for (let i = 0; i < k; i++) {
+      const g = find(i);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(i);
+    }
+    for (const list of groups.values()) {
+      let x = 0, y = 0, z = 0;
+      for (const i of list) {
+        const t = (around[s0 + i] / 3) | 0;
+        x += fn[t * 3]; y += fn[t * 3 + 1]; z += fn[t * 3 + 2];
+      }
+      const l = Math.hypot(x, y, z) || 1;
+      (x /= l), (y /= l), (z /= l);
+      if (G && G[v * 3] * x + G[v * 3 + 1] * y + G[v * 3 + 2] * z >= cosAgree) (x = G[v * 3]), (y = G[v * 3 + 1]), (z = G[v * 3 + 2]);
+      const id = pos.length / 3;
+      pos.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
+      nrm.push(x, y, z);
+      for (const i of list) corner[around[s0 + i]] = id;
+    }
+  }
+  return { positions: Float32Array.from(pos), normals: Float32Array.from(nrm), indices: corner };
 }
 
 // Where the surface pinches inside a cell, one vertex ends up joined to a
