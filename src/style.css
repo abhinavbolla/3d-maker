@@ -312,3 +312,10 @@ button {
     top: 48px;
   }
 }
+#reply-receipt {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px !important;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}

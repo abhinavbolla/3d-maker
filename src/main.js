@@ -25,8 +25,6 @@ function say(text, ms = 4000) {
 // ---- viewport ----
 const viewport = createViewport($("viewport"), {
   onPick(name) {
-    // Clicking into the model puts the conversation away.
-    if (!working) $("reply").hidden = true;
     store.select(name);
   },
 });
@@ -38,11 +36,12 @@ const claude = createClaude({
     if (ev.kind === "session") store.setSession(ev.id);
     if (ev.kind === "status" && working) working.status = ev.text;
     if (ev.kind === "done") {
-      const prompt = working?.prompt ?? "";
+      const run = working;
       working = null;
-      if (ev.stopped) showReply(prompt, "Stopped.");
-      else if (ev.error) showReply(prompt, ev.error, true);
-      else showReply(prompt, ev.text || "Done.");
+      const receipt = run ? receiptFor(run) : "";
+      if (ev.stopped) showReply(run?.prompt ?? "", "Stopped.", { receipt });
+      else if (ev.error) showReply(run?.prompt ?? "", ev.error, { error: true, receipt });
+      else showReply(run?.prompt ?? "", ev.text || "Done.", { receipt });
     }
     renderAll();
   },
@@ -52,19 +51,43 @@ const commands = createCommands({ store, viewport, kernel });
 let bridgeActivity = "";
 const bridge = startBridge(commands, {
   onStatus() {},
-  onActivity(method, phase) {
+  onActivity(method, phase, message) {
+    if (working) return countActivity(working, method, phase, message);
     // Show work from Claude clients outside the app (Claude Desktop) too.
-    if (working) return;
     bridgeActivity = phase === "start" ? ({ set_model: "Claude is building the model", edit_model: "Claude is changing the model", screenshot: "Claude is looking at the model" }[method] ?? "") : "";
     renderStatus();
   },
 });
 
-function showReply(prompt, text, isError = false) {
+// What this window saw happen during a Claude run, counted here rather than
+// taken from Claude's reply, so you can tell what Claude actually did.
+function countActivity(run, method, phase, message) {
+  if (phase === "error") run.failed.push(message ?? method);
+  else if (phase === "ok" && (method === "set_model" || method === "edit_model")) run.changes++;
+  else if (phase === "ok" && method === "screenshot") run.looks++;
+}
+function receiptFor(run) {
+  const changed = store.state.doc.script !== run.before;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const parts = [];
+  if (changed) {
+    const n = store.state.result?.parts.length ?? 0;
+    parts.push(`Model changed in this window: ${plural(run.changes, "change", "changes")}, now ${plural(n, "part", "parts")}.`);
+  } else parts.push("The model in this window was not changed.");
+  if (run.looks) parts.push(`Claude looked at it ${plural(run.looks, "time", "times")}.`);
+  if (run.failed.length) parts.push(`${plural(run.failed.length, "step", "steps")} failed and ${run.failed.length === 1 ? "was" : "were"} not applied.`);
+  lastReceipt = { changed, changes: run.changes, looks: run.looks, failed: run.failed.slice(), seconds: Math.round((Date.now() - run.started) / 1000) };
+  return parts.join(" ");
+}
+let lastReceipt = null;
+
+function showReply(prompt, text, { error = false, receipt = "" } = {}) {
   $("reply").hidden = false;
-  $("reply").classList.toggle("error", isError);
+  $("reply").classList.toggle("error", error);
   $("reply-prompt").textContent = prompt;
   $("reply-text").textContent = text;
+  $("reply-receipt").textContent = receipt;
+  $("reply-receipt").hidden = !receipt;
 }
 
 async function send() {
@@ -72,15 +95,15 @@ async function send() {
   if (!text || working) return;
   const sel = store.state.selected;
   const prompt = sel ? `The user has selected the part "${sel}".\n\n${text}` : text;
-  working = { prompt: text, status: "Thinking", started: Date.now() };
+  working = { prompt: text, status: "Thinking", started: Date.now(), before: store.state.doc.script, changes: 0, looks: 0, failed: [] };
   $("input").value = "";
   fitInput();
   $("reply").hidden = true;
   bridge.kick();
   renderAll();
-  claude.send(prompt, { session: store.state.doc.session }).catch((err) => {
+  claude.send(prompt, { session: store.state.doc.session, windowId: bridge.windowId }).catch((err) => {
     working = null;
-    showReply(text, String(err.message ?? err), true);
+    showReply(text, String(err.message ?? err), { error: true });
     renderAll();
   });
 }
@@ -279,3 +302,16 @@ if (store.state.doc.script) {
     .catch((err) => say(err.message, 8000));
 }
 $("input").focus();
+
+// Lets the end-to-end test (test/e2e.test.mjs) read what the window shows.
+if (import.meta.env.DEV) {
+  window.__3dmaker = {
+    windowId: bridge.windowId,
+    busy: () => Boolean(working),
+    state: () => ({ script: store.state.doc.script, title: store.state.result?.title ?? "", parts: store.state.result?.parts.map((p) => p.name) ?? [], selected: store.state.selected, session: store.state.doc.session }),
+    summary: () => commands.get_model({}),
+    select: (name) => store.select(name),
+    exportSTL: () => commands.export_stl({}),
+    reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
+  };
+}

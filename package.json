@@ -9,7 +9,9 @@
     "start": "vite --open",
     "mcp": "node mcp/server.mjs",
     "app": "tauri dev",
-    "app:build": "tauri build"
+    "app:build": "tauri build",
+    "test": "node test/kernel.test.mjs && node test/bridge.test.mjs",
+    "test:e2e": "node test/e2e.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

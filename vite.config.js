@@ -15,7 +15,8 @@ function claudeEndpoint() {
     configureServer(server) {
       server.middlewares.use("/api/claude", (req, res) => {
         const origin = req.headers.origin ?? "";
-        if (req.method !== "POST" || !/^http:\/\/(localhost|127\.0\.0\.1):5173$/.test(origin) || !String(req.headers["content-type"]).startsWith("application/json")) {
+        const host = req.headers.host ?? "";
+        if (req.method !== "POST" || origin !== `http://${host}` || !/^(localhost|127\.0\.0\.1):\d+$/.test(host) || !String(req.headers["content-type"]).startsWith("application/json")) {
           res.statusCode = 403;
           return res.end("Forbidden");
         }

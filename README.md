@@ -19,6 +19,7 @@ npm start          # or the same app in your browser, at http://localhost:5173
 ## Using it
 
 - Type what you want in the box at the bottom and press Enter, for example "a desk lamp with a weighted base" or "a helicopter whose rotors spin". Claude writes the model, looks at it from a few angles, and fixes what looks wrong.
+- Under Claude's reply, a grey line says what this window saw happen: whether the model changed, how many changes and looks, and any step that failed. It is counted by the app, not taken from Claude's words.
 - Click a part to select it. Its sliders appear in the top-right corner, and the prompt box now talks about that part ("make this longer").
 - Parts that spin or swing move in the view. Pause stops them.
 - Drag to orbit, right-drag to pan, scroll to zoom, F to fit the view, Esc to deselect.
@@ -37,7 +38,7 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
 - **Models are short scripts.** Claude writes JavaScript in a small modelling language (`sphere`, `capsule`, `revolve`, `union(..., smooth)`, `.symmetric("y")`, `.radial(4)`, `part(...)`, `param(...)`). The full reference is the instructions in [mcp/server.mjs](mcp/server.mjs). Sliders are `param()` values, so a tweak re-runs the script and nothing downstream breaks.
 - **Our own geometry kernel** ([src/kernel](src/kernel)). Shapes are signed distance fields: a function that says how far any point is from the surface. Joining, cutting, blending and hollowing are a line of math each and cannot fail. The mesher refines coarse to fine near the surface, uses dual contouring so sharp edges stay sharp, adds detail where parts are thin, and repairs pinched spots, so every mesh is closed.
 - **The prompt box** starts your own `claude -p` with this app's MCP server and only its tools allowed. The desktop app does this from Rust ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)); the browser version uses a small endpoint in the dev server ([vite.config.js](vite.config.js)). Follow-up prompts continue the same Claude conversation.
-- The bridge only accepts the app itself (checked by WebSocket origin) on localhost.
+- Each window has its own id. A Claude run started from a window drives only that window, even with several windows or browser tabs open. The bridge only accepts the app itself (checked by WebSocket origin) on localhost.
 
 You can also drive the app from Claude Code or Claude Desktop directly by adding the MCP server:
 
@@ -48,11 +49,14 @@ claude mcp add --scope user 3d-maker -- node /path/to/3d-maker/mcp/server.mjs
 ## Tests
 
 ```bash
-node test/kernel.test.mjs              # volumes, sharp corners, 500+ random shapes all closed, scripts
-node test/mcp.test.mjs                 # end to end over MCP; needs the app open
+npm test                               # kernel and window routing; no app or Claude needed
+npm run test:e2e                       # the real prompt box with your real Claude Code (see below)
+node test/mcp.test.mjs                 # the MCP tools against an open app
 node test/check-stl.mjs model.stl      # checks an STL is well formed and closed
 cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude Code
 ```
+
+`npm run test:e2e` opens two app windows in headless Chrome, types two prompts into the first ("a 30 mm cube with a 10 mm hole", then, with it selected, "make this 50 mm wide") and checks the result by measuring it, not by reading Claude's reply: the part's size from its mesh, the hole from its volume, a closed STL, and that the second window was not touched. It needs Google Chrome and uses a little of your Claude plan. It does not drive the desktop window itself (WebDriver for Tauri does not run on macOS); the desktop app's way of starting Claude is covered by the Rust test.
 
 ## Not done yet
 

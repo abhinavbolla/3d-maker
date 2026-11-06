@@ -8,14 +8,16 @@ const RETRY_MAX_MS = 5000;
 const FAST_MS = 200;
 
 export function startBridge(commands, { onStatus, onActivity }) {
+  // Identifies this window, so a Claude run started here only drives this window.
+  const windowId = crypto.randomUUID();
   const sockets = new Map(); // port -> open WebSocket
   const timers = new Map(); // port -> pending retry
   let fastUntil = 0;
   const status = () => onStatus(sockets.size);
 
-  function schedule(port, delay) {
+  function schedule(port, delay, { slow = false } = {}) {
     clearTimeout(timers.get(port));
-    const wait = Date.now() < fastUntil ? FAST_MS : delay;
+    const wait = Date.now() < fastUntil && !slow ? FAST_MS : delay;
     timers.set(port, setTimeout(() => connect(port, Math.min(delay * 1.5, RETRY_MAX_MS)), wait));
   }
 
@@ -32,14 +34,16 @@ export function startBridge(commands, { onStatus, onActivity }) {
     ws.onopen = () => {
       opened = true;
       sockets.set(port, ws);
-      ws.send(JSON.stringify({ type: "hello", app: "3d-maker", version: 2 }));
+      ws.send(JSON.stringify({ type: "hello", app: "3d-maker", version: 3, window: windowId }));
       status();
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (sockets.get(port) === ws) {
         sockets.delete(port);
         status();
       }
+      // 4001: that server belongs to a Claude run another window started.
+      if (ev.code === 4001) return schedule(port, RETRY_MAX_MS, { slow: true });
       schedule(port, opened ? RETRY_MIN_MS : delay);
     };
     ws.onerror = () => {};
@@ -69,6 +73,7 @@ export function startBridge(commands, { onStatus, onActivity }) {
   status();
 
   return {
+    windowId,
     // Poll fast for a while: a Claude run just started its MCP server.
     kick(ms = 20000) {
       fastUntil = Date.now() + ms;

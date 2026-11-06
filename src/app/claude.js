@@ -11,8 +11,8 @@ const TOOLS = ["get_model", "set_model", "edit_model", "screenshot", "export_stl
 
 const APP_PROMPT = `You are the modelling assistant inside the 3D Maker app. The user types requests into the app and watches the 3D view while you work. Use only the 3d-maker tools: call get_model before changing an existing model, build or change it, check it with screenshot from a few views, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.`;
 
-function args(prompt, { session, model }) {
-  const mcp = { mcpServers: { "3d-maker": { command: __NODE_PATH__, args: [__MCP_SERVER_PATH__] } } };
+export function args(prompt, { session, model, windowId }) {
+  const mcp = { mcpServers: { "3d-maker": { command: __NODE_PATH__, args: [__MCP_SERVER_PATH__, ...(windowId ? ["--app", windowId] : [])] } } };
   const a = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--mcp-config", JSON.stringify(mcp), "--strict-mcp-config", "--allowedTools", TOOLS.join(","), "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task", "--append-system-prompt", APP_PROMPT];
   if (model) a.push("--model", model);
   if (session) a.push("--resume", session);

@@ -12,12 +12,19 @@ import { dirname, resolve, extname } from "node:path";
 
 const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
 // Only the app itself may connect: the desktop app, or the dev server in a browser.
-const ALLOWED_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:5173", "http://127.0.0.1:5173"]);
+const TAURI_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]);
+const isAppOrigin = (o = "") => TAURI_ORIGINS.has(o) || /^http:\/\/(localhost|127\.0\.0\.1):51[78]\d$/.test(o);
 const CALL_TIMEOUT_MS = 120000;
 const log = (...a) => console.error("[3d-maker]", ...a);
 
 // ---- bridge to the app ----
-let app = null; // most recently connected app socket
+// When the app's own prompt box starts Claude, it passes its window id
+// (--app <id>) so tool calls go to that window and no other, even with several
+// 3D Maker windows or tabs open. Without --app (Claude Desktop, your own
+// Claude Code), calls go to the window that connected most recently.
+const argAt = process.argv.indexOf("--app");
+const APP_ID = argAt > 0 ? process.argv[argAt + 1] : null;
+let app = null; // the app socket tool calls go to
 const pending = new Map();
 let seq = 0;
 
@@ -25,12 +32,10 @@ async function listen() {
   for (const port of PORTS) {
     try {
       await new Promise((ok, fail) => {
-        const wss = new WebSocketServer({ host: "127.0.0.1", port, verifyClient: ({ origin }) => ALLOWED_ORIGINS.has(origin) });
+        const wss = new WebSocketServer({ host: "127.0.0.1", port, verifyClient: ({ origin }) => isAppOrigin(origin) });
         wss.once("listening", () => ok(wss));
         wss.once("error", fail);
         wss.on("connection", (ws) => {
-          app = ws;
-          log(`app connected on port ${port}`);
           ws.on("message", (raw) => {
             let msg;
             try {
@@ -38,6 +43,12 @@ async function listen() {
             } catch {
               return;
             }
+            if (msg?.type === "hello") {
+              if (APP_ID && msg.window !== APP_ID) return ws.close(4001, "Not the window that started this Claude run");
+              app = ws;
+              return log(`app window ${msg.window ?? "?"} connected on port ${port}`);
+            }
+            if (ws !== app) return;
             const p = pending.get(msg.id);
             if (!p) return;
             pending.delete(msg.id);
@@ -49,7 +60,7 @@ async function listen() {
           });
         });
       });
-      log(`bridge listening on 127.0.0.1:${port}`);
+      log(`bridge listening on 127.0.0.1:${port}${APP_ID ? ` for window ${APP_ID}` : ""}`);
       return port;
     } catch {
       // Port taken (another Claude client runs its own copy); try the next one.
@@ -65,7 +76,7 @@ async function waitForApp(ms) {
 }
 
 async function call(method, params = {}) {
-  if (!(await waitForApp(8000))) throw new Error("The 3D Maker app is not open. Ask the user to start it, then try again.");
+  if (!(await waitForApp(8000))) throw new Error(APP_ID ? "The 3D Maker window that asked is no longer connected. Ask the user to try again." : "The 3D Maker app is not open. Ask the user to start it, then try again.");
   const id = ++seq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
