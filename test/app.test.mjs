@@ -69,6 +69,10 @@ try {
   await call("set_model", { script: 'part("Cube", box(20, 20, 20));' });
   check((await w("window.__3dmaker.plan()")) === null && (await w('document.getElementById("progress").hidden')), "a new, unrelated model clears the old plan");
 
+  // Export gives a closed STL.
+  const stl = await h.stlIsClosed(w);
+  check(stl.closed && stl.triangles > 0, `export gives a closed STL (${stl.triangles} triangles)`);
+
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.
   const plate = 'part("Plate", box(400, 400, 10));\nfor (let i = 0; i < 31; i++) part("Bolt " + i, cylinder(3, 8).at(-150 + i * 10, 0, 9));';

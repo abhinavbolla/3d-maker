@@ -85,6 +85,8 @@ function boxArea(parts) {
   return Number.isFinite(a) ? a : 0;
 }
 
+const EXPORT_BUDGET = 500000;
+
 export function createKernel() {
   const job = createPool();
   const cache = new Map(); // quality|budget|maxCell|hash -> mesh
