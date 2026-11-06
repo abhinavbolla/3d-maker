@@ -3,7 +3,8 @@
 // Usage: node test/kernel.test.mjs
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { compile } from "../src/kernel/sdf.js";
+import { compile, threadRoot } from "../src/kernel/sdf.js";
+import { checkPairs } from "../src/kernel/fit.js";
 import { meshSDF, meshVolume, meshBounds, openEdges, toSTL, displayMesh } from "../src/kernel/mesh.js";
 import { runScript } from "../src/kernel/script.js";
 
@@ -195,7 +196,7 @@ test("profile and path mistakes are explained", () => {
 });
 
 test("the documented profile, sweep and loft example runs and every part is closed", () => {
-  const doc = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8");
+  const doc = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8");
   const src = doc.match(/EXAMPLE: profiles, sweep and loft\n([\s\S]*?)\n\n/)[1].split("\n").map((l) => l.trim()).join("\n");
   const r = runScript(src);
   assert.equal(r.error, undefined, r.error);
@@ -294,7 +295,7 @@ test("thin parts are not lost", () => {
 });
 
 test("model scripts: example, test helicopter, Claude's helicopter", () => {
-  const lamp = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8").match(/EXAMPLE\n([\s\S]*?)\n\nHOW TO WORK/)[1];
+  const lamp = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8").match(/EXAMPLE\n([\s\S]*?)\n\nHOW TO WORK/)[1];
   for (const src of [lamp, ...["helicopter.js", "claude-helicopter.js"].map((f) => readFileSync(new URL(`./models/${f}`, import.meta.url), "utf8"))]) {
     const r = runScript(src);
     assert.equal(r.error, undefined, r.error);
@@ -323,15 +324,15 @@ test("slider values override defaults and are clamped", () => {
 });
 
 test("linked motion: the documented crank keeps its joints closed", () => {
-  // Same script as the example in mcp/server.mjs.
+  // Same script as the example in mcp/reference.mjs.
   const src = `loop(1);
-part("Crank", cylinder(30, 10).rotateX(90), { spin: { axis: "y", rpm: 60 } });
+part("Crank", cylinder(30, 10).rotateX(90).at(0, -10, 0), { spin: { axis: "y", rpm: 60 } });
 const pin = [0, 0, 25], top = [0, 0, 125];
 part("Piston", cylinder(20, 30).at(0, 0, 135), { motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
 part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
 joint("Rod", "Crank", pin);
 joint("Rod", "Piston", top);`;
-  const doc = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8");
+  const doc = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8");
   for (const line of src.split("\n")) assert.ok(doc.includes(line.trim()), `the documented example has: ${line}`);
   const r = runScript(src);
   assert.equal(r.error, undefined, r.error);
@@ -348,6 +349,9 @@ joint("Rod", "Piston", top);`;
     zs.push(piston[i * 12 + 11]);
   }
   assert.ok(Math.abs(Math.max(...zs) - 0) < 0.01 && Math.abs(Math.min(...zs) - -50) < 0.5, `piston stroke ${Math.min(...zs)}..${Math.max(...zs)}`);
+  // Nothing in it hits anything: the rod runs beside the crank, and the
+  // overlap at its pinned ends is left out.
+  assert.deepEqual(fitOf(r), []);
 });
 
 test("Claude's rotor head: every joint holds and it exports closed", () => {
@@ -393,6 +397,169 @@ part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", p
   assert.ok(loose.motion.links[0].max_stretch_mm > 40, `stretch ${loose.motion.links[0].max_stretch_mm}`);
   assert.ok(loose.warnings.some((w) => /comes off one end/.test(w)) && loose.warnings.some((w) => /no joint\(\) is declared/.test(w)), loose.warnings.join("; "));
   assert.match(apart.warnings[0], /comes apart by up to 20 mm/);
+});
+
+// ---- round 2: threads, holes, fasteners, draft, fit ----
+
+// Every pair of a script's parts, checked over its motion like the app does.
+function fitOf(r, opts = {}) {
+  const parts = r.parts.filter((p) => !p.hidden);
+  const pairs = [];
+  for (let i = 0; i < parts.length; i++) for (let j = i + 1; j < parts.length; j++) pairs.push([i, j]);
+  const count = r.motion?.frames ?? 0;
+  const step = Math.max(1, Math.ceil(count / 120));
+  const frames = count ? Array.from({ length: Math.ceil(count / step) }, (_, k) => k * step) : [0];
+  return checkPairs(parts, pairs, { frames, frameCount: count, loop: r.motion?.loop ?? 0, joints: r.motion?.joints ?? [], ...opts });
+}
+const run = (src) => {
+  const r = runScript(src);
+  assert.equal(r.error, undefined, r.error);
+  return r;
+};
+const partMesh = (r, name, budget = 40000) => {
+  const { f, box } = compile(r.parts.find((p) => p.name === name).node);
+  return meshSDF(f, box, { budget });
+};
+
+test("threads: the exact volume of a helical ISO profile", () => {
+  // A helix swept profile r = g(u) has volume pi * L * mean(g^2) over a turn.
+  for (const [r, p] of [[5, 1.5], [3, 0.5], [12, 1.75]]) {
+    const L = 10 * p;
+    const r1 = threadRoot(r, p);
+    const g = (u) => (u <= p / 16 ? r : u >= (3 * p) / 8 ? r1 : r - ((u - p / 16) / ((5 * p) / 16)) * (r - r1));
+    let s = 0;
+    const N = 100000;
+    for (let i = 0; i < N; i++) s += g(Math.abs(-p / 2 + ((i + 0.5) * p) / N)) ** 2;
+    const exact = (Math.PI * L * s) / N;
+    for (const left of [false, true]) {
+      const m = mesh({ t: "thread", r, p, z0: 0, z1: L, left }, 60000);
+      assert.equal(openEdges(m), 0);
+      const err = Math.abs(meshVolume(m) / exact - 1);
+      assert.ok(err < 0.003, `M${2 * r}x${p}${left ? " left" : ""} volume off by ${(err * 100).toFixed(2)}%`);
+    }
+  }
+  // Right-handed: turning it anticlockwise (seen from above) moves a crest up.
+  const { f } = compile({ t: "thread", r: 5, p: 2, z0: -10, z1: 10 });
+  const crest = (deg) => {
+    const a = (deg * Math.PI) / 180;
+    // The middle of the tooth near the crest: where the solid is at radius 4.9.
+    let sum = 0, n = 0;
+    for (let z = -1; z <= 1; z += 0.001) if (f(4.9 * Math.cos(a), 4.9 * Math.sin(a), z) < 0) (sum += z), n++;
+    return sum / n;
+  };
+  assert.ok(Math.abs(crest(0)) < 0.01 && Math.abs(crest(90) - 0.5) < 0.01, `crest at 0° ${crest(0)}, at 90° ${crest(90)}`);
+});
+
+test("draft: sides lean in by the angle, exactly", () => {
+  const t = Math.tan((5 * Math.PI) / 180), h = 40;
+  // A round boss becomes a cone frustum; a rectangle a pyramid frustum.
+  const R = 30, r = R - h * t;
+  const cone = (Math.PI * h * (R * R + R * r + r * r)) / 3;
+  const [w, d] = [80, 50], [w2, d2] = [80 - 2 * h * t, 50 - 2 * h * t];
+  const pyramid = (h * (w * d + w2 * d2 + Math.sqrt(w * d * w2 * d2))) / 3;
+  for (const [node, exact] of [
+    [{ t: "extrude", p: { t: "circle2", r: R }, h, draft: 5 }, cone],
+    [{ t: "extrude", p: { t: "rect2", w, h: d }, h, draft: 5 }, pyramid],
+  ]) {
+    const m = mesh(node);
+    assert.equal(openEdges(m), 0);
+    const err = Math.abs(meshVolume(m) / exact - 1);
+    assert.ok(err < 0.004, `${node.p.t} draft volume off by ${(err * 100).toFixed(2)}%`);
+  }
+  // Out-drafted sides grow, and the bottom keeps its profile.
+  const out = mesh({ t: "extrude", p: { t: "circle2", r: 20 }, h: 20, draft: -10 });
+  const b = meshBounds(out);
+  assert.ok(Math.abs(b[3] - (20 + 20 * Math.tan((10 * Math.PI) / 180))) < 0.1, `top radius ${b[3]}`);
+  assert.match(runScript('part("A", extrude(circle(5), 10, { draft: 60 }));').error, /between -45 and 45/);
+});
+
+test("holes and fasteners: real sizes, and they fit", () => {
+  const doc = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8");
+  const example = doc.match(/EXAMPLE: a bracket bolted down\n([\s\S]*?)\n\n/)[1];
+  const r = run(example);
+  for (const p of r.parts) {
+    const { f, box } = compile(p.node);
+    const m = meshSDF(f, box, { budget: 20000 });
+    assert.equal(openEdges(m), 0, `${p.name} is not closed`);
+  }
+  // Bolt in its tapped hole, socket head flush in its counterbore, washer
+  // under the head: everything touches, nothing passes through.
+  assert.deepEqual(fitOf(r), []);
+  const T = 20;
+  const socket = meshBounds(partMesh(r, "Socket bolt"));
+  assert.ok(Math.abs(socket[5] - T) < 0.1, `socket head top at ${socket[5]}, plate top at ${T}`);
+  const hex = meshBounds(partMesh(r, "Hex bolt"));
+  assert.ok(Math.abs(hex[3] - hex[0] - 13 / Math.cos(Math.PI / 6)) < 0.2 && Math.abs(hex[4] - hex[1] - 13) < 0.2, `M8 hex head ${hex[3] - hex[0]} x ${hex[4] - hex[1]}`);
+  assert.ok(Math.abs(hex[5] - (T + 1.6 + 5.3)) < 0.1 && Math.abs(hex[2] - (T + 1.6 - 16)) < 0.1, `hex bolt from ${hex[2]} to ${hex[5]}`);
+
+  // A bolt screwed into a hole that is not tapped, or not drilled, is caught.
+  const plain = fitOf(run('part("Plate", box(40, 40, 10).at(0, 0, 5).cut(hole("M6", 10).at(0, 0, 10))); part("Bolt", bolt("M6", 8).at(0, 0, 10));'));
+  assert.deepEqual(plain, [], "a bolt in its clearance hole fits");
+  const drilled = fitOf(run('part("Plate", box(40, 40, 10).at(0, 0, 5).cut(hole(5, 10).at(0, 0, 10))); part("Bolt", bolt("M6", 8).at(0, 0, 10));'));
+  // Threads mate on the pitch diameter (M6: 5.35), 0.175 mm past a 5 mm hole's wall, over 8 mm.
+  const ring = 2 * Math.PI * 2.59 * 0.175 * 8 / 1000;
+  assert.ok(drilled.length === 1 && Math.abs(drilled[0].overlap_mm - 0.175) < 0.03 && Math.abs(drilled[0].volume_cm3 / ring - 1) < 0.25, `an untapped 5 mm hole: ${JSON.stringify(drilled)}, ring ${ring}`);
+  const solid = fitOf(run('part("Plate", box(40, 40, 10).at(0, 0, 5)); part("Bolt", bolt("M6", 8).at(0, 0, 10));'));
+  const shank = (Math.PI * 2.675 ** 2 * 8) / 1000;
+  assert.ok(solid.length === 1 && Math.abs(solid[0].overlap_mm - 5.35) < 0.05 && Math.abs(solid[0].volume_cm3 / shank - 1) < 0.03, `no hole at all: ${JSON.stringify(solid)}, shank ${shank}`);
+  assert.deepEqual(solid[0].where, { min: [-2.7, -2.7, 2], max: [2.7, 2.7, 10] });
+  // A flat head sits flush in its countersink; a nut threads onto a bolt.
+  assert.deepEqual(fitOf(run('part("Plate", box(40, 40, 10).at(0, 0, 5).cut(hole("M5", 10, { csink: true }).at(0, 0, 10))); part("Bolt", bolt("M5", 16, { head: "flat" }).at(0, 0, 10)); part("Nut", nut("M5").rotateX(180).at(0, 0, 0));')), []);
+
+  // Sizes, and every fastener in every size is a closed solid.
+  const m6 = run('const m = metric("M6"); print(m.pitch, m.clearance, m.tapDrill, m.hex.s, m.socket.k, m.washer.D); part("A", sphere(1));').prints[0];
+  assert.equal(m6, "1 6.6 5 10 6 12");
+  for (const size of ["M2", "M3", "M5", "M8", "M12", "M20", "M36"]) {
+    const r2 = run(`part("Hex", bolt("${size}", 30)); part("Socket", bolt("${size}", 30, { head: "socket" })); part("Flat", bolt("${size}", 30, { head: "flat", thread: false })); part("Nut", nut("${size}")); part("Washer", washer("${size}")); part("Rod", thread("${size}", 20));`);
+    for (const p of r2.parts) {
+      const { f, box } = compile(p.node);
+      const m = meshSDF(f, box, { budget: 6000 });
+      assert.ok(m.indices.length > 0 && openEdges(m) === 0, `${size} ${p.name} is not a closed solid`);
+    }
+  }
+  assert.match(runScript('part("A", bolt("M7", 10));').error, /unknown thread size "M7"/);
+  assert.match(runScript('part("A", hole(5, 10, { tapped: true }));').error, /need a metric size/);
+  assert.match(runScript('part("A", thread(10, 20));').error, /needs \{ pitch \}/);
+  // A script may still use these names for its own things.
+  assert.equal(runScript('const hole = cylinder(3, 20); const bolt = 4; part("A", box(20, 20, 5).cut(hole));').error, undefined);
+});
+
+test("fit: overlaps measured exactly, gaps, and collisions in motion", () => {
+  const r = run('part("A", box(40, 40, 40)); part("B", box(40, 40, 40).at(30, 0, 0)); part("C", sphere(10).at(0, 0, 29)); part("D", box(10, 10, 10).at(0, 0, 25.05)); part("E", sphere(10).at(0, 0, 45));');
+  const fits = fitOf(r);
+  const ab = fits.find((x) => x.a === "A" && x.b === "B");
+  assert.ok(ab && Math.abs(ab.volume_cm3 - 16) < 0.05 && Math.abs(ab.overlap_mm - 10) < 0.1, JSON.stringify(ab));
+  assert.deepEqual(ab.where, { min: [10, -20, -20], max: [20, 20, 20] });
+  // A sphere 1 mm into a face: a cap of height 1, pi h^2 (3R - h) / 3.
+  const ac = fits.find((x) => x.a === "A" && x.b === "C");
+  assert.ok(ac && Math.abs(ac.volume_cm3 - Math.PI * 29 / 3 / 1000) < 0.002 && Math.abs(ac.overlap_mm - 1) < 0.05, JSON.stringify(ac));
+  // 0.05 mm apart, or just touching, is not an overlap.
+  assert.ok(!fits.some((x) => x.a === "A" && x.b === "D"), "a box 0.05 mm above another does not overlap it");
+  const gap = fitOf(r, { gap: true }).find((x) => x.a === "A" && x.b === "E");
+  assert.ok(Math.abs(gap.gap_mm - 15) < 0.05, `gap ${gap.gap_mm}`);
+
+  // A spinning blade hits a post a twelfth of a turn in (atan(100 / 200)).
+  const hit = fitOf(run('loop(1); part("Blade", box(300, 20, 4).at(150, 0, 200), { spin: { axis: "z", rpm: 60 } }); part("Post", cylinder(10, 150).at(200, 100, 150)); part("Hub", cylinder(15, 10).at(0, 0, 200), { follow: "Blade" });'));
+  const bp = hit.find((x) => x.b === "Post");
+  assert.ok(bp && Math.abs(bp.at_seconds - Math.atan2(100, 200) / (2 * Math.PI)) < 0.02 && Math.abs(bp.overlap_mm - 4) < 0.1, JSON.stringify(bp));
+  // The hub moves with the blade: their overlap is found once, with no moment.
+  const hub = hit.find((x) => x.b === "Hub");
+  assert.ok(hub && hub.at_seconds === undefined, JSON.stringify(hub));
+});
+
+test("the app's Claude is allowed every tool the server offers", () => {
+  const server = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8");
+  const offered = [...server.matchAll(/^tool\(\s*"(\w+)"/gm)].map((m) => m[1]).sort();
+  const app = readFileSync(new URL("../src/app/claude.js", import.meta.url), "utf8");
+  const allowed = JSON.parse(app.match(/const TOOLS = (\[[^\]]*\])/)[1]).sort();
+  assert.ok(offered.length >= 10);
+  assert.deepEqual(allowed, offered);
+  // Claude Code shows only the first 4096 characters of a server's
+  // instructions, so the language lives in the reference tool instead.
+  const instructions = server.match(/const INSTRUCTIONS = `([\s\S]*?)`;/)[1];
+  assert.ok(instructions.length < 3000, `server instructions are ${instructions.length} characters`);
+  assert.match(instructions, /call the reference tool/);
+  assert.match(app, /import \{ REFERENCE \} from "..\/..\/mcp\/reference.mjs"/);
 });
 
 console.log(`${passed} tests passed`);

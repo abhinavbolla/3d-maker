@@ -33,6 +33,24 @@ try {
   check(s1.result?.plan.done === 1 && s1.result.parts[0]?.name === "Base", "finishing Base passes and returns its size");
   check(typeof s1.result?.png === "string" && s1.result.png.length > 1000, "finish_step returns a picture of the step");
 
+  // finish_step lists the step's parts that pass into other parts.
+  await call("set_plan", { steps: [{ name: "Base", parts: ["Base"] }, { name: "Post", parts: ["Post"] }] });
+  await call("set_model", { script: 'part("Base", cylinder(60, 12).at(0, 0, 6));\npart("Post", cylinder(5, 50).at(0, 0, 30));' });
+  const sunk = await call("finish_step", { step: "Post" });
+  const o = sunk.result?.overlaps?.[0];
+  check(o?.a === "Base" && o.b === "Post" && Math.abs(o.overlap_mm - 7) < 0.1 && /cut a hole/.test(sunk.result.overlaps_note), `finish_step reports a post sunk into the base (${JSON.stringify(o)})`);
+  await call("edit_model", { old_text: "at(0, 0, 30)", new_text: "at(0, 0, 37)" });
+  check(!(await call("finish_step", { step: "Post" })).result?.overlaps, "a post standing on the base has no overlaps");
+  await call("set_plan", {
+    steps: [
+      { name: "Base", parts: ["Base"] },
+      { name: "Arm", parts: ["Arm", "Elbow"] },
+      { name: "Shade", parts: ["Shade"] },
+    ],
+  });
+  await call("set_model", { script: 'title("Lamp");\nconst H = 200;\npart("Base", cylinder(60, 12).at(0, 0, 6));' });
+  await call("finish_step", { step: "Base" });
+
   // Step 2: appended code can use earlier constants.
   const app = await call("append_to_model", { code: 'part("Arm", capsule([0, 0, 12], [0, 0, H], 8));\npart("Elbow", sphere(14).at(0, 0, H));' });
   check(!app.error && app.result.parts.length === 3, "append_to_model adds parts that use earlier constants");
@@ -92,7 +110,7 @@ try {
   // different moments show different poses.
   const crank = await call("set_model", {
     script: `loop(1);
-part("Crank", cylinder(30, 10).rotateX(90), { spin: { axis: "y", rpm: 60 } });
+part("Crank", cylinder(30, 10).rotateX(90).at(0, -10, 0), { spin: { axis: "y", rpm: 60 } });
 const pin = [0, 0, 25], top = [0, 0, 125];
 part("Piston", cylinder(20, 30).at(0, 0, 135), { motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
 part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
@@ -107,6 +125,25 @@ joint("Rod", "Piston", top);`,
   check(p0 === p100, "the loop comes back to where it started");
   const apart = await call("set_model", { script: 'part("A", box(10, 10, 10), { spin: { rpm: 60 } }); part("B", box(10, 10, 10).at(30, 0, 0)); joint("A", "B", [30, 0, 0]);' });
   check(apart.result?.warnings?.some((x) => /comes apart by up to 60 mm/.test(x)), "a joint that comes apart is reported to Claude");
+
+  // check_fit: the crank's parts never hit each other; a spinning blade that
+  // hits a post is found, with when; two named parts give their gap.
+  await call("set_model", { script: `loop(1);
+part("Crank", cylinder(30, 10).rotateX(90).at(0, -10, 0), { spin: { axis: "y", rpm: 60 } });
+const pin = [0, 0, 25], top = [0, 0, 125];
+part("Piston", cylinder(20, 30).at(0, 0, 135), { motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
+part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
+joint("Rod", "Crank", pin);
+joint("Rod", "Piston", top);` });
+  const clean = await call("check_fit");
+  check(clean.result?.overlaps.length === 0 && clean.result.checked_pairs > 0 && /during the motion/.test(clean.result.note), `the documented crank has no overlaps (${JSON.stringify(clean.result ?? clean.error)})`);
+  await call("set_model", { script: 'loop(1); part("Blade", box(300, 20, 4).at(150, 0, 200), { spin: { axis: "z", rpm: 60 } }); part("Post", cylinder(10, 250).at(200, 100, 125)); part("Wall", box(10, 100, 400).at(-350, 0, 200));' });
+  const strike = await call("check_fit");
+  const bp = strike.result?.overlaps?.[0];
+  check(bp?.a === "Blade" && bp.b === "Post" && Math.abs(bp.at_seconds - 0.07) < 0.02, `a blade striking a post is found, with when (${JSON.stringify(bp)})`);
+  const gap = await call("check_fit", { parts: ["Blade", "Wall"] });
+  check(Math.abs(gap.result?.gap_mm - 45) < 0.2, `the gap between the blade and the wall (${gap.result?.gap_mm} mm, 45 expected)`);
+  check(/no visible part named "Nope"/.test((await call("check_fit", { parts: ["Nope"] })).error ?? ""), "check_fit with an unknown part is refused");
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

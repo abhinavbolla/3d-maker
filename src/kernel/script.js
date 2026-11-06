@@ -1,7 +1,7 @@
 // Runs a model script: plain JavaScript that builds shapes with the functions
 // below and declares named parts and adjustable values. The result is data
 // (JSON shape trees per part), so it can be meshed in parallel and cached.
-import { compile, isEmptyBox } from "./sdf.js";
+import { compile, isEmptyBox, threadRoot, threadPitchRadius } from "./sdf.js";
 import { makePoseApi, sampleMotion, defaultLoop } from "./motion.js";
 
 export const PALETTE = ["#9aa3ad", "#c9cdd2", "#5b6670", "#b8483e", "#d9a441", "#4f7cac", "#6b8f5e", "#2f3338"];
@@ -428,10 +428,157 @@ function helix(r, pitch, turns) {
   });
 }
 
-function extrude(p, h) {
+function extrude(p, h, opts = {}) {
   num(h, "extrude height", { positive: true });
-  if (Array.isArray(p)) return new Shape({ t: "extrude", pts: points2(p, "extrude"), h });
-  return new Shape({ t: "extrude", p: profileNode(p, "extrude"), h });
+  if (typeof opts !== "object" || opts === null) fail("extrude options must be { draft }");
+  const node = Array.isArray(p) ? { t: "extrude", pts: points2(p, "extrude"), h } : { t: "extrude", p: profileNode(p, "extrude"), h };
+  if (opts.draft) {
+    const d = num(opts.draft, "extrude draft");
+    if (Math.abs(d) >= 45) fail(`extrude draft must be between -45 and 45 degrees, got ${d}`);
+    node.draft = d;
+  }
+  return new Shape(node);
+}
+
+// ---- threads, holes and fasteners (ISO metric) ----
+// Size data per thread: pitch, clearance hole (ISO 273 normal), hex head
+// across flats and height (ISO 4017), socket head diameter, height and key
+// (ISO 4762), flat (countersunk) head diameter and key (ISO 10642), nut height
+// (ISO 4032), washer inner, outer and thickness (ISO 7089), counterbore
+// diameter (DIN 974).
+const METRIC = {
+  M2: [0.4, 2.4, 4, 1.4, 3.8, 2, 1.5, 4, 1.3, 1.6, 2.2, 5, 0.3, 4.3],
+  "M2.5": [0.45, 2.9, 5, 1.7, 4.5, 2.5, 2, 5, 1.5, 2, 2.7, 6, 0.5, 5],
+  M3: [0.5, 3.4, 5.5, 2, 5.5, 3, 2.5, 6.72, 2, 2.4, 3.2, 7, 0.5, 6.5],
+  M4: [0.7, 4.5, 7, 2.8, 7, 4, 3, 8.96, 2.5, 3.2, 4.3, 9, 0.8, 8],
+  M5: [0.8, 5.5, 8, 3.5, 8.5, 5, 4, 11.2, 3, 4.7, 5.3, 10, 1, 10],
+  M6: [1, 6.6, 10, 4, 10, 6, 5, 13.44, 4, 5.2, 6.4, 12, 1.6, 11],
+  M8: [1.25, 9, 13, 5.3, 13, 8, 6, 17.92, 5, 6.8, 8.4, 16, 1.6, 15],
+  M10: [1.5, 11, 16, 6.4, 16, 10, 8, 22.4, 6, 8.4, 10.5, 20, 2, 18],
+  M12: [1.75, 13.5, 18, 7.5, 18, 12, 10, 26.88, 8, 10.8, 13, 24, 2.5, 20],
+  M14: [2, 15.5, 21, 8.8, 21, 14, 12, 30.8, 10, 12.8, 15, 28, 2.5, 24],
+  M16: [2, 17.5, 24, 10, 24, 16, 14, 33.6, 10, 14.8, 17, 30, 3, 26],
+  M20: [2.5, 22, 30, 12.5, 30, 20, 17, 40.32, 12, 18, 21, 37, 3, 33],
+  M24: [3, 26, 36, 15, 36, 24, 19, 48, 14, 21.5, 25, 44, 4, 40],
+  M30: [3.5, 33, 46, 18.7, 45, 30, 22, 60, 17, 25.6, 31, 56, 4, 48],
+  M36: [4, 39, 55, 22.5, 54, 36, 27, 72, 19, 31, 37, 66, 5, 57],
+};
+function metric(size) {
+  const key = typeof size === "string" ? size.trim().toUpperCase() : size;
+  const row = METRIC[key];
+  if (!row) fail(`unknown thread size ${what(size)}; use one of ${Object.keys(METRIC).join(", ")}`);
+  const [pitch, clearance, s, k, sd, sk, key2, fd, fkey, m, wd, wD, wh, cb] = row;
+  const d = Number(key.slice(1));
+  const r = d / 2;
+  return {
+    size: key, d, pitch, clearance, tapDrill: R5(d - pitch),
+    minor: R5(2 * threadRoot(r, pitch)), pitchDiameter: R5(2 * threadPitchRadius(r, pitch)),
+    hex: { s, k }, socket: { d: sd, k: sk, key: key2 }, flat: { d: fd, k: R5((fd - d) / 2), key: fkey },
+    nut: { s, m }, washer: { d: wd, D: wD, h: wh }, cbore: { d: cb, depth: sk },
+  };
+}
+// A size given as "M6" (metric data) or a plain diameter (number).
+const sizeOf = (size, where) => {
+  if (typeof size === "string") return metric(size);
+  num(size, `${where} size`, { positive: true });
+  return null;
+};
+// Node helpers, all along Z between z0 and z1.
+const zmove = (z, c) => ({ t: "move", v: [0, 0, R5(z)], c });
+const cylZ = (r, z0, z1) => zmove((z0 + z1) / 2, { t: "cylinder", r: R5(r), h: R5(z1 - z0) });
+const coneZ = (ra, rb, z0, z1) => zmove((z0 + z1) / 2, { t: "cone", r1: R5(ra), r2: R5(rb), h: R5(z1 - z0) });
+const hexPts = (s) => Array.from({ length: 6 }, (_, i) => [R5((s / Math.sqrt(3)) * Math.cos((i * Math.PI) / 3)), R5((s / Math.sqrt(3)) * Math.sin((i * Math.PI) / 3))]);
+const hexZ = (s, z0, z1) => zmove((z0 + z1) / 2, { t: "extrude", p: { t: "poly2", pts: hexPts(s) }, h: R5(z1 - z0) });
+// A hex prism with its corners chamfered at 30°, at the top or both ends.
+function chamferedHex(s, z0, z1, both) {
+  const h = z1 - z0, out = s / 2 + h * Math.sqrt(3);
+  const c = [hexZ(s, z0, z1), coneZ(out, s / 2, z0, z1)];
+  if (both) c.push(coneZ(s / 2, out, z0, z1));
+  return { t: "intersect", c };
+}
+const threadNode = (r, p, z0, z1, opts = {}) => ({ t: "thread", r: R5(r), p, z0: R5(z0), z1: R5(z1), ...opts });
+
+// A threaded rod centred on the origin along Z, like cylinder: thread("M10", 40)
+// or thread(10, 40, { pitch: 1.5 }). Options: pitch, left, chamfer (default true).
+function thread(size, length, opts = {}) {
+  const m = sizeOf(size, "thread");
+  num(length, "thread length", { positive: true });
+  const d = m ? m.d : size;
+  const pitch = num(opts.pitch ?? m?.pitch ?? fail("thread with a plain diameter needs { pitch }, or use a size like \"M10\""), "thread pitch", { positive: true });
+  if (pitch > d / 3) fail(`thread pitch ${pitch} is too coarse for diameter ${d}`);
+  const ch = opts.chamfer ?? true;
+  return new Shape(threadNode(d / 2, pitch, -length / 2, length / 2, { left: Boolean(opts.left), chamfer: [ch, ch] }));
+}
+
+// A hole to cut away, going down from z = 0 (put it at the surface, then cut).
+// hole("M6", 12): clearance hole for an M6 bolt. hole(5, 12): 5 mm drill.
+// Options: tapped (threaded, for a metric size), cbore (true for a socket head,
+// or [diameter, depth]), csink (true for a flat head, or a diameter; 90°),
+// tip (a 118° drill point at the bottom; default on for tapped holes).
+function hole(size, depth, opts = {}) {
+  const m = sizeOf(size, "hole");
+  num(depth, "hole depth", { positive: true });
+  if (typeof opts !== "object" || opts === null) fail("hole options must be { tapped, cbore, csink, tip }");
+  if ((opts.tapped || opts.cbore === true || opts.csink === true) && !m) fail("hole tapped, cbore: true and csink: true need a metric size like \"M6\"; give cbore: [diameter, depth] or csink: diameter for a plain hole");
+  const c = [];
+  const above = Math.max(1, (m ? m.d : size) / 2);
+  let r;
+  if (opts.tapped) {
+    r = threadRoot(m.d / 2, m.pitch);
+    c.push(threadNode(m.d / 2 + 0.02 * m.pitch, m.pitch, -depth, above));
+  } else {
+    r = (m ? m.clearance : size) / 2;
+    c.push(cylZ(r, -depth, above));
+  }
+  if (opts.tip ?? opts.tapped) c.push(coneZ(0, r, -depth - r / Math.tan(59 * DEG), -depth));
+  if (opts.cbore) {
+    const [D, dd] = opts.cbore === true ? [m.cbore.d, m.cbore.depth] : Array.isArray(opts.cbore) && opts.cbore.length === 2 ? opts.cbore.map((v) => num(v, "hole cbore", { positive: true })) : fail("hole cbore must be true or [diameter, depth]");
+    if (D / 2 <= r) fail(`hole cbore diameter ${D} must be larger than the hole (${R5(r * 2)})`);
+    c.push(cylZ(D / 2, -dd, above));
+  }
+  if (opts.csink) {
+    const D = opts.csink === true ? m.flat.d : num(opts.csink, "hole csink", { positive: true });
+    if (D / 2 <= r) fail(`hole csink diameter ${D} must be larger than the hole (${R5(r * 2)})`);
+    c.push(coneZ(r, D / 2, -(D / 2 - r), 0), cylZ(D / 2, 0, above));
+  }
+  return new Shape({ t: "union", c });
+}
+
+// A bolt standing on z = 0 with its shank going down: hex head (default),
+// socket head or flat (countersunk) head. The head sits on z = 0, except a flat
+// head, whose top is at z = 0 (flush in a csink hole). length is the shank
+// (the whole bolt for a flat head). thread: false draws the shank smooth.
+function bolt(size, length, opts = {}) {
+  const m = metric(size);
+  num(length, "bolt length", { positive: true });
+  if (typeof opts !== "object" || opts === null) fail("bolt options must be { head, thread }");
+  const head = opts.head ?? "hex";
+  const R = m.d / 2;
+  const c = [];
+  let top = 0; // where the shank starts
+  if (head === "hex") c.push(chamferedHex(m.hex.s, 0, m.hex.k, false));
+  else if (head === "socket") {
+    const key = { t: "move", v: [0, 0, R5(m.socket.k)], c: { t: "extrude", p: { t: "poly2", pts: hexPts(m.socket.key) }, h: R5(m.socket.k * 1.2) } };
+    c.push({ t: "subtract", a: zmove(m.socket.k / 2, { t: "cylinder", r: m.socket.d / 2, h: m.socket.k, round: R5(m.socket.k * 0.08) }), b: [key] });
+  } else if (head === "flat") {
+    top = -m.flat.k;
+    if (length <= m.flat.k) fail(`bolt length ${length} is shorter than its flat head (${m.flat.k})`);
+    const key = { t: "move", v: [0, 0, 0], c: { t: "extrude", p: { t: "poly2", pts: hexPts(m.flat.key) }, h: R5(m.flat.k * 1.2) } };
+    c.push({ t: "subtract", a: coneZ(R, m.flat.d / 2, top, 0), b: [key] });
+  } else fail(`bolt head must be "hex", "socket" or "flat", got ${what(head)}`);
+  // Threaded all the way to the head, as screws for tapped holes are.
+  c.push(threadNode(R, m.pitch, -length, top + 0.01, { chamfer: [true, false], ...(opts.thread === false ? { plain: true } : {}) }));
+  return new Shape({ t: "union", c });
+}
+// A hex nut standing on z = 0, threaded through. Under a part, turn it over: .rotateX(180).
+function nut(size) {
+  const m = metric(size);
+  return new Shape({ t: "subtract", a: chamferedHex(m.nut.s, 0, m.nut.m, true), b: [threadNode(m.d / 2 + 0.02 * m.pitch, m.pitch, -1, m.nut.m + 1)] });
+}
+// A flat washer standing on z = 0.
+function washer(size) {
+  const m = metric(size);
+  return new Shape({ t: "subtract", a: cylZ(m.washer.D / 2, 0, m.washer.h), b: [cylZ(m.washer.d / 2, -1, m.washer.h + 1)] });
 }
 function revolve(p, angle = 360) {
   num(angle, "revolve angle", { positive: true });
@@ -513,7 +660,7 @@ function intersect(...args) {
   return new Shape({ t: "intersect", c: nodes, k });
 }
 
-const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "circle", "rect", "polygon", "path", "airfoil", "helix", "sweep", "loft", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
+const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "circle", "rect", "polygon", "path", "airfoil", "helix", "sweep", "loft", "thread", "hole", "bolt", "nut", "washer", "metric", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
 const DEG = Math.PI / 180;
 // A joint may open by this much (mm) over the loop before it is reported.
 export const JOINT_TOLERANCE_MM = 1;
@@ -640,9 +787,10 @@ export function runScript(source, values = {}) {
   const loop = (seconds) => (loopSeconds = num(seconds, "loop seconds", { positive: true }));
   const print = (...a) => prints.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 
-  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, helix, sweep, loft, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
+  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, helix, sweep, loft, thread, hole, bolt, nut, washer, metric, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
   try {
-    const fn = new Function(...API_NAMES, ...BLOCKED, `"use strict";\n${source}\n//# sourceURL=model.js`);
+    // In its own block, so the script may reuse a built-in name (const hole = ...).
+    const fn = new Function(...API_NAMES, ...BLOCKED, `"use strict"; {\n${source}\n}\n//# sourceURL=model.js`);
     fn(...API_NAMES.map((n) => api[n]), ...BLOCKED.map(() => undefined));
   } catch (err) {
     const line = scriptLine(err);

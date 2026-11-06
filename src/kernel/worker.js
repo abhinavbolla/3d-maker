@@ -3,6 +3,7 @@
 import { runScript } from "./script.js";
 import { compile } from "./sdf.js";
 import { meshSDF, meshVolume, meshBounds, displayMesh, toSTL } from "./mesh.js";
+import { checkPairs } from "./fit.js";
 
 self.onmessage = ({ data: job }) => {
   try {
@@ -20,6 +21,8 @@ self.onmessage = ({ data: job }) => {
       const d = displayMesh(m);
       const result = { ...d, cellSize: m.cellSize, volume: meshVolume(m), bounds: m.indices.length ? meshBounds(m) : null };
       self.postMessage({ id: job.id, ok: true, result }, [d.positions.buffer, d.indices.buffer, d.normals.buffer]);
+    } else if (job.type === "fit") {
+      self.postMessage({ id: job.id, ok: true, result: checkPairs(job.parts, job.pairs, job) });
     } else if (job.type === "stl") {
       const { f, box } = compile(job.node);
       // Never export a mesh with holes: if the detail is more than the mesher

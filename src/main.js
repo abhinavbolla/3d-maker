@@ -66,6 +66,7 @@ function countActivity(run, method, phase, message) {
   else if (phase === "ok" && (method === "set_model" || method === "edit_model")) run.changes++;
   else if (phase === "ok" && method === "screenshot") run.looks++;
   else if (phase === "ok" && method === "finish_step") (run.steps++, run.looks++);
+  else if (phase === "ok" && method === "check_fit") run.fits++;
 }
 function receiptFor(run) {
   const changed = store.state.doc.script !== run.before;
@@ -82,8 +83,9 @@ function receiptFor(run) {
     parts.push(done === plan.steps.length ? `Plan: all ${plan.steps.length} steps done and checked.` : `Plan: ${done} of ${plan.steps.length} steps done; not done: ${open.join(", ")}.`);
   }
   if (run.looks) parts.push(`Claude looked at it ${plural(run.looks, "time", "times")}.`);
+  if (run.fits) parts.push(`Claude checked how the parts fit ${plural(run.fits, "time", "times")}.`);
   if (run.failed.length) parts.push(`${plural(run.failed.length, "step", "steps")} failed and ${run.failed.length === 1 ? "was" : "were"} not applied.`);
-  lastReceipt = { changed, changes: run.changes, looks: run.looks, steps: run.steps, failed: run.failed.slice(), seconds: Math.round((Date.now() - run.started) / 1000) };
+  lastReceipt = { changed, changes: run.changes, looks: run.looks, steps: run.steps, fits: run.fits, failed: run.failed.slice(), seconds: Math.round((Date.now() - run.started) / 1000) };
   return parts.join(" ");
 }
 let lastReceipt = null;
@@ -102,7 +104,7 @@ async function send() {
   if (!text || working) return;
   const sel = store.state.selected;
   const prompt = sel ? `The user has selected the part "${sel}".\n\n${text}` : text;
-  working = { prompt: text, status: "Thinking", started: Date.now(), before: store.state.doc.script, changes: 0, looks: 0, steps: 0, failed: [] };
+  working = { prompt: text, status: "Thinking", started: Date.now(), before: store.state.doc.script, changes: 0, looks: 0, steps: 0, fits: 0, failed: [] };
   $("input").value = "";
   fitInput();
   $("reply").hidden = true;

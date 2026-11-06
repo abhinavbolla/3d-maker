@@ -409,12 +409,88 @@ function loft3({ s, smooth = true }) {
   };
 }
 
+// ---- screw threads (ISO metric basic profile, 60° flanks) ----
+// A threaded rod of major radius r and pitch p along Z, from z0 to z1. The
+// thread's phase is fixed in the node's own frame (a crest passes through
+// +X at z = 0), so pieces built in one frame mate. Right-handed unless left.
+// The profile per turn, as radius against axial position u (crest at u = 0):
+// flat crest p/8 wide at r, flanks at 30° to the radial plane, flat root p/4
+// wide at r - 5H/8, H = 0.866p. chamfer: 45° ends from the root, [bottom, top].
+// plain: drawn as a smooth rod (threads too small to see), but fits as a thread.
+const THREAD_H = Math.sqrt(3) / 2;
+export const threadRoot = (r, p) => r - (5 / 8) * THREAD_H * p;
+export const threadPitchRadius = (r, p) => r - (3 / 8) * THREAD_H * p;
+let fitMode = false;
+function thread3({ r, p, z0, z1, left = false, chamfer = [false, false], plain = false }) {
+  const r1 = threadRoot(r, p);
+  const box = [-r, -r, z0, r, r, z1];
+  // Chamfered ends: a 45° cone that meets the root radius at the end.
+  const ends = (rr, z) => {
+    let d = max(z0 - z, z - z1);
+    if (chamfer[0]) d = max(d, (rr + z0 - z - r1) * Math.SQRT1_2);
+    if (chamfer[1]) d = max(d, (rr + z - z1 - r1) * Math.SQRT1_2);
+    return d;
+  };
+  // Checking fits: threads mate on the pitch diameter, so a bolt and its
+  // nut touch there whatever their phase.
+  if (fitMode) {
+    const r2 = threadPitchRadius(r, p);
+    return { box, f: (x, y, z) => { const rr = sqrt(x * x + y * y); return max(rr - r2, ends(rr, z)); } };
+  }
+  if (plain) return { box, f: (x, y, z) => { const rr = sqrt(x * x + y * y); return max(rr - r, ends(rr, z)); } };
+  // One period of the profile as a polyline (u, radius), u in [-p/2, p/2].
+  const us = [-p / 2, (-3 * p) / 8, -p / 16, p / 16, (3 * p) / 8, p / 2];
+  const rs = [r1, r1, r, r, r1, r1];
+  const turn = (left ? -p : p) / (2 * Math.PI);
+  // The helix tilts the profile slightly; scale back to stay a safe distance.
+  const lip = sqrt(1 + (p / (Math.PI * r1)) ** 2);
+  return {
+    box,
+    f: (x, y, z) => {
+      const rr = sqrt(x * x + y * y);
+      let d;
+      {
+        let u = z - turn * Math.atan2(y, x);
+        u -= p * Math.round(u / p);
+        let best = Infinity;
+        let inside = false;
+        for (let k = -1; k <= 1; k++) {
+          const uu = u - k * p;
+          for (let i = 0; i < 5; i++) {
+            const ex = us[i + 1] - us[i], ey = rs[i + 1] - rs[i];
+            const wx = uu - us[i], wy = rr - rs[i];
+            const t = min(max((wx * ex + wy * ey) / (ex * ex + ey * ey), 0), 1);
+            best = min(best, (wx - ex * t) ** 2 + (wy - ey * t) ** 2);
+            if (k === 0 && uu >= us[i] && uu <= us[i + 1]) inside = rr < rs[i] + (ey * wx) / ex;
+          }
+        }
+        d = ((inside ? -1 : 1) * sqrt(best)) / lip;
+        // Near the axis the helix turns fast; fade to the plain core there.
+        if (rr < r1 / 2) {
+          const w = rr / (r1 / 2);
+          d = w * d + (1 - w) * (rr - r1);
+        }
+      }
+      return max(d, ends(rr, z));
+    },
+  };
+}
+
 // ---- compile ----
 // Returns { f, box } for a node.
 export function compile(node) {
   const c = COMPILERS[node.t];
   if (!c) throw new Error(`Unknown shape "${node.t}"`);
   return c(node);
+}
+// The same, for checking how parts fit: threads become their pitch cylinders.
+export function compileForFit(node) {
+  fitMode = true;
+  try {
+    return compile(node);
+  } finally {
+    fitMode = false;
+  }
 }
 
 const COMPILERS = {
@@ -508,11 +584,20 @@ const COMPILERS = {
     const o = R + r;
     return { box: [-o, -o, -r, o, o, r], f: (x, y, z) => hypot(sqrt(x * x + y * y) - R, z) - r };
   },
+  // draft: degrees the sides lean in going up (out if negative), as on a
+  // moulded or cast part; the bottom face keeps the profile.
   extrude(node) {
     const P = profileOf(node);
     const b = P.box, hh = node.h / 2;
-    return { box: [b[0], b[1], -hh, b[2], b[3], hh], f: (x, y, z) => slab(P.f(x, y), abs(z) - hh) };
+    if (!node.draft) return { box: [b[0], b[1], -hh, b[2], b[3], hh], f: (x, y, z) => slab(P.f(x, y), abs(z) - hh) };
+    const t = Math.tan(node.draft * DEG), s = sqrt(1 + t * t);
+    const g = max(-t * node.h, 0);
+    return {
+      box: [b[0] - g, b[1] - g, -hh, b[2] + g, b[3] + g, hh],
+      f: (x, y, z) => slab((P.f(x, y) + (min(max(z, -hh), hh) + hh) * t) / s, abs(z) - hh),
+    };
   },
+  thread: (node) => thread3(node),
   // A profile of [radius, height] spun around Z, all the way or through
   // `angle` degrees counterclockwise from +X.
   revolve(node) {

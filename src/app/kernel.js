@@ -1,8 +1,13 @@
 // Runs model scripts and meshes parts on a pool of workers, with a cache so
 // only parts that changed are meshed again.
+import { worldBox, boxesMeet } from "../kernel/fit.js";
+
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
 const RUN_TIMEOUT_MS = 10000;
 const MESH_TIMEOUT_MS = 120000;
+const FIT_TIMEOUT_MS = 60000;
+// Moments of the motion loop checked for parts hitting each other.
+const FIT_FRAMES = 120;
 
 function createPool() {
   const workers = [];
@@ -164,5 +169,47 @@ export function createKernel() {
     return job({ type: "stl", node: { t: "union", c: nodes }, budget: EXPORT_BUDGET }, MESH_TIMEOUT_MS, "Export took too long.");
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL };
+  // Which parts pass into each other, at rest and over the motion loop. With
+  // names, only pairs that include one of them; with exactly two names, also
+  // how close those two come. Pairs are shared out over the workers.
+  async function checkFit(result, { names = null } = {}) {
+    const all = result.parts.filter((p) => !p.hidden && p.mesh.bounds);
+    const known = new Set(all.map((p) => p.name));
+    for (const n of names ?? []) if (!known.has(n)) throw new Error(`There is no visible part named "${n}".`);
+    const gap = names?.length === 2;
+    const count = result.motion?.frames ?? 0;
+    const step = Math.max(1, Math.ceil(count / FIT_FRAMES));
+    const frames = count ? Array.from({ length: Math.ceil(count / step) }, (_, k) => k * step) : [0];
+    // Each part's box over the whole loop.
+    const swept = all.map((p) => {
+      if (!p.frames || !count) return p.box;
+      let b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+      for (const f of frames) {
+        const w = worldBox(p.box, Array.from(p.frames.subarray(f * 12, f * 12 + 12)));
+        b = b.map((v, i) => (i < 3 ? Math.min(v, w[i]) : Math.max(v, w[i])));
+      }
+      return b;
+    });
+    const pairs = [];
+    for (let i = 0; i < all.length; i++)
+      for (let j = i + 1; j < all.length; j++) {
+        const [a, b] = [all[i].name, all[j].name];
+        if (gap ? !(names.includes(a) && names.includes(b)) : names && !names.includes(a) && !names.includes(b)) continue;
+        if (gap || boxesMeet(swept[i], swept[j])) pairs.push([i, j]);
+      }
+    const chunks = Array.from({ length: Math.min(SIZE, pairs.length) }, () => []);
+    pairs.forEach((p, k) => chunks[k % chunks.length].push(p));
+    const joints = result.motion?.joints ?? [];
+    const found = await Promise.all(
+      chunks.map((chunk) => {
+        const used = [...new Set(chunk.flat())];
+        const at = new Map(used.map((i, k) => [i, k]));
+        const parts = used.map((i) => ({ name: all[i].name, node: all[i].node, box: all[i].box, frames: all[i].frames }));
+        return job({ type: "fit", parts, pairs: chunk.map(([i, j]) => [at.get(i), at.get(j)]), frames, frameCount: count, loop: result.motion?.loop ?? 0, gap, joints }, FIT_TIMEOUT_MS, "Checking how the parts fit took too long.");
+      }),
+    );
+    return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
+  }
+
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, checkFit };
 }

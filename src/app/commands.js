@@ -39,12 +39,21 @@ export function planProgress(plan) {
 }
 
 const MAX_STEPS = 40;
+const OVERLAP_NOTE = "These parts pass into each other by overlap_mm, volume_cm3 in all (at at_seconds into the motion, for moving parts); where is the box around the overlap. Solid parts should touch, not overlap: where one part fits into another (a shaft into a hub, a blade root into a grip, a bolt into a plate), cut a hole for it; otherwise move or resize them. Overlap around a joint() is left out. Threads count as fitting when they mate.";
 
 export function createCommands({ store, viewport, kernel }) {
   const partsByName = () => new Map((store.state.result?.parts ?? []).map((p) => [p.name, p]));
   // Pictures for Claude show the fine detail: wait for the background pass
   // (at most 15 s; after that the preview is shown).
   const fineDetail = () => store.state.refining && Promise.race([store.state.refining, new Promise((r) => setTimeout(r, 15000))]);
+
+  // Overlaps (and for two parts, the gap) from the last good build.
+  const checkFit = async (names) => {
+    const res = store.state.result;
+    if (!res?.parts.length) return { overlaps: [], pairs: 0 };
+    const { pairs, results } = await kernel.checkFit(res, { names });
+    return { pairs, overlaps: results.filter((r) => r.overlap_mm), gaps: results.filter((r) => r.gap_mm !== undefined) };
+  };
 
   const setScript = async (script) => {
     if (typeof script !== "string" || !script.trim()) throw new Error("script is empty");
@@ -99,13 +108,14 @@ export function createCommands({ store, viewport, kernel }) {
         const why = [missing.length && `missing: ${missing.join(", ")}`, empty.length && `empty (no surface): ${empty.join(", ")}`].filter(Boolean).join("; ");
         throw new Error(`Step "${step}" is not finished. Its parts are ${why}. Add or fix them, then call finish_step again. Part names must match the plan exactly.`);
       }
-      await fineDetail();
+      const [fit] = await Promise.all([checkFit(s.parts), fineDetail()]);
       const updated = { steps: plan.steps.map((x) => (x === s ? { ...x, done: true } : x)) };
       store.setPlan(updated);
       const summary = summarize(store.state);
       return {
         step: s.name,
         parts: summary.parts.filter((p) => s.parts.includes(p.name)),
+        ...(fit.overlaps.length ? { overlaps: fit.overlaps, overlaps_note: OVERLAP_NOTE } : {}),
         plan: planProgress(updated),
         png: viewport.screenshot({ view: "iso", parts: s.parts, ghost: true, width: 900, height: 700 }),
       };
@@ -123,6 +133,15 @@ export function createCommands({ store, viewport, kernel }) {
       if (!old_text || at < 0) throw new Error("old_text was not found in the script. Call get_model to see the current script.");
       if (s.indexOf(old_text, at + 1) >= 0) throw new Error("old_text appears more than once; include more surrounding text.");
       return setScript(s.slice(0, at) + new_text + s.slice(at + old_text.length));
+    },
+    check_fit: async ({ parts } = {}) => {
+      if (parts !== undefined && (!Array.isArray(parts) || !parts.length)) throw new Error("parts must be a list of part names, or left out to check every part.");
+      const { pairs, overlaps, gaps } = await checkFit(parts);
+      const out = { checked_pairs: pairs, overlaps };
+      if (parts?.length === 2) out.gap_mm = overlaps.length ? 0 : gaps[0]?.gap_mm ?? null;
+      if (overlaps.length) out.overlaps_note = OVERLAP_NOTE;
+      else out.note = store.state.result?.motion ? "No parts pass into each other, at rest or during the motion." : "No parts pass into each other.";
+      return out;
     },
     screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async () => {

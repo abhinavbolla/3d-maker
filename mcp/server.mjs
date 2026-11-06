@@ -9,6 +9,7 @@ import { z } from "zod";
 import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve, extname } from "node:path";
+import { REFERENCE } from "./reference.mjs";
 
 const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
 // Only the app itself may connect: the desktop app, or the dev server in a browser.
@@ -89,132 +90,15 @@ async function call(method, params = {}) {
 }
 
 // ---- the modelling language, as Claude sees it ----
-const INSTRUCTIONS = `3D Maker turns a short JavaScript model script into solid 3D parts the user sees live. You write the whole script with set_model (or change part of it with edit_model), then look at it with screenshot and fix what looks wrong.
+// Claude Code cuts server instructions off at 4096 characters, so these are
+// short and point to the reference tool (mcp/reference.mjs) for the rest.
+const INSTRUCTIONS = `3D Maker turns a short JavaScript model script into solid 3D parts the user sees live in the app.
 
-Units are millimetres, +Z is up, the ground is z = 0, angles are degrees. Model real objects at real size (a mug is about 95 mm tall, a car about 4500 mm long). Every shape is a solid; joins, cuts and blends never fail.
+Before you write or change a script, call the reference tool once (unless you already have its text in this conversation): it is the whole modelling language (shapes, profiles, sweep and loft, holes and fasteners, parts, sliders, motion and joints) with examples, and how to work. Use only the functions it lists; do not guess names.
 
-PRIMITIVES (all centred on the origin)
-  box(x, y, z, round?)            round = edge radius, at most half the smallest side
-  sphere(r)
-  ellipsoid(rx, ry, rz)           good for bodies, fuselages, heads, pebbles
-  cylinder(r, h, round?)          along Z
-  cone(r1, r2, h)                 along Z; r1 at the bottom, r2 at the top; either may be 0
-  torus(R, r)                     ring in the XY plane
-  capsule([x,y,z], [x,y,z], r1, r2?)   rounded rod between two points, optionally tapered. Great for struts, limbs, booms, handles, legs
-  tube([[x,y,z,r], ...], smooth?) rounded rods through several points with a radius at each point: pipes, cables, tails, skids
-  extrude(profile, h)             a profile (below) pushed along Z (centred: from -h/2 to h/2). A list of [x, y] points also works
-  revolve(profile, angle?)        a profile drawn as [radius, height] (x >= 0) spun around Z, all the way or through angle degrees from +X: vases, glasses, wheels, nose cones, pipe bends
-  sweep(profile, path, { smooth, closed, twist, up })
-                                  a profile carried along a path: handrails, frames, gaskets, hoses, wires, springs, bent tubes, mouldings, coils.
-                                  path: [[x,y,z], ...] (a smooth curve through the points; smooth: false keeps straight runs with mitred corners), helix(r, pitch, turns), or path(...) in the XY plane (closed with .close() for a ring).
-                                  The profile's y axis points up (+Z, or up: [x,y,z]) and it stays square to the path. closed: true joins the ends. twist: degrees of twist from start to end.
-  loft([[z, profile], ...], { smooth })
-                                  a solid through profiles at increasing heights z (smooth by default): wings and blades (airfoil sections), fuselages, hulls, bottles, shoes, handles, transitions from round to square.
-                                  Sections morph into each other in proportion, so chord, thickness and sweep change smoothly. Loft along Z, then rotate it into place.
+In short: units are millimetres, +Z is up, the ground is z = 0. Write the whole script with set_model, change part of it with edit_model, and look at it with screenshot. Big or mechanical models are planned with set_plan, built step by step with append_to_model, and each step is checked with finish_step. check_fit finds parts passing into each other, at rest and during the motion. When done, answer in one or two short sentences; do not paste the script.`;
 
-PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and loft)
-  circle(r)    rect(w, h, round?)    polygon([[x,y], ...], round?)     round = corner radius
-  airfoil("2412", chord)          NACA 4-digit wing section: leading edge at the origin, chord along +x, upper surface up. "0012" is symmetric; "4415" is thick and cambered
-  path([x, y])                    an outline drawn piece by piece, chained:
-    .line(x, y)  .lineBy(dx, dy)  straight
-    .arc([x, y], [x2, y2])        arc through the first point to the second
-    .radiusArc(x, y, r)           arc of radius r to (x, y); r > 0 bends left, r < 0 right
-    .tangentArc(x, y)             arc to (x, y) continuing smoothly from the last piece
-    .curve([cx, cy], [x, y])  .curve([c1x, c1y], [c2x, c2y], [x, y])   Bezier curves
-    .spline([[x, y], ...])        a smooth curve through these points
-    .close(round?)                back to the start: makes it a profile (round = corner radius)
-  Profile methods: .move(x, y) .rotate(deg) .scale(s) or .scale(sx, sy) .mirror("x"|"y") .offset(d)
-    .add(other, ..., smooth?)  .cut(other, ...)  .common(other, ...)    combine outlines before making a solid: holes, slots, keyways
-
-  EXAMPLE: profiles, sweep and loft
-    const glass = path([0, 0]).line(35, 0).line(35, 3).line(4, 8).line(4, 90).curve([40, 100], [38, 170]).line(35, 170).curve([37, 103], [0, 96]).close();
-    part("Glass", revolve(glass));
-    part("Rail", sweep(circle(6), [[0, 0, 0], [100, 0, 40], [200, 60, 40], [260, 60, 0]]).at(-100, -80, 0));
-    part("Spring", sweep(circle(2), helix(15, 8, 6)).at(300, 0, 0));
-    part("Wing", loft([[0, airfoil("2412", 300)], [900, airfoil("0012", 120).move(150, 0)]]).rotateX(-90).at(0, 300, 0));
-    part("Bracket", extrude(rect(80, 40, 6).cut(circle(6).move(-25, 0), circle(6).move(25, 0)), 8).at(0, -150, 4));
-
-COMBINING (smooth is an optional blend radius in mm; leave it out for a sharp join)
-  union(a, b, ..., smooth?)       also a.add(b, ..., smooth?)
-  subtract(a, b, ..., smooth?)    cut b, c, ... out of a; also a.cut(b, ...)
-  intersect(a, b, ..., smooth?)   keep only the overlap; also a.common(b, ...)
-  Arrays of shapes work anywhere a list of shapes is expected.
-
-METHODS (each returns a new shape; chain them)
-  .move(x, y, z)  .at(x, y, z)
-  .rotate(rx, ry, rz)             about world X, then Y, then Z, through the origin, so rotate before you move
-  .rotateX(d) .rotateY(d) .rotateZ(d)
-  .scale(s) or .scale(sx, sy, sz)
-  .offset(d)                      grow (d > 0) or shrink (d < 0) the surface by d
-  .shell(t)                       hollow it, keeping a wall of thickness t inside the surface; cut an opening to see in
-  .mirror("x")                    reflect across the plane x = 0 (or "y", "z")
-  .symmetric("y")                 make it symmetric across y = 0, keeping the y >= 0 side. Model one side, then mirror it
-  .radial(n, "z")                 n copies spaced evenly around the axis through the origin: blades, spokes, bolts
-  .array(n, dx, dy, dz)           n copies, each moved one step further
-
-PARTS, VALUES, MOTION
-  part(name, shape, { color: "#rrggbb", spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, follow, motion, hidden })
-    Every visible piece must be a part with a unique, plain name ("Main rotor", "Left door"). The user clicks parts to select and tweak them.
-    spin rotates the part forever around the line through center along axis ("x", "y", "z" or [x, y, z]): rotors, wheels, fans. swing rocks it back and forth by ±angle: doors, pendulums, wings. Motion is only shown in the app, not exported.
-  param(label, value, { min, max, step, part })
-    Returns the number to use, and gives the user a slider. Always set part to the part it mainly affects, so the slider appears when they click that part. Add 1 to 3 sliders per important part for its main dimensions (length, width, count, angle). Keep labels short ("Length", "Blades").
-  title("Name")                   names the model (used for the exported file)
-  print(...values)                values to see in the tool result, for checking measurements
-
-You can use normal JavaScript: const, functions, loops, Math. There is no import, file access or network.
-
-LINKED MOTION (mechanisms whose parts drive each other)
-  Model every part at rest, in world coordinates. Motion moves it from rest; t is in seconds.
-  part(..., { follow: "Other part" })     moves with that part: a blade follows the hub, the rotating swashplate follows the stationary one. The part's own spin, swing and motion are applied first, then everything the followed part does.
-  part(..., { motion: t => pose })        the part's own motion at time t.
-  turn(deg, axis, center)                 a rotation about the line through center along axis ("x", "y", "z" or [x, y, z])
-  slide(dx, dy, dz)                       a move
-  link(a0, b0, a, b)                      moves a rigid rod whose ends rest at a0 and b0 so they sit at a and b: pitch links, connecting rods, push rods. The app checks every link: the summary's motion.links gives max_stretch_mm, how far a and b ever get from the rod's length.
-  turn(...).slide(...), pose.then(other)  chain poses, each moving the result of the last; still() is no motion
-  where("Part", [x, y, z], t)             where a point, given at rest on that part, is at time t (with everything it follows). Use it inside motion functions so one part's motion comes from another's.
-  joint("Part A", "Part B", [x, y, z])    a point (at rest) where two parts connect: every pin, ball joint and rod end. The app checks it over the whole loop; the summary lists each joint's max_gap_mm and warns when one comes apart.
-  loop(seconds)                           the animation's length; it repeats. Pick speeds that complete whole turns in it. Default: found from spin and swing, else 4 s.
-  screenshot with at: seconds             shows the pose at that moment. Check a mechanism at two or three moments.
-
-  EXAMPLE: crank, connecting rod and piston (the joints stay closed exactly)
-    loop(1);
-    part("Crank", cylinder(30, 10).rotateX(90), { spin: { axis: "y", rpm: 60 } });
-    const pin = [0, 0, 25], top = [0, 0, 125];          // the rod's ends at rest, 100 mm apart
-    part("Piston", cylinder(20, 30).at(0, 0, 135), { motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
-    part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
-    joint("Rod", "Crank", pin);
-    joint("Rod", "Piston", top);
-
-  DRIVEN LEVERS: when a rod moves a lever that turns about its own axis (pitch horns, steering arms, rocker arms, suspension), work the lever's angle out from where the rod's driven end is, so the rod keeps its length: for a lever arm of length a, angle = asin((height of the rod end in the lever's frame - its rest height) / a). Give the lever its motion from that angle and the rod link(...) between where() of its two ends. Declare joints at both ends of every rod.
-
-EXAMPLE
-  title("Desk lamp");
-  const armLen = param("Arm length", 320, { min: 150, max: 500, part: "Arm" });
-  const tilt = param("Tilt", 35, { min: 0, max: 80, part: "Arm" });
-  part("Base", cylinder(80, 16, 6).at(0, 0, 8), { color: "#2f3338" });
-  const top = [Math.sin(tilt * Math.PI / 180) * armLen, 0, 16 + Math.cos(tilt * Math.PI / 180) * armLen];
-  part("Arm", capsule([0, 0, 16], top, 9), { color: "#9aa3ad" });
-  const shade = cone(70, 25, 90).shell(2).cut(cylinder(68, 20).at(0, 0, -45)).rotateY(110).at(top[0] + 40, 0, top[2] - 20);
-  part("Shade", shade, { color: "#b8483e" });
-
-HOW TO WORK
-- Small things (up to about 5 parts: a mug, a bracket, a lamp): write the whole script with one set_model call, then screenshot and fix.
-- Anything bigger or mechanical (vehicles, machines, mechanisms, robots, a rotor head, an engine): build it with a plan, the way an engineer builds an assembly.
-  1. Work out the real object first: its sub-assemblies, the real pieces in each (bolts, links, bearings, clamps, brackets) and their real dimensions.
-  2. Call set_plan with 6 to 30 steps in build order, from the core outwards. Each step is one sub-assembly and lists the part names it will create, exactly as you will pass them to part(). Every part belongs to one step.
-  3. Step 1: set_model with title(), the shared dimensions as constants at the top (and sliders for the main ones), and the first step's parts. Later steps: append_to_model with that step's code, reusing the constants so pieces line up.
-  4. After each step call finish_step. It checks the step's parts exist and are solid and shows you just those parts against the rest. Look hard: fix anything floating, intersecting wrongly, mis-sized or crude with edit_model, then move on. Never skip finish_step, and finish every step.
-  5. When all steps are done, screenshot the whole model from two or three views and fix what is still wrong.
-- Mechanisms (anything where parts drive each other: rotor heads, engines, linkages, landing gear, robot arms): use LINKED MOTION, declare a joint() at every connection, and finish only when every joint's max_gap_mm and every link's max_stretch_mm is under 1, there are no motion warnings, and screenshots at two or three moments look right. Make each moving piece its own part.
-- Model real pieces as separate named parts, not one blob: a hub, each clamp, each link, each damper. Detail is what makes it look real: bolts, fillets, lightening holes, chamfers, bearing races.
-- For changes to an existing model, prefer edit_model. If the model has an unfinished plan (get_model shows plan), continue it.
-- Pick the operation the real part is made by: turned parts with revolve, plates and brackets with extrude of a profile with holes, bent tube, wire, rails and seals with sweep, wings, blades, hulls and fuselages with loft, springs with sweep along a helix. Draw real outlines with path() curves rather than stacking boxes.
-- Build recognisable silhouettes from smooth blends of ellipsoids, capsules, tubes, revolves and lofts; add detail (windows, panels, bolts) with subtract and small shapes; use symmetric() for anything with left and right sides.
-- After every change, call screenshot (try "iso", then "front", "top" or "right" as needed) and fix anything that looks wrong: parts floating apart, poking through each other, wrong proportions, missing pieces. A part listed as empty, or one much thinner than its detail_mm, needs to be thicker.
-- If the user has selected a part, "this" and "it" mean that part.
-- When done, answer in one or two short sentences: what you made or changed. Do not paste the script.`;
-
-const server = new McpServer({ name: "3d-maker", version: "0.4.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "3d-maker", version: "0.5.0" }, { instructions: INSTRUCTIONS });
 
 const json = (v) => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (err) => ({ isError: true, content: [{ type: "text", text: String(err?.message ?? err) }] });
@@ -226,6 +110,8 @@ const tool = (name, description, inputSchema, handler) =>
       return fail(err);
     }
   });
+
+tool("reference", "The full 3D Maker modelling language (every shape, profile, fastener, motion and joint function, with examples) and how to work. Call it once before writing your first script.", {}, async () => ({ content: [{ type: "text", text: REFERENCE }] }));
 
 tool("get_model", "Return the current model script, slider values, each part's size, bounds, volume and motion, the sliders, and which part the user has selected.", {}, async () => json(await call("get_model")));
 
@@ -264,12 +150,19 @@ tool(
 
 tool(
   "finish_step",
-  "Mark a plan step done after building it. Checks every part the step lists exists and has a surface (if not, it says what is missing and the step stays open), then returns those parts' sizes, the plan's progress and a picture of the step's parts with the rest of the model shown faintly. Look at the picture and fix problems before the next step.",
+  "Mark a plan step done after building it. Checks every part the step lists exists and has a surface (if not, it says what is missing and the step stays open), then returns those parts' sizes, any overlaps with other parts, the plan's progress and a picture of the step's parts with the rest of the model shown faintly. Look at the picture and fix problems before the next step.",
   { step: z.string().describe("The step's name, exactly as in set_plan") },
   async (a) => {
     const { png, ...rest } = await call("finish_step", a);
     return { content: [{ type: "text", text: JSON.stringify(rest, null, 1) }, { type: "image", data: png, mimeType: "image/png" }] };
   },
+);
+
+tool(
+  "check_fit",
+  "Find parts that pass into each other, at rest and over the whole motion loop (moving parts hitting other parts). Each overlap gives overlap_mm (how far they pass into each other), volume_cm3, where (the box around it) and, for moving parts, at_seconds. parts: only check pairs that include one of these. With exactly two parts it also gives gap_mm, how close they come (clearance between a blade and the body, a wheel and its arch).",
+  { parts: z.array(z.string()).min(1).optional().describe("Part names; leave out to check every pair") },
+  async (a) => json(await call("check_fit", a)),
 );
 
 tool(

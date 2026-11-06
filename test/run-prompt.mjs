@@ -35,9 +35,10 @@ try {
     if (shot.result) writeFileSync(join(out, `${view}.png`), Buffer.from(shot.result.png, "base64"));
   }
   const stl = await h.stlIsClosed(w);
+  const fit = (await h.command(w, "check_fit")).result ?? null;
   writeFileSync(join(out, "model.js"), summary.script);
-  writeFileSync(join(out, "result.json"), JSON.stringify({ prompt: text, seconds: Math.round((Date.now() - t) / 1000), reply, stl, summary: { ...summary, script: undefined } }, null, 1));
-  console.log(`\n${Math.round((Date.now() - t) / 1000)} s · ${summary.parts.length} parts · plan ${summary.plan ? `${summary.plan.done} of ${summary.plan.total}` : "none"} · STL ${stl.closed ? "closed" : "NOT closed"}${summary.motion?.joints?.length ? ` · ${summary.motion.joints.length} joints, worst gap ${Math.max(...summary.motion.joints.map((j) => j.max_gap_mm))} mm` : ""}`);
+  writeFileSync(join(out, "result.json"), JSON.stringify({ prompt: text, seconds: Math.round((Date.now() - t) / 1000), reply, stl, fit, summary: { ...summary, script: undefined } }, null, 1));
+  console.log(`\n${Math.round((Date.now() - t) / 1000)} s · ${summary.parts.length} parts · plan ${summary.plan ? `${summary.plan.done} of ${summary.plan.total}` : "none"} · STL ${stl.closed ? "closed" : "NOT closed"} · ${fit ? `${fit.overlaps.length} overlaps` : "fit not checked"}${summary.motion?.joints?.length ? ` · ${summary.motion.joints.length} joints, worst gap ${Math.max(...summary.motion.joints.map((j) => j.max_gap_mm))} mm` : ""}`);
   console.log(`Claude: ${reply.text}\nReceipt: ${JSON.stringify(reply.receipt)}\nSaved in ${out}`);
 } catch (err) {
   console.error(err);

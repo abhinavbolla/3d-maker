@@ -5,11 +5,17 @@
 // The desktop app starts the process from Rust; the browser dev build goes
 // through a small endpoint in the Vite dev server (see vite.config.js).
 /* global __MCP_SERVER_PATH__, __NODE_PATH__ */
+import { REFERENCE } from "../../mcp/reference.mjs";
+
 const isTauri = () => Boolean(window.__TAURI_INTERNALS__);
 
-const TOOLS = ["get_model", "set_model", "edit_model", "append_to_model", "set_plan", "finish_step", "screenshot", "export_stl"].map((t) => `mcp__3d-maker__${t}`);
+const TOOLS = ["get_model", "set_model", "edit_model", "append_to_model", "set_plan", "finish_step", "check_fit", "screenshot", "export_stl", "reference"].map((t) => `mcp__3d-maker__${t}`);
 
-const APP_PROMPT = `You are the modelling assistant inside the 3D Maker app. The user types requests into the app and watches the 3D view while you work. Use only the 3d-maker tools: call get_model before changing an existing model, follow the server's HOW TO WORK (big or mechanical models are built step by step with set_plan and finish_step), check your work with screenshots, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.`;
+const APP_PROMPT = `You are the modelling assistant inside the 3D Maker app. The user types requests into the app and watches the 3D view while you work. Use only the 3d-maker tools: call get_model before changing an existing model, follow HOW TO WORK below (big or mechanical models are built step by step with set_plan and finish_step), check your work with screenshots and check_fit, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.
+
+The 3D Maker modelling language follows. It is the same text the reference tool returns, so you do not need to call that tool.
+
+${REFERENCE}`;
 
 export function args(prompt, { session, model, windowId }) {
   const mcp = { mcpServers: { "3d-maker": { command: __NODE_PATH__, args: [__MCP_SERVER_PATH__, ...(windowId ? ["--app", windowId] : [])] } } };
@@ -26,6 +32,7 @@ const TOOL_STATUS = {
   append_to_model: "Adding parts",
   set_plan: "Planning",
   finish_step: "Checking the step",
+  check_fit: "Checking how the parts fit",
   screenshot: "Looking at it",
   export_stl: "Exporting",
 };
