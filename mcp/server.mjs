@@ -124,15 +124,39 @@ METHODS (each returns a new shape; chain them)
   .array(n, dx, dy, dz)           n copies, each moved one step further
 
 PARTS, VALUES, MOTION
-  part(name, shape, { color: "#rrggbb", spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, hidden })
+  part(name, shape, { color: "#rrggbb", spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, follow, motion, hidden })
     Every visible piece must be a part with a unique, plain name ("Main rotor", "Left door"). The user clicks parts to select and tweak them.
-    spin rotates the part forever around the line through center along axis (rotors, wheels, fans). swing rocks it back and forth by ±angle (doors, pendulums, wings). Motion is only shown in the app, not exported.
+    spin rotates the part forever around the line through center along axis ("x", "y", "z" or [x, y, z]): rotors, wheels, fans. swing rocks it back and forth by ±angle: doors, pendulums, wings. Motion is only shown in the app, not exported.
   param(label, value, { min, max, step, part })
     Returns the number to use, and gives the user a slider. Always set part to the part it mainly affects, so the slider appears when they click that part. Add 1 to 3 sliders per important part for its main dimensions (length, width, count, angle). Keep labels short ("Length", "Blades").
   title("Name")                   names the model (used for the exported file)
   print(...values)                values to see in the tool result, for checking measurements
 
 You can use normal JavaScript: const, functions, loops, Math. There is no import, file access or network.
+
+LINKED MOTION (mechanisms whose parts drive each other)
+  Model every part at rest, in world coordinates. Motion moves it from rest; t is in seconds.
+  part(..., { follow: "Other part" })     moves with that part: a blade follows the hub, the rotating swashplate follows the stationary one. The part's own spin, swing and motion are applied first, then everything the followed part does.
+  part(..., { motion: t => pose })        the part's own motion at time t.
+  turn(deg, axis, center)                 a rotation about the line through center along axis ("x", "y", "z" or [x, y, z])
+  slide(dx, dy, dz)                       a move
+  link(a0, b0, a, b)                      moves a rigid rod whose ends rest at a0 and b0 so they sit at a and b: pitch links, connecting rods, push rods. The app checks every link: the summary's motion.links gives max_stretch_mm, how far a and b ever get from the rod's length.
+  turn(...).slide(...), pose.then(other)  chain poses, each moving the result of the last; still() is no motion
+  where("Part", [x, y, z], t)             where a point, given at rest on that part, is at time t (with everything it follows). Use it inside motion functions so one part's motion comes from another's.
+  joint("Part A", "Part B", [x, y, z])    a point (at rest) where two parts connect: every pin, ball joint and rod end. The app checks it over the whole loop; the summary lists each joint's max_gap_mm and warns when one comes apart.
+  loop(seconds)                           the animation's length; it repeats. Pick speeds that complete whole turns in it. Default: found from spin and swing, else 4 s.
+  screenshot with at: seconds             shows the pose at that moment. Check a mechanism at two or three moments.
+
+  EXAMPLE: crank, connecting rod and piston (the joints stay closed exactly)
+    loop(1);
+    part("Crank", cylinder(30, 10).rotateX(90), { spin: { axis: "y", rpm: 60 } });
+    const pin = [0, 0, 25], top = [0, 0, 125];          // the rod's ends at rest, 100 mm apart
+    part("Piston", cylinder(20, 30).at(0, 0, 135), { motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
+    part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
+    joint("Rod", "Crank", pin);
+    joint("Rod", "Piston", top);
+
+  ROTOR HEADS: the hub spins. Each blade, with its cuff and pitch horn, is its own part ("Blade 1", "Blade 2", ...) that follows the hub and turns about its own feathering axis. The stationary swashplate tilts (cyclic) and slides up and down (collective), driven by sliders; the rotating swashplate follows it and spins with the hub. Each pitch link is link(lower, upper, where("Rotating swashplate", lower, t), where("Blade 1", upper, t)). Work each blade's pitch out from where its pitch link's lower end is, so the link reaches the horn: pitch = asin((height of the lower ball in the hub's frame - its rest height) / horn arm length). Declare joints at both ends of every pitch link.
 
 EXAMPLE
   title("Desk lamp");
@@ -152,6 +176,7 @@ HOW TO WORK
   3. Step 1: set_model with title(), the shared dimensions as constants at the top (and sliders for the main ones), and the first step's parts. Later steps: append_to_model with that step's code, reusing the constants so pieces line up.
   4. After each step call finish_step. It checks the step's parts exist and are solid and shows you just those parts against the rest. Look hard: fix anything floating, intersecting wrongly, mis-sized or crude with edit_model, then move on. Never skip finish_step, and finish every step.
   5. When all steps are done, screenshot the whole model from two or three views and fix what is still wrong.
+- Mechanisms (anything where parts drive each other: rotor heads, engines, linkages, landing gear, robot arms): use LINKED MOTION, declare a joint() at every connection, and finish only when every joint's max_gap_mm and every link's max_stretch_mm is under 1, there are no motion warnings, and screenshots at two or three moments look right. Make each moving piece its own part.
 - Model real pieces as separate named parts, not one blob: a hub, each clamp, each link, each damper. Detail is what makes it look real: bolts, fillets, lightening holes, chamfers, bearing races.
 - For changes to an existing model, prefer edit_model. If the model has an unfinished plan (get_model shows plan), continue it.
 - Build recognisable silhouettes from smooth blends of ellipsoids, capsules, tubes and revolves; add detail (windows, panels, bolts) with subtract and small shapes; use symmetric() for anything with left and right sides.
@@ -159,7 +184,7 @@ HOW TO WORK
 - If the user has selected a part, "this" and "it" mean that part.
 - When done, answer in one or two short sentences: what you made or changed. Do not paste the script.`;
 
-const server = new McpServer({ name: "3d-maker", version: "0.3.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "3d-maker", version: "0.4.0" }, { instructions: INSTRUCTIONS });
 
 const json = (v) => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (err) => ({ isError: true, content: [{ type: "text", text: String(err?.message ?? err) }] });
@@ -219,11 +244,12 @@ tool(
 
 tool(
   "screenshot",
-  "Render the model and return a PNG so you can see it. view: iso, top, bottom, front, back, left or right; omit it to use the user's current camera. part: frame just that part. parts: frame these parts and show the rest faintly.",
+  "Render the model and return a PNG so you can see it. at: pose moving parts at that many seconds into the motion. view: iso, top, bottom, front, back, left or right; omit it to use the user's current camera. part: frame just that part. parts: frame these parts and show the rest faintly.",
   {
     view: z.enum(["iso", "top", "bottom", "front", "back", "left", "right"]).optional(),
     part: z.string().optional(),
     parts: z.array(z.string()).optional(),
+    at: z.number().min(0).optional().describe("Seconds into the motion loop to pose the model at; default 0 (rest)."),
     width: z.number().int().min(256).max(2048).optional(),
     height: z.number().int().min(256).max(2048).optional(),
   },

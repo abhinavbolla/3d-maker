@@ -24,6 +24,7 @@ export function summarize(state) {
   }
   if (all) out.overall = { min: all.slice(0, 3).map(r1), max: all.slice(3).map(r1), size: [0, 1, 2].map((i) => r1(all[i + 3] - all[i])) };
   out.params = res.params.map(({ key, value, min, max }) => ({ key, value, min, max }));
+  if (res.motion) out.motion = { loop_seconds: res.motion.loop, joints: res.motion.joints, links: res.motion.links };
   if (res.warnings?.length) out.warnings = res.warnings;
   if (res.prints?.length) out.printed = res.prints;
   if (state.selected) out.selected_by_user = state.selected;
@@ -119,7 +120,7 @@ export function createCommands({ store, viewport, kernel }) {
       if (s.indexOf(old_text, at + 1) >= 0) throw new Error("old_text appears more than once; include more surrounding text.");
       return setScript(s.slice(0, at) + new_text + s.slice(at + old_text.length));
     },
-    screenshot: async ({ view, width, height, part, parts } = {}) => ({ png: viewport.screenshot({ view, width, height, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
+    screenshot: async ({ view, width, height, part, parts, at } = {}) => ({ png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async () => {
       const r = await kernel.exportSTL(store.state.result?.parts ?? []);
       let bin = "";

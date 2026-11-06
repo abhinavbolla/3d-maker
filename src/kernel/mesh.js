@@ -95,6 +95,9 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
     const count = kept.length / 3;
     if (!count) return EMPTY_MESH();
     if (c / 2 < minCell || level >= 14) break;
+    // A finer level has about 4x the cells, and closing the surface visits
+    // some neighbours too; stop while that still fits in maxCells.
+    if (count * 4 * 1.5 > maxCells) break;
     if (count * 4 > budget) {
       // Over budget, but keep going (up to a cap) while thin walls or blades
       // still slip between the grid corners.

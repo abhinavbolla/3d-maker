@@ -27,6 +27,7 @@ try {
       lastLine = line;
     },
   });
+  if (!reply.receipt) throw new Error("The window has no record of this run (it reloaded, or Claude never started).");
   const summary = await w("window.__3dmaker.summary()");
   for (const view of ["iso", "front", "top"]) {
     const shot = await h.command(w, "screenshot", { view, width: 1400, height: 1000 });
@@ -35,7 +36,7 @@ try {
   const stl = await h.stlIsClosed(w);
   writeFileSync(join(out, "model.js"), summary.script);
   writeFileSync(join(out, "result.json"), JSON.stringify({ prompt: text, seconds: Math.round((Date.now() - t) / 1000), reply, stl, summary: { ...summary, script: undefined } }, null, 1));
-  console.log(`\n${Math.round((Date.now() - t) / 1000)} s · ${summary.parts.length} parts · plan ${summary.plan ? `${summary.plan.done} of ${summary.plan.total}` : "none"} · STL ${stl.closed ? "closed" : "NOT closed"}`);
+  console.log(`\n${Math.round((Date.now() - t) / 1000)} s · ${summary.parts.length} parts · plan ${summary.plan ? `${summary.plan.done} of ${summary.plan.total}` : "none"} · STL ${stl.closed ? "closed" : "NOT closed"}${summary.motion?.joints?.length ? ` · ${summary.motion.joints.length} joints, worst gap ${Math.max(...summary.motion.joints.map((j) => j.max_gap_mm))} mm` : ""}`);
   console.log(`Claude: ${reply.text}\nReceipt: ${JSON.stringify(reply.receipt)}\nSaved in ${out}`);
 } catch (err) {
   console.error(err);

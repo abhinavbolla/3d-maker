@@ -85,12 +85,12 @@ export function createKernel() {
           mesh = await job({ type: "mesh", node: p.node, budget, normals: true }, MESH_TIMEOUT_MS, `Meshing part "${p.name}" took too long.`);
           cache.set(key, mesh);
         }
-        return { name: p.name, color: p.color, motion: p.motion, hidden: p.hidden, node: p.node, mesh };
+        return { name: p.name, color: p.color, motion: p.motion, follow: p.follow, frames: p.frames, hidden: p.hidden, node: p.node, mesh };
       }),
     );
     // Keep this build's meshes and a few recent ones (slider back-and-forth).
     for (const key of cache.keys()) if (!keep.has(key) && cache.size > keep.size + 60) cache.delete(key);
-    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, parts, ms: Math.round(performance.now() - t0), quality };
+    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, motion: r.motion, parts, ms: Math.round(performance.now() - t0), quality };
   }
 
   // One closed solid of every visible part, at export detail.

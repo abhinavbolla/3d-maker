@@ -19,7 +19,14 @@ self.onmessage = ({ data: job }) => {
       self.postMessage({ id: job.id, ok: true, result }, transfer);
     } else if (job.type === "stl") {
       const { f, box } = compile(job.node);
-      const m = meshSDF(f, box, { budget: job.budget });
+      // Never export a mesh with holes: if the detail is more than the mesher
+      // can close, try again coarser.
+      let m;
+      for (let budget = job.budget; ; budget = Math.floor(budget / 2)) {
+        m = meshSDF(f, box, { budget });
+        if (!m.incomplete && m.indices.length) break;
+        if (budget < 20000) throw new Error(m.indices.length ? "The model is too large to export as a closed mesh." : "There is nothing to export.");
+      }
       const bytes = toSTL([m]);
       self.postMessage({ id: job.id, ok: true, result: { bytes, triangles: m.indices.length / 3, bounds: meshBounds(m), volume: meshVolume(m), cellSize: m.cellSize } }, [bytes.buffer]);
     }

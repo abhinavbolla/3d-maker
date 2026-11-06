@@ -68,6 +68,26 @@ try {
   // A whole new model with none of the plan's parts drops the stale plan.
   await call("set_model", { script: 'part("Cube", box(20, 20, 20));' });
   check((await w("window.__3dmaker.plan()")) === null && (await w('document.getElementById("progress").hidden')), "a new, unrelated model clears the old plan");
+
+  // Linked motion: the crank from the docs plays, and screenshots at
+  // different moments show different poses.
+  const crank = await call("set_model", {
+    script: `loop(1);
+part("Crank", cylinder(30, 10).rotateX(90), { spin: { axis: "y", rpm: 60 } });
+const pin = [0, 0, 25], top = [0, 0, 125];
+part("Piston", cylinder(20, 30).at(0, 0, 135), { motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
+part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
+joint("Rod", "Crank", pin);
+joint("Rod", "Piston", top);`,
+  });
+  check(!crank.error && crank.result.motion?.joints.every((j) => j.max_gap_mm < 0.01), `the crank's joints stay closed (${JSON.stringify(crank.result?.motion?.joints?.map((j) => j.max_gap_mm))})`);
+  check(!(await w('document.getElementById("play").hidden')), "the Play/Pause button appears for a moving model");
+  const pngAt = async (at) => (await call("screenshot", { view: "front", at, width: 400, height: 400 })).result.png;
+  const [p0, p25, p100] = [await pngAt(0), await pngAt(0.25), await pngAt(1)];
+  check(p0 !== p25, "a screenshot a quarter of the way through the loop shows a different pose");
+  check(p0 === p100, "the loop comes back to where it started");
+  const apart = await call("set_model", { script: 'part("A", box(10, 10, 10), { spin: { rpm: 60 } }); part("B", box(10, 10, 10).at(30, 0, 0)); joint("A", "B", [30, 0, 0]);' });
+  check(apart.result?.warnings?.some((x) => /comes apart by up to 60 mm/.test(x)), "a joint that comes apart is reported to Claude");
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

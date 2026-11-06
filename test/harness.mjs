@@ -10,8 +10,10 @@ export const root = new URL("..", import.meta.url).pathname;
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Live reload is off, so editing the app's code while a test runs cannot
+// reload a window and lose a Claude run.
 export async function startHarness({ port = 5178 } = {}) {
-  const vite = await createServer({ root, configFile: join(root, "vite.config.js"), server: { port, strictPort: true }, logLevel: "warn" });
+  const vite = await createServer({ root, configFile: join(root, "vite.config.js"), server: { port, strictPort: true, hmr: false, watch: null }, logLevel: "warn" });
   await vite.listen();
   const profile = mkdtempSync(join(tmpdir(), "3d-maker-test-"));
   const chrome = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--window-size=1280,800", "about:blank"], { stdio: "ignore" });

@@ -22,7 +22,7 @@ npm start          # or the same app in your browser, at http://localhost:5173
 - Big or mechanical things (a helicopter, a rotor head, an engine) are built with a plan: Claude lists the sub-assemblies and their parts, then builds and checks them one at a time. A line above the prompt shows progress, like "5 of 20 done · now: Stationary swashplate". The app only lets a step count as done once all its parts exist and are solid.
 - Under Claude's reply, a grey line says what this window saw happen: whether the model changed, how many changes and looks, and any step that failed. It is counted by the app, not taken from Claude's words.
 - Click a part to select it. Its sliders appear in the top-right corner, and the prompt box now talks about that part ("make this longer").
-- Parts that spin or swing move in the view. Pause stops them.
+- Parts move in the view, and mechanisms work: a crank drives its rod and piston, a swashplate pitches rotor blades through their pitch links. Claude declares every joint (each pin, ball joint and rod end), and the app checks over the whole motion that no joint comes apart, so a mechanism that only looks right in one frame is caught. Pause stops the motion.
 - Drag to orbit, right-drag to pan, scroll to zoom, F to fit the view, Esc to deselect.
 - ⌘Z / ⇧⌘Z undo and redo every change, Claude's included. ⌘S saves, ⌘O opens, ⌘E exports an STL. The model is also autosaved.
 
@@ -36,7 +36,7 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
                      model script ──▶ kernel workers: run script, mesh parts ──▶ 3D view
 ```
 
-- **Models are short scripts.** Claude writes JavaScript in a small modelling language (`sphere`, `capsule`, `revolve`, `union(..., smooth)`, `.symmetric("y")`, `.radial(4)`, `part(...)`, `param(...)`). The full reference is the instructions in [mcp/server.mjs](mcp/server.mjs). Sliders are `param()` values, so a tweak re-runs the script and nothing downstream breaks.
+- **Models are short scripts.** Claude writes JavaScript in a small modelling language (`sphere`, `capsule`, `revolve`, `union(..., smooth)`, `.symmetric("y")`, `.radial(4)`, `part(...)`, `param(...)`). Motion is part of the script too: a part can `follow` another, move by any function of time (`turn`, `slide`, `link` for rigid rods, `where` to track a point on another part), and `joint` declares connections the app checks. The full reference is the instructions in [mcp/server.mjs](mcp/server.mjs). Sliders are `param()` values, so a tweak re-runs the script and nothing downstream breaks.
 - **Our own geometry kernel** ([src/kernel](src/kernel)). Shapes are signed distance fields: a function that says how far any point is from the surface. Joining, cutting, blending and hollowing are a line of math each and cannot fail. The mesher refines coarse to fine near the surface, uses dual contouring so sharp edges stay sharp, adds detail where parts are thin, and repairs pinched spots, so every mesh is closed.
 - **The prompt box** starts your own `claude -p` with this app's MCP server and only its tools allowed. The desktop app does this from Rust ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)); the browser version uses a small endpoint in the dev server ([vite.config.js](vite.config.js)). Follow-up prompts continue the same Claude conversation.
 - Each window has its own id. A Claude run started from a window drives only that window, even with several windows or browser tabs open. The bridge only accepts the app itself (checked by WebSocket origin) on localhost.
@@ -65,6 +65,7 @@ cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude C
 - No exact CAD surfaces: export is STL only (no STEP), and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where nothing fails.
 - Very fine detail on very large models (a 1 mm logo on a 10 m helicopter) is limited by mesh detail. The view uses lighter meshes than the export.
 - No dragging parts around in the view; changes are sliders or prompts.
+- Motion checks cover joints, not collisions: two moving parts passing through each other is not detected yet.
 - Packaging: the app runs from this folder. It finds the MCP server and Node here, so there is no installer, no signing and no real icon yet.
 - Running your own `claude -p` from an app is fine for your own use. Check Anthropic's terms before giving the app to others.
 

@@ -232,6 +232,7 @@ function renderAll() {
   const { result, selected } = store.state;
   if (result && result !== lastResult) {
     lastResult = result;
+    viewport.setLoop(result.motion?.loop);
     viewport.setParts(result.parts);
     viewport.fitIfNew();
   }
@@ -333,6 +334,7 @@ if (import.meta.env.DEV) {
     state: () => ({ script: store.state.doc.script, title: store.state.result?.title ?? "", parts: store.state.result?.parts.map((p) => p.name) ?? [], selected: store.state.selected, session: store.state.doc.session }),
     summary: () => commands.get_model({}),
     select: (name) => store.select(name),
+    setValue: (key, value) => store.setValue(key, value, { final: true }),
     exportSTL: () => commands.export_stl({}),
     call: (name, args = {}) => commands[name](args),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),

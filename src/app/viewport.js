@@ -87,7 +87,8 @@ export function createViewport(container, { onPick }) {
   let frame = 0;
   const timer = new THREE.Timer();
   let time = 0;
-  const moving = () => playing && [...parts.values()].some((p) => p.part.motion.length);
+  let loopSeconds = 4;
+  const moving = () => playing && [...parts.values()].some((p) => p.part.frames);
   function tick() {
     frame = 0;
     timer.update();
@@ -105,15 +106,30 @@ export function createViewport(container, { onPick }) {
   }
   orbit.addEventListener("change", render);
 
+  // Poses come from the kernel, sampled over the loop (60 per second); in
+  // between two samples, rotation is slerped and position interpolated.
+  const qa = new THREE.Quaternion();
+  const qb = new THREE.Quaternion();
+  const pa = new THREE.Vector3();
+  const pb = new THREE.Vector3();
+  const sc = new THREE.Vector3();
+  const ma = new THREE.Matrix4();
+  const mb = new THREE.Matrix4();
+  const setFrame = (m, f, i) => m.set(f[i], f[i + 1], f[i + 2], f[i + 3], f[i + 4], f[i + 5], f[i + 6], f[i + 7], f[i + 8], f[i + 9], f[i + 10], f[i + 11], 0, 0, 0, 1);
   function pose(t) {
     for (const { object, part } of parts.values()) {
-      object.matrix.identity();
-      for (const m of part.motion) {
-        const angle = m.type === "spin" ? (m.rpm / 60) * 2 * Math.PI * t : m.angle * DEG * Math.sin((2 * Math.PI * t) / m.seconds);
-        const axis = new THREE.Vector3(...m.axis).normalize();
-        const c = new THREE.Vector3(...m.center);
-        const r = new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, angle)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
-        object.matrix.premultiply(r);
+      const f = part.frames;
+      if (!f) {
+        object.matrix.identity();
+      } else {
+        const n = f.length / 12;
+        const x = (((t % loopSeconds) + loopSeconds) % loopSeconds) / loopSeconds * n;
+        const i = Math.floor(x) % n;
+        const j = (i + 1) % n;
+        const w = x - Math.floor(x);
+        setFrame(ma, f, i * 12).decompose(pa, qa, sc);
+        setFrame(mb, f, j * 12).decompose(pb, qb, sc);
+        object.matrix.compose(pa.lerp(pb, w), qa.slerp(qb, w), sc.set(1, 1, 1));
       }
       object.matrixWorldNeedsUpdate = true;
     }
@@ -274,10 +290,11 @@ export function createViewport(container, { onPick }) {
     if (!fitted && parts.size) fit();
   }
 
-  // A PNG from any standard view, at rest pose, without the selection tint.
+  // A PNG from any standard view, without the selection tint, posed at time
+  // `at` seconds into the motion loop (0 = rest).
   // parts: frame just these parts. ghost: show the other parts faintly, so
   // the framed ones stand out but you can still see what they attach to.
-  function screenshot({ view, width = 1024, height = 768, parts: only, ghost = false } = {}) {
+  function screenshot({ view, width = 1024, height = 768, parts: only, ghost = false, at = 0 } = {}) {
     const unknown = (only ?? []).filter((n) => !parts.has(n));
     if (unknown.length) throw new Error(`There is no part named ${unknown.map((n) => `"${n}"`).join(", ")}.`);
     const cam = camera.clone();
@@ -296,7 +313,7 @@ export function createViewport(container, { onPick }) {
     const was = selected;
     selected = null;
     highlight();
-    pose(0);
+    pose(at);
     content.updateMatrixWorld(true);
     renderer.setRenderTarget(target);
     renderer.render(scene, cam);
@@ -304,6 +321,7 @@ export function createViewport(container, { onPick }) {
     renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
     renderer.setRenderTarget(null);
     target.dispose();
+    pose(time);
     for (const [m, transparent, opacity, depthWrite] of ghosted) Object.assign(m, { transparent, opacity, depthWrite, needsUpdate: true });
     selected = was;
     highlight();
@@ -332,7 +350,10 @@ export function createViewport(container, { onPick }) {
     fitIfNew,
     screenshot,
     setPlaying,
-    hasMotion: () => [...parts.values()].some((p) => p.part.motion.length),
+    hasMotion: () => [...parts.values()].some((p) => p.part.frames),
+    setLoop(seconds) {
+      loopSeconds = seconds > 0 ? seconds : 4;
+    },
     isPlaying: () => playing,
     screenPosition(name) {
       const box = modelBox(name);

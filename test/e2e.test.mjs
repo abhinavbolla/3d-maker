@@ -8,7 +8,8 @@
 //   - another open window was not touched
 //   - a bigger model is built with a plan, every step finished, and every
 //     part the plan names exists
-// Uses your Claude plan (three prompts, usually 3-8 minutes).
+//   - a mechanism declares its joints and they stay together as it moves
+// Uses your Claude plan (four prompts, usually 5-12 minutes).
 // Usage: npm run test:e2e   (needs Google Chrome; uses port 5178)
 import { startHarness, checks } from "./harness.mjs";
 
@@ -77,6 +78,22 @@ try {
   check(s.parts.some((p) => p.motion?.length), "something spins");
   const stl3 = await h.stlIsClosed(b);
   check(stl3.closed, `the fan's STL is a closed mesh (${stl3.triangles} triangles)`);
+
+  // ---- 4: a mechanism whose parts drive each other ----
+  const c = await h.openWindow();
+  console.log("prompt 4 (window C)…");
+  t = Date.now();
+  const r4 = await h.prompt(c, "A single-cylinder engine cutaway: crankshaft with a counterweight, connecting rod and piston inside a see-through-sized cylinder. The crank turns and drives the rod and piston.", { timeoutMs: 15 * 60 * 1000 });
+  console.log(`  Claude (${secs(t)} s): ${r4.text}\n  receipt: ${JSON.stringify(r4.receipt)}`);
+  s = await c("window.__3dmaker.summary()");
+  const joints = s.motion?.joints ?? [];
+  check(joints.length >= 2, `it declared the joints (${joints.map((j) => `${j.a}-${j.b}`).join(", ") || "none"})`);
+  check(joints.length > 0 && joints.every((j) => j.max_gap_mm < 1), `every joint stays together over the loop (max gaps: ${joints.map((j) => j.max_gap_mm).join(", ")} mm)`);
+  const links = s.motion?.links ?? [];
+  check(links.every((l) => l.max_stretch_mm < 1), `no link stretches (${links.map((l) => `${l.part} ${l.max_stretch_mm} mm`).join(", ") || "no links"})`);
+  check(!(s.warnings ?? []).some((x) => /joint|link\(\)/.test(x)), "no motion warnings are left");
+  const movers = s.parts.filter((p) => p.motion?.length).length;
+  check(movers >= 3, `crank, rod and piston all move (${movers} moving parts)`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

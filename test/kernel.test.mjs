@@ -1,8 +1,8 @@
 // Kernel tests: exact volumes for simple shapes, closed meshes for thousands
 // of random shapes, the example scripts, and script error messages.
 // Usage: node test/kernel.test.mjs
-import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { compile } from "../src/kernel/sdf.js";
 import { meshSDF, meshVolume, openEdges, toSTL } from "../src/kernel/mesh.js";
 import { runScript } from "../src/kernel/script.js";
@@ -102,6 +102,16 @@ test("random shapes always give closed meshes", () => {
   console.log(`    ${count} meshes`);
 });
 
+test("a cell cap never gives an empty or open mesh", () => {
+  // Many thin rings: the detail search wants far more cells than allowed.
+  const rings = { t: "union", c: Array.from({ length: 40 }, (_, i) => ({ t: "move", v: [(i % 8) * 30, Math.floor(i / 8) * 30, 0], c: { t: "torus", R: 12, r: 0.4 } })) };
+  const { f, box } = compile(rings);
+  const m = meshSDF(f, box, { budget: 400000, maxCells: 200000 });
+  assert.ok(m.indices.length > 0, "mesh is empty");
+  assert.equal(m.incomplete, false);
+  assert.equal(openEdges(m), 0);
+});
+
 test("thin parts are not lost", () => {
   // A 50 mm thick blade, 5 m long: thinner than the first grid cells.
   const m = mesh({ t: "box", s: [5000, 300, 50] }, 6000);
@@ -136,6 +146,79 @@ test("slider values override defaults and are clamped", () => {
   assert.deepEqual(runScript(src, { "Ball / Radius": 15 }).prints, ["15"]);
   assert.deepEqual(runScript(src, { "Ball / Radius": 99 }).prints, ["20"]);
   assert.deepEqual(runScript(src).prints, ["10"]);
+});
+
+test("linked motion: the documented crank keeps its joints closed", () => {
+  // Same script as the example in mcp/server.mjs.
+  const src = `loop(1);
+part("Crank", cylinder(30, 10).rotateX(90), { spin: { axis: "y", rpm: 60 } });
+const pin = [0, 0, 25], top = [0, 0, 125];
+part("Piston", cylinder(20, 30).at(0, 0, 135), { motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
+part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
+joint("Rod", "Crank", pin);
+joint("Rod", "Piston", top);`;
+  const doc = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8");
+  for (const line of src.split("\n")) assert.ok(doc.includes(line.trim()), `the documented example has: ${line}`);
+  const r = runScript(src);
+  assert.equal(r.error, undefined, r.error);
+  assert.equal(r.motion.loop, 1);
+  assert.equal(r.motion.frames, 60);
+  for (const j of r.motion.joints) assert.ok(j.max_gap_mm < 0.01, `${j.a}-${j.b} opens by ${j.max_gap_mm} mm`);
+  assert.deepEqual(r.warnings, []);
+  assert.ok(r.motion.links[0].max_stretch_mm < 0.01, "the rod never stretches");
+  // The piston only moves up and down, between 100 - 25 and 100 + 25 above the pin's centre.
+  const piston = r.parts.find((p) => p.name === "Piston").frames;
+  const zs = [];
+  for (let i = 0; i < 60; i++) {
+    assert.ok(Math.abs(piston[i * 12 + 3]) < 1e-6 && Math.abs(piston[i * 12 + 7]) < 1e-6, "piston stays on its axis");
+    zs.push(piston[i * 12 + 11]);
+  }
+  assert.ok(Math.abs(Math.max(...zs) - 0) < 0.01 && Math.abs(Math.min(...zs) - -50) < 0.5, `piston stroke ${Math.min(...zs)}..${Math.max(...zs)}`);
+});
+
+test("Claude's rotor head: every joint holds and it exports closed", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"));
+  assert.equal(r.error, undefined, r.error);
+  assert.equal(r.parts.length, 47);
+  assert.equal(r.motion.joints.length, 29);
+  for (const j of r.motion.joints) assert.ok(j.max_gap_mm < 1, `${j.a}-${j.b} opens by ${j.max_gap_mm} mm`);
+  assert.deepEqual(r.warnings, []);
+  const { f, box } = compile({ t: "union", c: r.parts.map((p) => p.node) });
+  const m = meshSDF(f, box, { budget: 120000 });
+  assert.equal(m.incomplete, false);
+  assert.equal(openEdges(m), 0);
+});
+
+test("linked motion: follow, loop, errors and joint warnings", () => {
+  // A follower is moved by its own motion first, then by its parent's.
+  const r = runScript(`loop(4); part("Hub", sphere(5), { spin: { rpm: 15 } }); part("Blade", box(100, 10, 2).at(60, 0, 0), { follow: "Hub", motion: t => turn(10, "x") }); part("Base", box(10, 10, 10));`);
+  assert.equal(r.error, undefined, r.error);
+  const blade = r.parts.find((p) => p.name === "Blade").frames;
+  const quarter = 60; // 1 s of 4 s = a quarter turn at 15 rpm
+  const at = (f, i, p) => [0, 1, 2].map((k) => f[i * 12 + k * 4] * p[0] + f[i * 12 + k * 4 + 1] * p[1] + f[i * 12 + k * 4 + 2] * p[2] + f[i * 12 + k * 4 + 3]);
+  const tip = at(blade, quarter, [110, 0, 0]);
+  assert.ok(Math.abs(tip[0]) < 1e-3 && Math.abs(tip[1] - 110) < 1e-3, `the blade tip turned with the hub: ${tip}`);
+  assert.equal(r.parts.find((p) => p.name === "Base").frames, null, "a part that never moves has no frames");
+  assert.equal(runScript(`part("A", box(1, 1, 1), { spin: { rpm: 45 } });`).motion.loop, 4, "45 rpm completes whole turns in 4 s");
+  assert.equal(runScript(`part("A", box(1, 1, 1));`).motion, null);
+
+  assert.equal(runScript(`part("A", box(1, 1, 1));
+part("B", box(1, 1, 1), { motion: t => nope(t) });`).error, 'Line 2: in the motion of part "B": nope is not defined');
+  assert.match(runScript(`part("A", box(1, 1, 1), { motion: t => 5 });`).error, /must return a pose/);
+  assert.match(runScript(`part("A", box(1, 1, 1), { follow: "B" }); part("B", box(1, 1, 1), { follow: "A" });`).error, /follow each other in a circle/);
+  assert.match(runScript(`part("A", box(1, 1, 1), { follow: "Nope" });`).error, /no part with that name/);
+  assert.match(runScript(`part("A", box(1, 1, 1)); joint("A", "Nope", [0, 0, 0]);`).error, /no part with that name/);
+  assert.match(runScript(`part("A", box(1, 1, 1)); where("A", [0, 0, 0], 0);`).error, /inside a part's motion/);
+  const apart = runScript(`part("A", box(1, 1, 1), { spin: { rpm: 60 } }); part("B", box(1, 1, 1).at(10, 0, 0)); joint("A", "B", [10, 0, 0]);`);
+  assert.equal(apart.motion.joints[0].max_gap_mm, 20);
+  // Without any joint(), a stretched link is still caught, and the missing joints are pointed out.
+  const loose = runScript(`part("Crank", box(1, 1, 1), { spin: { axis: "y", rpm: 60 } });
+const pin = [0, 0, 25], top = [0, 0, 125];
+part("Rod", capsule(pin, top, 5), { motion: t => link(pin, top, where("Crank", pin, t), top) });`);
+  assert.equal(loose.motion.links[0].part, "Rod");
+  assert.ok(loose.motion.links[0].max_stretch_mm > 40, `stretch ${loose.motion.links[0].max_stretch_mm}`);
+  assert.ok(loose.warnings.some((w) => /comes off one end/.test(w)) && loose.warnings.some((w) => /no joint\(\) is declared/.test(w)), loose.warnings.join("; "));
+  assert.match(apart.warnings[0], /comes apart by up to 20 mm/);
 });
 
 console.log(`${passed} tests passed`);

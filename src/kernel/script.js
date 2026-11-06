@@ -2,11 +2,13 @@
 // below and declares named parts and adjustable values. The result is data
 // (JSON shape trees per part), so it can be meshed in parallel and cached.
 import { compile, isEmptyBox } from "./sdf.js";
+import { makePoseApi, sampleMotion, defaultLoop } from "./motion.js";
 
 export const PALETTE = ["#9aa3ad", "#c9cdd2", "#5b6670", "#b8483e", "#d9a441", "#4f7cac", "#6b8f5e", "#2f3338"];
 const AXES = { x: 0, y: 1, z: 2 };
 
 class ScriptError extends Error {}
+class MotionError extends Error {}
 const fail = (msg) => {
   throw new ScriptError(msg);
 };
@@ -188,7 +190,10 @@ function intersect(...args) {
   return new Shape({ t: "intersect", c: nodes, k });
 }
 
-const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "union", "subtract", "intersect", "part", "param", "title", "print"];
+const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
+const DEG = Math.PI / 180;
+// A joint may open by this much (mm) over the loop before it is reported.
+export const JOINT_TOLERANCE_MM = 1;
 // Globals a model script has no business touching inside the worker.
 const BLOCKED = ["self", "globalThis", "window", "fetch", "importScripts", "XMLHttpRequest", "WebSocket", "postMessage", "close", "indexedDB", "caches", "Worker", "Function"];
 
@@ -215,7 +220,22 @@ export function runScript(source, values = {}) {
   const parts = [];
   const params = [];
   const prints = [];
+  const joints = [];
   let modelTitle = "";
+  let loopSeconds = null;
+  let sampler = null; // set once the script has run, so where() works inside motion
+  let movingPart = null; // whose motion function is running
+  const stretch = new Map(); // part -> largest link stretch, mm
+  let usesWhere = false;
+  const poses = makePoseApi({
+    num,
+    vec,
+    fail,
+    what,
+    onLink(d) {
+      if (movingPart) stretch.set(movingPart, Math.max(stretch.get(movingPart) ?? 0, d));
+    },
+  });
 
   function part(name, shape, opts = {}) {
     if (typeof name !== "string" || !name.trim()) fail(`part needs a name as its first argument, got ${what(name)}`);
@@ -224,16 +244,42 @@ export function runScript(source, values = {}) {
     if (opts === null || typeof opts !== "object") fail(`part "${name}" options must be an object`);
     let color = opts.color ?? PALETTE[parts.length % PALETTE.length];
     if (typeof color !== "string" || !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) fail(`part "${name}" color must look like "#7a8590", got ${what(color)}`);
-    const motion = [];
+    const motion = []; // a description, for get_model
+    const own = []; // t -> pose matrix, applied in order
     if (opts.spin) {
       const s = opts.spin;
-      motion.push({ type: "spin", axis: vec(s.axis ?? [0, 0, 1], `part "${name}" spin axis`), center: vec(s.center ?? [0, 0, 0], `part "${name}" spin center`), rpm: num(s.rpm ?? 60, `part "${name}" spin rpm`) });
+      const m = { type: "spin", axis: poses.axisVec(s.axis ?? "z", `part "${name}" spin axis`), center: vec(s.center ?? [0, 0, 0], `part "${name}" spin center`), rpm: num(s.rpm ?? 60, `part "${name}" spin rpm`) };
+      motion.push(m);
+      own.push((t) => poses.turn(m.rpm * 6 * t, m.axis, m.center).m);
     }
     if (opts.swing) {
       const s = opts.swing;
-      motion.push({ type: "swing", axis: vec(s.axis ?? [0, 0, 1], `part "${name}" swing axis`), center: vec(s.center ?? [0, 0, 0], `part "${name}" swing center`), angle: num(s.angle ?? 30, `part "${name}" swing angle`), seconds: num(s.seconds ?? 2, `part "${name}" swing seconds`, { positive: true }) });
+      const m = { type: "swing", axis: poses.axisVec(s.axis ?? "z", `part "${name}" swing axis`), center: vec(s.center ?? [0, 0, 0], `part "${name}" swing center`), angle: num(s.angle ?? 30, `part "${name}" swing angle`), seconds: num(s.seconds ?? 2, `part "${name}" swing seconds`, { positive: true }) };
+      motion.push(m);
+      own.push((t) => poses.turn(m.angle * Math.sin((2 * Math.PI * t) / m.seconds), m.axis, m.center).m);
     }
-    parts.push({ name, color, motion, node, hidden: opts.hidden === true });
+    if (opts.motion !== undefined) {
+      if (typeof opts.motion !== "function") fail(`part "${name}" motion must be a function of time, like t => turn(t * 90, "z"), got ${what(opts.motion)}`);
+      const f = opts.motion;
+      motion.push({ type: "custom" });
+      own.push((t) => {
+        const was = movingPart;
+        movingPart = name;
+        try {
+          return poses.isPose(f(t), `part "${name}" motion`);
+        } finally {
+          movingPart = was;
+        }
+      });
+    }
+    let follow = null;
+    if (opts.follow !== undefined) {
+      if (typeof opts.follow !== "string" || !opts.follow) fail(`part "${name}" follow must be the name of another part, got ${what(opts.follow)}`);
+      if (opts.follow === name) fail(`part "${name}" cannot follow itself`);
+      follow = opts.follow;
+      motion.push({ type: "follow", part: follow });
+    }
+    parts.push({ name, color, motion, own, follow, node, hidden: opts.hidden === true });
   }
 
   function param(label, value, opts = {}) {
@@ -253,9 +299,25 @@ export function runScript(source, values = {}) {
   }
 
   const title = (t) => (modelTitle = String(t));
+  // Where a point, given at rest on a part, is at time t (inside motion functions).
+  function where(partName, point, t) {
+    usesWhere = true;
+    if (!sampler) fail("where() works inside a part's motion function, like motion: t => link(a, b, where(\"Arm\", a, t), b)");
+    if (typeof partName !== "string") fail(`where() needs a part name first, got ${what(partName)}`);
+    const p = vec(point, "where point");
+    const m = sampler.world(partName, num(t, "where time"));
+    return [m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3], m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7], m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11]];
+  }
+  // Declares that a point (at rest) belongs to both parts; the app checks it
+  // stays together over the whole loop.
+  function joint(a, b, point) {
+    if (typeof a !== "string" || typeof b !== "string") fail("joint needs two part names and a point: joint(\"Link\", \"Horn\", [x, y, z])");
+    joints.push({ a, b, point: vec(point, `joint "${a}"-"${b}" point`) });
+  }
+  const loop = (seconds) => (loopSeconds = num(seconds, "loop seconds", { positive: true }));
   const print = (...a) => prints.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 
-  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, union, subtract, intersect, part, param, title, print };
+  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
   try {
     const fn = new Function(...API_NAMES, ...BLOCKED, `"use strict";\n${source}\n//# sourceURL=model.js`);
     fn(...API_NAMES.map((n) => api[n]), ...BLOCKED.map(() => undefined));
@@ -266,6 +328,30 @@ export function runScript(source, values = {}) {
     return { error: `${where}${err?.message ?? err}`, params, prints };
   }
   if (!parts.length) return { error: 'The script made no parts. Call part("Name", shape) for each visible piece.', params, prints };
+
+  // ---- motion: sample every moving part over the loop, check joints ----
+  for (const j of joints) for (const n of [j.a, j.b]) if (!parts.some((p) => p.name === n)) return { error: `joint names part "${n}", but there is no part with that name`, params, prints };
+  const loopLen = loopSeconds ?? defaultLoop(parts.flatMap((p) => p.motion.filter((m) => m.type === "spin" || m.type === "swing")));
+  let sampled;
+  try {
+    sampled = sampleMotion(parts, {
+      loop: loopLen,
+      joints,
+      bind: (world) => (sampler = { world }),
+      onError(fn, partName) {
+        try {
+          return fn();
+        } catch (err) {
+          if (err instanceof MotionError) throw err;
+          const line = scriptLine(err);
+          throw new MotionError(`${line != null ? `Line ${line - 1}: ` : ""}in the motion of part "${partName}": ${err?.message ?? err}`);
+        }
+      },
+    });
+  } catch (err) {
+    return { error: String(err?.message ?? err), params, prints };
+  }
+  const jointReport = joints.map((j, k) => ({ a: j.a, b: j.b, point: j.point, max_gap_mm: Math.round(sampled.gaps[k] * 100) / 100 }));
 
   const warnings = [];
   const unknownPart = params.filter((p) => p.part && !parts.some((q) => q.name === p.part));
@@ -279,7 +365,17 @@ export function runScript(source, values = {}) {
     if (isEmptyBox(p.box)) warnings.push(`part "${p.name}" is empty (everything was cut away or intersected to nothing)`);
     p.hash = JSON.stringify(p.node);
   }
-  return { title: modelTitle, parts, params, prints, warnings };
+  const links = [...stretch].map(([part, d]) => ({ part, max_stretch_mm: Math.round(d * 100) / 100 }));
+  for (const l of links) {
+    if (l.max_stretch_mm > JOINT_TOLERANCE_MM) warnings.push(`part "${l.part}" is a link() whose ends move up to ${l.max_stretch_mm} mm further apart or closer than its length, so it comes off one end during the motion; work the motions out so both ends stay its length apart`);
+  }
+  if ((links.length || usesWhere) && !joints.length) warnings.push("parts are linked with link() or where(), but no joint() is declared. Declare a joint at every pin, ball joint and rod end so the app can check the mechanism stays together.");
+  for (const j of jointReport) {
+    if (j.max_gap_mm > JOINT_TOLERANCE_MM) warnings.push(`joint between "${j.a}" and "${j.b}" at [${j.point.join(", ")}] comes apart by up to ${j.max_gap_mm} mm during the motion; make the parts' motions agree (link() and where() keep linked parts together)`);
+  }
+  const out = parts.map(({ own, ...p }) => ({ ...p, frames: sampled.frames.get(p.name) ?? null }));
+  const motion = sampled.count ? { loop: loopLen, frames: sampled.count, joints: jointReport, links } : null;
+  return { title: modelTitle, parts: out, params, prints, warnings, motion };
 }
 
 function niceStep(range) {
