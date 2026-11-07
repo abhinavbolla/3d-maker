@@ -4,6 +4,8 @@
 // changes faster than distance (|grad f| <= 1), plus a bounding box.
 // Units are millimetres, +Z is up, angles are degrees.
 
+import { convexHullPlanes } from "./hull.js";
+
 const DEG = Math.PI / 180;
 const { abs, min, max, sqrt, hypot, sign, cos, sin } = Math;
 
@@ -178,6 +180,52 @@ const COMPILERS2 = {
   poly2({ pts }) {
     const b = pts.reduce((q, [x, y]) => [min(q[0], x), min(q[1], y), max(q[2], x), max(q[3], y)], EMPTY2);
     return { box: b, f: outline2D(pts) };
+  },
+  // Lines drawn with a round pen of width w: text, and open paths .stroke()d.
+  strokes2({ lines, w }) {
+    const segs = [];
+    for (const l of lines) {
+      if (l.length === 1) segs.push([l[0], l[0]]);
+      for (let i = 1; i < l.length; i++) segs.push([l[i - 1], l[i]]);
+    }
+    const n = segs.length;
+    const ax = new Float64Array(n * 2), bx = new Float64Array(n * 2);
+    segs.forEach(([a, b], i) => {
+      ax[i * 2] = a[0];
+      ax[i * 2 + 1] = a[1];
+      bx[i * 2] = b[0];
+      bx[i * 2 + 1] = b[1];
+    });
+    const { lo, hi, kids, start, count, order } = buildTree(ax, bx, 2);
+    const stack = new Int32Array(256);
+    const all = segs.flat();
+    const box = [min(...all.map((p) => p[0])) - w / 2, min(...all.map((p) => p[1])) - w / 2, max(...all.map((p) => p[0])) + w / 2, max(...all.map((p) => p[1])) + w / 2];
+    return {
+      box,
+      f: (px, py) => {
+        let best = Infinity, sp = 0;
+        stack[sp++] = 0;
+        while (sp) {
+          const node = stack[--sp];
+          const dx = max(lo[node * 2] - px, px - hi[node * 2], 0);
+          const dy = max(lo[node * 2 + 1] - py, py - hi[node * 2 + 1], 0);
+          if (dx * dx + dy * dy >= best) continue;
+          if (kids[node * 2] < 0) {
+            for (let k = start[node], e = k + count[node]; k < e; k++) {
+              const i = order[k];
+              const x0 = ax[i * 2], y0 = ax[i * 2 + 1], ex = bx[i * 2] - x0, ey = bx[i * 2 + 1] - y0;
+              const wx = px - x0, wy = py - y0;
+              const t = min(max((wx * ex + wy * ey) / (ex * ex + ey * ey || 1), 0), 1);
+              best = min(best, (wx - ex * t) ** 2 + (wy - ey * t) ** 2);
+            }
+          } else {
+            stack[sp++] = kids[node * 2];
+            stack[sp++] = kids[node * 2 + 1];
+          }
+        }
+        return sqrt(best) - w / 2;
+      },
+    };
   },
   union2({ c, k = 0 }) {
     const kids = c.map(compile2).filter((q) => !isEmpty2(q.box));
@@ -476,6 +524,283 @@ function thread3({ r, p, z0, z1, left = false, chamfer = [false, false], plain =
   };
 }
 
+// ---- deformations: twist, taper and bend ----
+// Each maps a world point back into the shape's own frame. That mapping
+// stretches distances by at most L, so the result is divided by L to stay a
+// safe distance.
+const zRange = (b) => [b[2], b[5]];
+const xyRadius = (b) => Math.max(...[[b[0], b[1]], [b[3], b[1]], [b[0], b[4]], [b[3], b[4]]].map(([x, y]) => hypot(x, y)));
+
+// Turns the shape about Z by deg degrees from its bottom (unturned) to its top.
+function twist3({ deg, c }) {
+  const C = compile(c);
+  if (isEmpty(C.box)) return C;
+  const [z0, z1] = zRange(C.box);
+  const k = (deg * DEG) / (z1 - z0 || 1);
+  const R = xyRadius(C.box);
+  const L = sqrt(1 + (k * R) ** 2);
+  return {
+    box: [-R, -R, z0, R, R, z1],
+    f: (x, y, z) => {
+      const a = -k * (min(max(z, z0), z1) - z0);
+      const ca = cos(a), sa = sin(a);
+      return C.f(ca * x - sa * y, sa * x + ca * y, z) / L;
+    },
+  };
+}
+
+// Scales the shape across X and Y (about the Z axis) from 1 at its bottom to
+// s = [sx, sy] at its top.
+function taper3({ s: [sx, sy], c }) {
+  const C = compile(c);
+  if (isEmpty(C.box)) return C;
+  const [z0, z1] = zRange(C.box);
+  const h = z1 - z0 || 1;
+  const gx = max(1, sx), gy = max(1, sy);
+  const b = C.box;
+  const box = [b[0] * gx, b[1] * gy, z0, b[3] * gx, b[4] * gy, z1];
+  const X = max(abs(box[0]), abs(box[3])), Y = max(abs(box[1]), abs(box[4]));
+  const mx = min(1, sx), my = min(1, sy);
+  const dx = (sx - 1) / h, dy = (sy - 1) / h;
+  // |J| <= |diagonal part| + |the column from scale changing with height|.
+  const L = max(1 / mx, 1 / my, 1) + hypot((X * dx) / (mx * mx), (Y * dy) / (my * my));
+  return {
+    box,
+    f: (x, y, z) => {
+      const t = (min(max(z, z0), z1) - z0) / h;
+      return C.f(x / (1 + (sx - 1) * t), y / (1 + (sy - 1) * t), z) / L;
+    },
+  };
+}
+
+// Bends the shape's X axis onto a circle of radius |r| in the XZ plane,
+// through the origin: r > 0 curls the ends up (+Z), r < 0 down. Lengths
+// along the X axis (z = 0) are kept; the side towards the centre is squeezed.
+function bend3({ r, c }) {
+  const C = compile(c);
+  if (isEmpty(C.box)) return C;
+  const b = C.box;
+  const s = sign(r), A = abs(r);
+  // Distance from the circle's centre of the shape's inner and outer sides.
+  const inner = s > 0 ? A - b[5] : A + b[2];
+  const outer = s > 0 ? A - b[2] : A + b[5];
+  // Points just inside the inner side are squeezed most; allow a margin there.
+  const L = max(1, A / max(inner - 0.25 * (outer - inner), inner / 2));
+  const t0 = b[0] / A, t1 = b[3] / A;
+  // Box of the bent shape: the sector between the two radii and angles.
+  const pts = [];
+  const angles = [t0, t1, ...[-1, -0.5, 0, 0.5, 1].map((k) => k * Math.PI).filter((t) => t > t0 && t < t1)];
+  for (const t of angles)
+    for (const rho of [inner, outer]) pts.push([rho * sin(t), s * (A - rho * cos(t))]);
+  const box = [min(...pts.map((p) => p[0])), b[1], min(...pts.map((p) => p[1])), max(...pts.map((p) => p[0])), b[4], max(...pts.map((p) => p[1]))];
+  return {
+    box,
+    f: (x, y, z) => {
+      const q = A - s * z;
+      const rho = hypot(x, q);
+      return C.f(A * Math.atan2(x, q), y, s * (A - rho)) / L;
+    },
+  };
+}
+
+// ---- lattices: periodic infill, kept inside a shape ----
+// cell: the repeat (mm); wall: wall or strut thickness (mm).
+// Gyroid and diamond are smooth triply periodic surfaces thickened to wall;
+// grid is square struts along X, Y and Z; honeycomb is hexagonal cells
+// standing along Z.
+const TPMS = {
+  gyroid: {
+    g: (x, y, z) => sin(x) * cos(y) + sin(y) * cos(z) + sin(z) * cos(x),
+    d: (x, y, z) => [cos(x) * cos(y) - sin(z) * sin(x), cos(y) * cos(z) - sin(x) * sin(y), cos(z) * cos(x) - sin(y) * sin(z)],
+  },
+  diamond: {
+    g: (x, y, z) => sin(x) * sin(y) * sin(z) + sin(x) * cos(y) * cos(z) + cos(x) * sin(y) * cos(z) + cos(x) * cos(y) * sin(z),
+    d: (x, y, z) => [
+      cos(x) * sin(y) * sin(z) + cos(x) * cos(y) * cos(z) - sin(x) * sin(y) * cos(z) - sin(x) * cos(y) * sin(z),
+      sin(x) * cos(y) * sin(z) - sin(x) * sin(y) * cos(z) + cos(x) * cos(y) * cos(z) - cos(x) * sin(y) * sin(z),
+      sin(x) * sin(y) * cos(z) - sin(x) * cos(y) * sin(z) - cos(x) * sin(y) * sin(z) + cos(x) * cos(y) * cos(z),
+    ],
+  },
+};
+// Largest gradient and second derivative of each surface (unit period 2π),
+// found by sampling, with a margin.
+for (const t of Object.values(TPMS)) {
+  let G = 0, H = 0;
+  const e = 1e-4;
+  for (let i = 0; i < 20000; i++) {
+    const p = [0, 1, 2].map((k) => Math.sin(i * (k + 1.37) * 12.9898) * 43758.5453 % (2 * Math.PI));
+    const d = t.d(...p);
+    const gm = hypot(...d);
+    G = max(G, gm);
+    for (let k = 0; k < 3; k++) {
+      const q = [...p];
+      q[k] += e;
+      H = max(H, abs(hypot(...t.d(...q)) - gm) / e);
+    }
+  }
+  t.G = G * 1.1;
+  t.H = H * 1.6;
+}
+function latticeField(kind, cell, wall) {
+  const w = wall / 2;
+  if (kind === "grid") {
+    // Square struts of side wall along each axis, through the cell corners.
+    const fold = (v) => v - cell * Math.round(v / cell);
+    const bar = (a, b) => {
+      const qa = abs(a) - w, qb = abs(b) - w;
+      return hypot(max(qa, 0), max(qb, 0)) + min(max(qa, qb), 0);
+    };
+    return (x, y, z) => {
+      const u = fold(x), v = fold(y), t = fold(z);
+      return min(bar(v, t), bar(u, t), bar(u, v));
+    };
+  }
+  if (kind === "honeycomb") {
+    // Flat-topped hexagonal cells, cell across the flats (a from centre to
+    // corner), walls standing along Z. hexNorm is the distance out to a
+    // hexagon's flats.
+    const a = cell / Math.sqrt(3);
+    const hexNorm = (x, y) => max(abs(y), abs(x * 0.8660254 + y * 0.5), abs(x * 0.8660254 - y * 0.5));
+    return (x, y) => {
+      // Axial coordinates of the nearest cell centre, rounded in cube coordinates.
+      const qf = (x * (2 / 3)) / a, rf = (-x / 3 + (Math.sqrt(3) / 3) * y) / a;
+      let q = Math.round(qf), r = Math.round(rf), sr = Math.round(-qf - rf);
+      const dq = abs(q - qf), dr = abs(r - rf), ds = abs(sr + qf + rf);
+      if (dq > dr && dq > ds) q = -r - sr;
+      else if (dr > ds) r = -q - sr;
+      const cx = a * 1.5 * q, cy = a * Math.sqrt(3) * (r + q / 2);
+      return cell / 2 - w - hexNorm(x - cx, y - cy);
+    };
+  }
+  const T = TPMS[kind];
+  const k = (2 * Math.PI) / cell;
+  // Distance to the surface g = 0: follow Newton steps onto it and measure
+  // straight back, so the wall's faces are w from the surface. Away from
+  // the wall a bound that never changes faster than distance takes over, so
+  // empty space is never mistaken for far from the surface.
+  const L = k * (T.G + w * k * T.H);
+  return (x, y, z) => {
+    const p0 = x * k, p1 = y * k, p2 = z * k;
+    const g0 = T.g(p0, p1, p2), d0 = T.d(p0, p1, p2);
+    const safe = (abs(g0) - w * k * hypot(...d0)) / L;
+    if (safe > w / 2) return safe;
+    let q0 = p0, q1 = p1, q2 = p2, g = g0, d = d0;
+    for (let i = 0; i < 4; i++) {
+      const st = g / (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] || 1e-12);
+      (q0 -= st * d[0]), (q1 -= st * d[1]), (q2 -= st * d[2]);
+      g = T.g(q0, q1, q2);
+      d = T.d(q0, q1, q2);
+    }
+    // First-order distance; the projection is trusted only when it landed on
+    // the surface close to that (from a saddle it can run off to another sheet).
+    const first = abs(g0) / (k * (hypot(...d0) || 1e-12));
+    let dist = hypot(q0 - p0, q1 - p1, q2 - p2) / k;
+    if (!(abs(g) < 1e-3 && dist < 1.6 * first + 0.05 * w && dist > first / 1.6 - 0.05 * w)) dist = first;
+    const n = dist - w;
+    return n < 0 ? n : min(n, safe);
+  };
+}
+function lattice3({ kind, cell, wall, c }) {
+  const C = compile(c);
+  const g = latticeField(kind, cell, wall);
+  return { box: C.box, f: (x, y, z) => max(C.f(x, y, z), g(x, y, z)) };
+}
+
+// ---- convex hull ----
+// Directions spread evenly over the sphere (a Fibonacci spiral).
+export function hullDirections(n) {
+  const out = [];
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const z = 1 - (2 * (i + 0.5)) / n, r = sqrt(1 - z * z);
+    out.push([r * cos(ga * i), r * sin(ga * i), z]);
+  }
+  return out;
+}
+// pts: points on the shapes that reach furthest in many directions. The
+// hull's face planes come from their convex hull; each face plane's
+// distance is never more than the distance to the hull, so the largest is
+// safe (and exact inside and over the faces).
+const planesCache = new Map(); // recent hulls' face planes, by their points
+function hull3({ pts }) {
+  const key = JSON.stringify(pts);
+  let planes = planesCache.get(key);
+  if (!planes) {
+    planes = convexHullPlanes(pts);
+    planesCache.set(key, planes);
+    if (planesCache.size > 30) planesCache.delete(planesCache.keys().next().value);
+  }
+  // Planes are grouped by which way they face: within angle a of a
+  // direction m. For a point q (from the hull's centre) at angle t from m, no
+  // plane in the group can give more than |q| cos(max(t - a, 0)) less the
+  // group's least reach, so a group whose best case is no more than the best
+  // so far is skipped.
+  const c = [0, 1, 2].map((k) => pts.reduce((s, p) => s + p[k], 0) / pts.length);
+  const G = min(256, max(1, Math.round(Math.sqrt(planes.length))));
+  const centres = hullDirections(G);
+  const groups = centres.map((m) => ({ m, list: [], spread: 0, reach: Infinity }));
+  for (const [nx, ny, nz, d] of planes) {
+    let bi = 0, bd = -2;
+    centres.forEach((m, i) => {
+      const v = m[0] * nx + m[1] * ny + m[2] * nz;
+      if (v > bd) (bd = v), (bi = i);
+    });
+    const g = groups[bi];
+    const e = d - (nx * c[0] + ny * c[1] + nz * c[2]);
+    g.list.push(nx, ny, nz, e);
+    g.spread = max(g.spread, Math.acos(min(1, bd)));
+    g.reach = min(g.reach, e);
+  }
+  // Flat arrays, for speed: per group its direction, cos and sin of its
+  // angle, least reach, and where its planes start and end in Q.
+  const live = groups.filter((g) => g.list.length);
+  const n = live.length;
+  const M = new Float64Array(n * 3), CA = new Float64Array(n), SA = new Float64Array(n), RE = new Float64Array(n);
+  const S0 = new Int32Array(n), S1 = new Int32Array(n);
+  const Q = new Float64Array(planes.length * 4);
+  let at = 0;
+  live.forEach((g, i) => {
+    M.set(g.m, i * 3);
+    CA[i] = cos(g.spread);
+    SA[i] = sin(g.spread);
+    RE[i] = g.reach;
+    S0[i] = at;
+    Q.set(g.list, at);
+    at += g.list.length;
+    S1[i] = at;
+  });
+  const order = new Float64Array(n);
+  return {
+    box: boxOf(pts),
+    f: (x, y, z) => {
+      const qx = x - c[0], qy = y - c[1], qz = z - c[2];
+      const ql = hypot(qx, qy, qz) || 1e-12;
+      let top = 0;
+      for (let i = 0; i < n; i++) {
+        const ct = (M[i * 3] * qx + M[i * 3 + 1] * qy + M[i * 3 + 2] * qz) / ql;
+        const best = ct >= CA[i] ? 1 : ct * CA[i] + sqrt(max(0, 1 - ct * ct)) * SA[i];
+        const o = ql * best - RE[i];
+        order[i] = o;
+        if (o > order[top]) top = i;
+      }
+      // The most promising group first, then any other that could beat it.
+      let d = -Infinity;
+      for (let j = S0[top]; j < S1[top]; j += 4) {
+        const v = Q[j] * qx + Q[j + 1] * qy + Q[j + 2] * qz - Q[j + 3];
+        if (v > d) d = v;
+      }
+      for (let i = 0; i < n; i++) {
+        if (i === top || order[i] <= d) continue;
+        for (let j = S0[i]; j < S1[i]; j += 4) {
+          const v = Q[j] * qx + Q[j + 1] * qy + Q[j + 2] * qz - Q[j + 3];
+          if (v > d) d = v;
+        }
+      }
+      return d;
+    },
+  };
+}
+
 // ---- compile ----
 // Returns { f, box } for a node.
 export function compile(node) {
@@ -598,6 +923,11 @@ const COMPILERS = {
     };
   },
   thread: (node) => thread3(node),
+  twist: (node) => twist3(node),
+  taper: (node) => taper3(node),
+  bend: (node) => bend3(node),
+  lattice: (node) => lattice3(node),
+  hull: (node) => hull3(node),
   // A profile of [radius, height] spun around Z, all the way or through
   // `angle` degrees counterclockwise from +X.
   revolve(node) {

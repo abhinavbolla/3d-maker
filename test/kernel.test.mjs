@@ -547,6 +547,171 @@ test("fit: overlaps measured exactly, gaps, and collisions in motion", () => {
   assert.ok(hub && hub.at_seconds === undefined, JSON.stringify(hub));
 });
 
+// ---- round 3: bend, twist, taper, lattices, text, hull ----
+
+// How fast a distance function changes at its fastest, sampled around its box.
+function steepest(f, box, n = 40000) {
+  let worst = 0;
+  for (let i = 0; i < n; i++) {
+    const a = [0, 1, 2].map((k) => box[k] + (box[k + 3] - box[k]) * (Math.random() * 1.4 - 0.2));
+    const d = [0, 1, 2].map(() => (Math.random() - 0.5) * 0.02);
+    const b = a.map((v, k) => v + d[k]);
+    worst = Math.max(worst, Math.abs(f(...a) - f(...b)) / Math.hypot(...d));
+  }
+  return worst;
+}
+const volumeErr = (node, exact, budget = 60000, slope = 1.02) => {
+  const { f, box } = compile(node);
+  const m = meshSDF(f, box, { budget });
+  assert.equal(openEdges(m), 0, `${node.t} is not closed`);
+  assert.ok(steepest(f, box) < slope, `${node.t} changes faster than distance`);
+  return Math.abs(meshVolume(m) / exact - 1);
+};
+
+test("twist, taper and bend: exact volumes, and safe distances", () => {
+  const bar = { t: "box", s: [40, 20, 100] };
+  // Twisting never changes volume.
+  assert.ok(volumeErr({ t: "twist", deg: 90, c: bar }, 80000) < 0.002);
+  // Taper to sx, sy: area scales by (1 + (sx-1)t)(1 + (sy-1)t), integrated over t.
+  const [sx, sy] = [0.5, 0.25];
+  assert.ok(volumeErr({ t: "taper", s: [sx, sy], c: bar }, 80000 * (1 + (sx - 1 + sy - 1) / 2 + ((sx - 1) * (sy - 1)) / 3)) < 0.002);
+  // Bending keeps the length at z = 0: a bar centred on it keeps its volume;
+  // a bar on top of it (z from 0 to t, bent away) gains L w t^2 / 2R.
+  assert.ok(volumeErr({ t: "bend", r: 100, c: { t: "box", s: [200, 20, 20] } }, 80000) < 0.002);
+  assert.ok(volumeErr({ t: "bend", r: -100, c: { t: "move", v: [0, 0, 10], c: { t: "box", s: [200, 20, 20] } } }, 200 * 20 * (20 + 400 / 200)) < 0.002);
+  // A bar a quarter of a circle long bends into a quarter of a ring.
+  const R = 50;
+  const q = meshBounds(mesh({ t: "bend", r: R, c: { t: "box", s: [(Math.PI * R) / 2, 10, 2] } }));
+  assert.ok(Math.abs(q[3] - (R + 1) * Math.sin(Math.PI / 4)) < 0.3 && Math.abs(q[5] - R * (1 - Math.cos(Math.PI / 4)) - Math.cos(Math.PI / 4)) < 0.3, `quarter bend reaches ${q}`);
+  assert.match(runScript('part("A", box(400, 10, 10).bend(50));').error, /too small/);
+  assert.match(runScript('part("A", box(40, 10, 30).at(0, 0, 15).bend(20));').error, /smaller than the shape is thick/);
+});
+
+test("lattices: grid exact, gyroid and diamond walls as thick as asked", () => {
+  // Square struts w wide every a: 3 a w^2 - 2 w^3 per cell.
+  assert.ok(volumeErr({ t: "lattice", kind: "grid", cell: 20, wall: 2, c: { t: "box", s: [60, 60, 60] } }, 27 * (3 * 20 * 4 - 2 * 8)) < 0.006);
+  // A thickened minimal surface holds area * t + (curvature) t^3 / 12; these
+  // fractions are the exact thickened surfaces, found by projecting onto them.
+  // Near thick walls the projected distance can change up to about 1.6 times
+  // faster than distance; the mesh stays closed and the volume right.
+  for (const [kind, wall, frac] of [["gyroid", 2, 0.304], ["gyroid", 4, 0.5834]]) {
+    const err = volumeErr({ t: "lattice", kind, cell: 20, wall, c: { t: "box", s: [60, 60, 60] } }, 216000 * frac, 300000, 1.7);
+    assert.ok(err < 0.015, `${kind} ${wall} mm walls off by ${(err * 100).toFixed(1)}%`);
+  }
+  const d = compile({ t: "lattice", kind: "diamond", cell: 20, wall: 2, c: { t: "box", s: [60, 60, 60] } });
+  assert.equal(openEdges(meshSDF(d.f, d.box, { budget: 40000 })), 0);
+  // Honeycomb walls of w in cells a across: 1 - ((a - w) / a)^2 of the area.
+  const hc = { t: "lattice", kind: "honeycomb", cell: 10, wall: 1.2, c: { t: "box", s: [200, 200, 5] } };
+  assert.ok(volumeErr(hc, 200000 * (1 - (8.8 / 10) ** 2), 200000) < 0.02);
+  assert.match(runScript('part("A", box(10, 10, 10).lattice("foam", 5, 1));').error, /lattice kind/);
+  assert.match(runScript('part("A", box(10, 10, 10).lattice("gyroid", 10, 4));').error, /too thick for a 10 mm gyroid cell \(at most 3\)/);
+  const skin = run('part("A", box(60, 60, 60).lattice("gyroid", 20, 2, { skin: 3 }));');
+  assert.equal(skin.parts[0].node.t, "union");
+});
+
+test("text: our own font, exact strokes, every character", () => {
+  // One stroke: a pen line 10 long, 1 wide, with round ends.
+  const I = run('part("I", extrude(text("I", 10, { pen: 1 }), 1));');
+  assert.ok(Math.abs(meshVolume(partMesh(I, "I")) / (10 + Math.PI / 4) - 1) < 0.01);
+  // Centred on the origin; "left" starts the baseline there.
+  const c = meshBounds(partMesh(run('part("T", extrude(text("HH", 10, { pen: 1 }), 1));'), "T"));
+  assert.ok(Math.abs(c[0] + c[3]) < 0.05 && Math.abs(c[1] + c[4]) < 0.05 && Math.abs(c[4] - 5.5) < 0.05, `centred: ${c}`);
+  const l = meshBounds(partMesh(run('part("T", extrude(text("H", 10, { pen: 1, align: "left" }), 1));'), "T"));
+  assert.ok(Math.abs(l[0] + 0.5) < 0.05 && Math.abs(l[1] + 0.5) < 0.05, `left: ${l}`);
+  // Every character the reference lists is drawn, and is a closed solid.
+  const all = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,:;!?'\"-+=_/\\|()[]#%*<>$°&@";
+  const r = run(`part("All", extrude(text(${JSON.stringify(all)}, 8), 1));`);
+  assert.equal(openEdges(partMesh(r, "All", 80000)), 0);
+  assert.match(runScript('part("A", extrude(text("a~b{", 5), 1));').error, /font does not have: "~", "\{"/);
+  // An open path drawn with a pen is a profile too.
+  const slot = run('part("S", extrude(path([0, 0]).line(30, 0).stroke(6), 2));');
+  assert.ok(Math.abs(meshVolume(partMesh(slot, "S")) / ((30 * 6 + Math.PI * 9) * 2) - 1) < 0.01);
+});
+
+test("hull: exact around flat faces, and close around curves", () => {
+  const cases = [
+    ['hull(sphere(10), sphere(10).at(50, 0, 0))', Math.PI * 100 * 50 + (4 / 3) * Math.PI * 1000, 0.005],
+    ["hull(box(40, 30, 20))", 24000, 0.005],
+    ["hull(box(40, 30, 20).rotate(20, 30, 40))", 24000, 0.012],
+    ["hull([[0, 0, 0], [30, 0, 0], [0, 30, 0], [0, 0, 30]].map((p) => box(0.02, 0.02, 0.02).at(...p)))", 30 ** 3 / 6, 0.01],
+    ["hull(cylinder(10, 40), sphere(10).at(0, 0, 40))", Math.PI * 100 * 60 + (2 / 3) * Math.PI * 1000, 0.01],
+  ];
+  for (const [src, exact, tol] of cases) {
+    const r = run(`part("H", ${src});`);
+    const { f, box } = compile(r.parts[0].node);
+    const m = meshSDF(f, box, { budget: 60000 });
+    assert.equal(openEdges(m), 0);
+    const err = Math.abs(meshVolume(m) / exact - 1);
+    assert.ok(err < tol, `${src}: off by ${(err * 100).toFixed(2)}%`);
+    assert.ok(steepest(f, box, 10000) < 1.001, `${src} changes faster than distance`);
+  }
+  // A second run of the same script reuses the hull.
+  const t = performance.now();
+  run('part("H", hull(sphere(10), sphere(10).at(50, 0, 0)));');
+  assert.ok(performance.now() - t < 50, "the hull was measured again");
+  assert.match(runScript('part("A", hull(box(10, 10, 0.001)));').error, /hull/);
+});
+
+test("random twists, tapers, bends, lattices, text and hulls always give closed meshes", () => {
+  let seed = 23;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const R = (a, b) => (a + (b - a) * rnd()).toFixed(2);
+  const base = () =>
+    [
+      () => `box(${R(10, 40)}, ${R(10, 40)}, ${R(10, 60)}, ${R(0, 3)})`,
+      () => `cylinder(${R(5, 20)}, ${R(10, 60)})`,
+      () => `extrude(polygon([[${R(8, 15)}, 0], [0, ${R(8, 15)}], [-${R(8, 15)}, 0], [0, -${R(8, 15)}]], ${R(0, 2)}), ${R(10, 50)})`,
+      () => `extrude(text("${["Ag", "3D", "x?", "B&8"][Math.floor(rnd() * 4)]}", ${R(8, 20)}), ${R(1, 5)})`,
+      () => `hull(sphere(${R(3, 10)}), box(${R(4, 12)}, ${R(4, 12)}, ${R(4, 12)}).at(${R(10, 30)}, ${R(-5, 5)}, ${R(-5, 5)}))`,
+    ][Math.floor(rnd() * 5)]();
+  const warp = (s) =>
+    [
+      () => `${s}.twist(${R(-200, 200)})`,
+      () => `${s}.taper(${R(0.2, 1.8)}, ${R(0.2, 1.8)})`,
+      () => `${s}.bend(${rnd() < 0.5 ? "" : "-"}${R(40, 120)})`,
+      () => `${s}.lattice("${["gyroid", "diamond", "grid", "honeycomb"][Math.floor(rnd() * 4)]}", ${R(6, 12)}, ${R(0.8, 1.8)}${rnd() < 0.5 ? `, { skin: ${R(0.8, 2)} }` : ""})`,
+      () => `${s}.rotate(${R(0, 90)}, ${R(0, 90)}, 0)`,
+    ][Math.floor(rnd() * 5)]();
+  let count = 0;
+  for (let i = 0; i < 70; i++) {
+    const src = `part("A", ${warp(warp(base()))});`;
+    const r = runScript(src);
+    if (r.error) {
+      assert.match(r.error, /bend radius/, `${src}: ${r.error}`);
+      continue;
+    }
+    const { f, box } = compile(r.parts[0].node);
+    for (const budget of [1500, 8000]) {
+      const m = meshSDF(f, box, { budget });
+      if (!m.indices.length) continue;
+      count++;
+      assert.equal(openEdges(m), 0, `${src} budget ${budget}: open edges`);
+    }
+  }
+  console.log(`    ${count} meshes`);
+  assert.ok(count > 100);
+});
+
+test("the documented round 3 example runs and every part is closed", () => {
+  const doc = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8");
+  const example = doc.match(/EXAMPLE: text, wrapping, twist, taper, lattice, hull\n([\s\S]*?)\n\n/)[1];
+  const r = run(example);
+  for (const p of r.parts) {
+    const { f, box } = compile(p.node);
+    assert.equal(openEdges(meshSDF(f, box, { budget: 20000 })), 0, `${p.name} is not closed`);
+  }
+  // bounds() measures the label: it covers about 105° of the mug.
+  assert.ok(Math.abs(Number(r.prints[0]) - 104.7) < 1, `label covers ${r.prints[0]}°`);
+  // The label sits on the mug's surface: from radius 40 to 41 off its axis.
+  const m = partMesh(r, "Label");
+  let rmin = Infinity, rmax = 0;
+  for (let i = 0; i < m.positions.length; i += 3) {
+    const rr = Math.hypot(m.positions[i], m.positions[i + 1] - 200);
+    (rmin = Math.min(rmin, rr)), (rmax = Math.max(rmax, rr));
+  }
+  assert.ok(rmin > 39.9 && rmax < 41.2, `label from radius ${rmin} to ${rmax}`);
+});
+
 test("the app's Claude is allowed every tool the server offers", () => {
   const server = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8");
   const offered = [...server.matchAll(/^tool\(\s*"(\w+)"/gm)].map((m) => m[1]).sort();

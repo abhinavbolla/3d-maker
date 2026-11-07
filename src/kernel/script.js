@@ -1,8 +1,10 @@
 // Runs a model script: plain JavaScript that builds shapes with the functions
 // below and declares named parts and adjustable values. The result is data
 // (JSON shape trees per part), so it can be meshed in parallel and cached.
-import { compile, isEmptyBox, threadRoot, threadPitchRadius } from "./sdf.js";
+import { compile, compile2, isEmptyBox, threadRoot, threadPitchRadius, hullDirections } from "./sdf.js";
+import { meshSDF } from "./mesh.js";
 import { makePoseApi, sampleMotion, defaultLoop } from "./motion.js";
+import { layoutText } from "./font.js";
 
 export const PALETTE = ["#9aa3ad", "#c9cdd2", "#5b6670", "#b8483e", "#d9a441", "#4f7cac", "#6b8f5e", "#2f3338"];
 const AXES = { x: 0, y: 1, z: 2 };
@@ -86,6 +88,45 @@ class Shape {
   }
   symmetric(axis) {
     return new Shape({ t: "symmetric", axis: axisOf(axis, "symmetric axis"), c: this.node });
+  }
+  // Turns it about Z, from 0 at its bottom to deg degrees at its top.
+  twist(deg) {
+    return new Shape({ t: "twist", deg: num(deg, "twist angle"), c: this.node });
+  }
+  // Scales it across X and Y (about the Z axis) from 1 at its bottom to s
+  // (or sx, sy) at its top.
+  taper(sx, sy = sx) {
+    num(sx, "taper scale", { positive: true });
+    num(sy, "taper scale", { positive: true });
+    return new Shape({ t: "taper", s: [sx, sy], c: this.node });
+  }
+  // Bends its X axis onto a circle of radius |r| through the origin, in the
+  // XZ plane: r > 0 curls the ends up, r < 0 down. A length L bends through
+  // L / r radians.
+  bend(r) {
+    num(r, "bend radius");
+    if (!r) fail("bend radius cannot be 0");
+    const b = compile(this.node).box;
+    if (isEmptyBox(b)) return this;
+    const A = Math.abs(r);
+    if (Math.max(Math.abs(b[0]), Math.abs(b[3])) > Math.PI * A * 0.98) fail(`bend radius ${A} is too small: the shape (x from ${R5(b[0])} to ${R5(b[3])}) would bend more than half a turn each way. Use a radius of at least ${Math.ceil(Math.max(Math.abs(b[0]), Math.abs(b[3])) / Math.PI)}`);
+    const inner = r > 0 ? A - b[5] : A + b[2];
+    if (inner <= 0) fail(`bend radius ${A} is smaller than the shape is thick on the inside of the bend (z from ${R5(b[2])} to ${R5(b[5])})`);
+    return new Shape({ t: "bend", r, c: this.node });
+  }
+  // Fills it with a lattice: "gyroid", "diamond", "grid" or "honeycomb",
+  // repeating every cell mm, walls or struts wall mm thick. skin: keep a
+  // solid outer wall of that thickness.
+  lattice(kind, cell, wall, opts = {}) {
+    if (!["gyroid", "diamond", "grid", "honeycomb"].includes(kind)) fail(`lattice kind must be "gyroid", "diamond", "grid" or "honeycomb", got ${what(kind)}`);
+    num(cell, "lattice cell", { positive: true });
+    num(wall, "lattice wall", { positive: true });
+    const most = kind === "gyroid" || kind === "diamond" ? 0.3 : 0.6;
+    if (wall > cell * most) fail(`lattice wall ${wall} is too thick for a ${cell} mm ${kind} cell (at most ${R5(cell * most)})`);
+    if (typeof opts !== "object" || opts === null) fail("lattice options must be { skin }");
+    const node = { t: "lattice", kind, cell, wall, c: this.node };
+    if (!opts.skin) return new Shape(node);
+    return new Shape({ t: "union", c: [{ t: "shell", th: num(opts.skin, "lattice skin", { positive: true }), c: this.node }, node] });
   }
   radial(n, axis = "z") {
     n = Math.round(num(n, "radial count", { positive: true }));
@@ -406,6 +447,12 @@ class Path {
     this.pts.push(...catmull([this.last, ...ps], false, 16).slice(1));
     return this;
   }
+  // The path drawn with a round pen of width w: a profile for a slot, a
+  // groove, a wire or a raised line.
+  stroke(w) {
+    num(w, "stroke width", { positive: true });
+    return new Profile({ t: "strokes2", lines: [this.pts.map(([x, y]) => [R5(x), R5(y)])], w });
+  }
   close(round = 0) {
     let p = this.pts.filter((q, i, all) => i === 0 || Math.hypot(q[0] - all[i - 1][0], q[1] - all[i - 1][1]) > 1e-9);
     if (p.length > 1 && Math.hypot(p[0][0] - p.at(-1)[0], p[0][1] - p.at(-1)[1]) < 1e-9) p = p.slice(0, -1);
@@ -414,6 +461,33 @@ class Path {
   }
 }
 const path = (...a) => new Path(Array.isArray(a[0]) ? a[0] : [a[0], a[1]]);
+
+// Text as a profile, in our own single-stroke font: size is the capital
+// height (mm). Centred on the origin unless align is "left" or "right" (then
+// the first line's baseline starts or ends at the origin). pen: stroke width
+// (default 12% of size); spacing: letter spacing factor; lines split at "\n".
+function text(str, size, opts = {}) {
+  if (typeof str !== "string" && typeof str !== "number") fail(`text needs a string first, got ${what(str)}`);
+  str = String(str);
+  if (!str.trim()) fail("text is empty");
+  num(size, "text size", { positive: true });
+  if (typeof opts !== "object" || opts === null) fail("text options must be { align, pen, spacing, lineHeight }");
+  const align = opts.align ?? "center";
+  if (!["left", "center", "right"].includes(align)) fail(`text align must be "left", "center" or "right", got ${what(align)}`);
+  const pen = num(opts.pen ?? size * 0.12, "text pen", { positive: true });
+  const spacing = num(opts.spacing ?? 1, "text spacing", { positive: true });
+  const lineHeight = num(opts.lineHeight ?? 1.6, "text lineHeight", { positive: true });
+  let layout;
+  try {
+    layout = layoutText(str, size, { pen, align, spacing, lineHeight });
+  } catch (err) {
+    fail(err.message);
+  }
+  // Centred: the block from the first line's capitals to the last baseline.
+  const lines = str.split("\n").length;
+  const dy = align === "center" ? -(size - (lines - 1) * size * lineHeight) / 2 : 0;
+  return new Profile({ t: "strokes2", lines: layout.strokes.map((l) => l.map(([x, y]) => [R5(x), R5(y + dy)])), w: R5(pen) });
+}
 
 // A helix around Z: radius r, rising `pitch` per turn, starting at (r, 0, 0).
 function helix(r, pitch, turns) {
@@ -644,6 +718,56 @@ function tube(pts, smooth = 0) {
   return new Shape({ t: "union", c: segs, k: num(smooth, "tube smooth", { nonneg: true }) });
 }
 
+// The convex hull of shapes: the smallest convex solid around them all, like
+// a skin stretched over them. Found from a fine mesh of the shapes: the
+// points that reach furthest in 2000 directions. Recent hulls are kept, so
+// re-running a script is quick.
+const HULL_DIRS = 2000;
+const hullCache = new Map();
+function hull(...args) {
+  const { nodes } = shapesAndSmooth(args, "hull");
+  if (!nodes.length) fail("hull needs at least one shape");
+  const key = JSON.stringify(nodes);
+  let pts = hullCache.get(key);
+  if (!pts) {
+    const { f, box } = compile(nodes.length === 1 ? nodes[0] : { t: "union", c: nodes });
+    if (isEmptyBox(box)) fail("hull of nothing: the shapes are empty");
+    const P = meshSDF(f, box, { budget: 30000 }).positions;
+    if (!P.length) fail("hull of nothing: the shapes are empty");
+    const picked = new Set();
+    for (const [x, y, z] of hullDirections(HULL_DIRS)) {
+      let best = -Infinity, at = 0;
+      for (let i = 0; i < P.length; i += 3) {
+        const v = x * P[i] + y * P[i + 1] + z * P[i + 2];
+        if (v > best) (best = v), (at = i);
+      }
+      picked.add(at);
+    }
+    pts = [...picked].map((i) => [R5(P[i]), R5(P[i + 1]), R5(P[i + 2])]);
+    hullCache.set(key, pts);
+    if (hullCache.size > 50) hullCache.delete(hullCache.keys().next().value);
+  }
+  try {
+    compile({ t: "hull", pts });
+  } catch (err) {
+    fail(err.message);
+  }
+  return new Shape({ t: "hull", pts });
+}
+
+// The box around a shape or profile: { min, max, size }, in mm. For
+// placing things (how long is this text, how tall is this part). It can be
+// a little larger than the shape after rotations and smooth blends.
+function bounds(x) {
+  if (x instanceof Profile) {
+    const b = compile2(x.node).box;
+    return { min: [R5(b[0]), R5(b[1])], max: [R5(b[2]), R5(b[3])], size: [R5(b[2] - b[0]), R5(b[3] - b[1])] };
+  }
+  const b = compile(shapeNode(x, "bounds")).box;
+  if (isEmptyBox(b)) fail("bounds of an empty shape");
+  return { min: b.slice(0, 3).map(R5), max: b.slice(3).map(R5), size: [0, 1, 2].map((i) => R5(b[i + 3] - b[i])) };
+}
+
 function union(...args) {
   const { nodes, k } = shapesAndSmooth(args, "union");
   if (!nodes.length) fail("union needs at least one shape");
@@ -660,7 +784,7 @@ function intersect(...args) {
   return new Shape({ t: "intersect", c: nodes, k });
 }
 
-const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "circle", "rect", "polygon", "path", "airfoil", "helix", "sweep", "loft", "thread", "hole", "bolt", "nut", "washer", "metric", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
+const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "circle", "rect", "polygon", "path", "airfoil", "text", "helix", "sweep", "loft", "hull", "bounds", "thread", "hole", "bolt", "nut", "washer", "metric", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
 const DEG = Math.PI / 180;
 // A joint may open by this much (mm) over the loop before it is reported.
 export const JOINT_TOLERANCE_MM = 1;
@@ -787,7 +911,7 @@ export function runScript(source, values = {}) {
   const loop = (seconds) => (loopSeconds = num(seconds, "loop seconds", { positive: true }));
   const print = (...a) => prints.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 
-  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, helix, sweep, loft, thread, hole, bolt, nut, washer, metric, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
+  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, text, helix, sweep, loft, hull, bounds, thread, hole, bolt, nut, washer, metric, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
   try {
     // In its own block, so the script may reuse a built-in name (const hole = ...).
     const fn = new Function(...API_NAMES, ...BLOCKED, `"use strict"; {\n${source}\n}\n//# sourceURL=model.js`);

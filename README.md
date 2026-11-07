@@ -23,6 +23,7 @@ npm start          # or the same app in your browser, at http://localhost:5173
 - Under Claude's reply, a grey line says what this window saw happen: whether the model changed, how many changes and looks, and any step that failed. It is counted by the app, not taken from Claude's words.
 - Click a part to select it. Its sliders appear in the top-right corner, and the prompt box now talks about that part ("make this longer").
 - Claude can draw real outlines (arcs, curves, splines, rounded corners, airfoil sections) and turn them into solids by extruding, spinning (all the way or part way), sweeping them along a path (rails, bent tube, springs, seals) or lofting through several of them (wings, blades, hulls, bottles).
+- Shapes can be twisted, tapered and bent (a bar bent into a ring, a label wrapped round a mug), filled with lattices (gyroid, diamond, square grid or honeycomb infill, with a solid skin if wanted), and wrapped in a convex hull. Text is drawn in our own single-stroke font, in the style of technical drawing lettering, to raise or engrave.
 - Real hardware at ISO metric sizes: threaded rods, bolts (hex, socket and countersunk heads), nuts and washers, and holes that are clearance-drilled, tapped, counterbored or countersunk for them. A bolt made at the same spot as its hole fits it. Moulded parts can have draft on their sides.
 - The app checks how parts fit: which parts pass into each other, how deep and where, at rest and through the whole motion, so a rotor blade that strikes the tail during its turn is found. Claude sees this after each step of a plan and fixes it (cutting a hole where a shaft goes into a hub, for example). Parts pinned together at a joint may overlap around the pin; threads count as fitting when they mate.
 - Parts move in the view, and mechanisms work: a crank drives its rod and piston, a swashplate pitches rotor blades through their pitch links. Claude declares every joint (each pin, ball joint and rod end), and the app checks over the whole motion that no joint comes apart, so a mechanism that only looks right in one frame is caught. Pause stops the motion.
@@ -70,6 +71,7 @@ cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude C
 - No dragging parts around in the view; changes are sliders or prompts.
 - Collisions in motion are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.
 - Threads are real helical solids, but on a big model they are finer than the mesh and look like smooth rods.
+- Text has one font, and only the characters listed in the reference (no accents yet). Lattices with very thick walls are limited to walls 30% of a cell.
 - Packaging: the app runs from this folder. It finds the MCP server and Node here, so there is no installer, no signing and no real icon yet.
 - Running your own `claude -p` from an app is fine for your own use. Check Anthropic's terms before giving the app to others.
 

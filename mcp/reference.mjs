@@ -29,6 +29,10 @@ PRIMITIVES (all centred on the origin)
 
 PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and loft)
   circle(r)    rect(w, h, round?)    polygon([[x,y], ...], round?)     round = corner radius
+  text("Label", size, { align, pen, spacing, lineHeight })
+                                  text in our own single-stroke font (technical lettering): size is the capital height. Centred on the origin; align "left" or "right" puts the
+                                  first line's baseline start or end there. pen: stroke width (default 12% of size). "\\n" starts a new line. Extrude it to raise it, cut it to engrave it.
+                                  Characters: A-Z a-z 0-9 space . , : ; ! ? ' " - + = _ / \\ | ( ) [ ] # % * < > $ ° & @
   airfoil("2412", chord)          NACA 4-digit wing section: leading edge at the origin, chord along +x, upper surface up. "0012" is symmetric; "4415" is thick and cambered
   path([x, y])                    an outline drawn piece by piece, chained:
     .line(x, y)  .lineBy(dx, dy)  straight
@@ -38,6 +42,7 @@ PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and l
     .curve([cx, cy], [x, y])  .curve([c1x, c1y], [c2x, c2y], [x, y])   Bezier curves
     .spline([[x, y], ...])        a smooth curve through these points
     .close(round?)                back to the start: makes it a profile (round = corner radius)
+    .stroke(w)                    or leave it open and draw it with a round pen w wide: a profile for slots, grooves, raised lines
   Profile methods: .move(x, y) .rotate(deg) .scale(s) or .scale(sx, sy) .mirror("x"|"y") .offset(d)
     .add(other, ..., smooth?)  .cut(other, ...)  .common(other, ...)    combine outlines before making a solid: holes, slots, keyways
 
@@ -48,6 +53,16 @@ PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and l
     part("Spring", sweep(circle(2), helix(15, 8, 6)).at(300, 0, 0));
     part("Wing", loft([[0, airfoil("2412", 300)], [900, airfoil("0012", 120).move(150, 0)]]).rotateX(-90).at(0, 300, 0));
     part("Bracket", extrude(rect(80, 40, 6).cut(circle(6).move(-25, 0), circle(6).move(25, 0)), 8).at(0, -150, 4));
+
+  EXAMPLE: text, wrapping, twist, taper, lattice, hull
+    part("Plate", extrude(rect(120, 40, 5), 6).at(0, 0, 3).cut(extrude(text("3D MAKER", 12), 4).at(0, 0, 6)));   // engraved 2 mm deep
+    const R = 40;
+    part("Mug", cylinder(R, 90).at(0, 200, 45));
+    part("Label", extrude(text("COFFEE", 14), 1).at(0, 0, 0.5).bend(-R).rotateX(90).at(0, 200 - R, 50));   // wrapped round the mug, standing 1 mm proud
+    print(bounds(text("COFFEE", 14)).size[0] / R * 180 / Math.PI);   // degrees of the mug the label covers: keep clear of the handle
+    part("Vase", extrude(polygon([[30, 0], [15, 26], [-15, 26], [-30, 0], [-15, -26], [15, -26]], 4), 150).at(0, 0, 75).twist(120).taper(0.6).at(-150, 0, 0));
+    part("Infill", box(60, 60, 30).lattice("gyroid", 15, 1.5, { skin: 2 }).cut(box(70, 40, 40).at(0, -30, 20)).at(150, 0, 15));
+    part("Arm", hull(sphere(15), sphere(8).at(120, 0, 30)).at(0, -150, 15));
 
 HARDWARE (ISO metric, sizes "M2" to "M36")
   thread("M10", 40)               a threaded rod along Z, centred like cylinder. thread(10, 40, { pitch: 1.25, left: true }) for other pitches
@@ -70,6 +85,7 @@ HARDWARE (ISO metric, sizes "M2" to "M36")
     part("Hex bolt", bolt("M8", 16).at(40, 0, T + metric("M8").washer.h));
 
 COMBINING (smooth is an optional blend radius in mm; leave it out for a sharp join)
+  hull(a, b, ...)                 the convex hull: the smallest convex solid around all of them, like a skin stretched over them. Smooth arms between two joints, tapered links, cases
   union(a, b, ..., smooth?)       also a.add(b, ..., smooth?)
   subtract(a, b, ..., smooth?)    cut b, c, ... out of a; also a.cut(b, ...)
   intersect(a, b, ..., smooth?)   keep only the overlap; also a.common(b, ...)
@@ -84,6 +100,13 @@ METHODS (each returns a new shape; chain them)
   .shell(t)                       hollow it, keeping a wall of thickness t inside the surface; cut an opening to see in
   .mirror("x")                    reflect across the plane x = 0 (or "y", "z")
   .symmetric("y")                 make it symmetric across y = 0, keeping the y >= 0 side. Model one side, then mirror it
+  .twist(deg)                     turn it about Z, from 0 at its bottom to deg at its top: twisted vases, drill flutes, twisted columns
+  .taper(s) or .taper(sx, sy)     scale it across X and Y (about the Z axis) from 1 at its bottom to s at its top: tapered legs, towers, horns
+  .bend(r)                        bend its X axis onto a circle of radius |r| through the origin, in the XZ plane: r > 0 curls the ends up (+Z), r < 0 down.
+                                  Lengths along z = 0 are kept, so a length L turns through L / r radians. Model it straight along X, bend it, then place it
+  .lattice(kind, cell, wall, { skin })
+                                  fill it with a lattice: "gyroid" or "diamond" (smooth, strong, printable infill), "grid" (square struts) or "honeycomb" (hexagonal cells along Z),
+                                  repeating every cell mm with walls wall mm thick. skin: keep a solid outer wall that thick (cut it open to show the inside)
   .radial(n, "z")                 n copies spaced evenly around the axis through the origin: blades, spokes, bolts
   .array(n, dx, dy, dz)           n copies, each moved one step further
 
@@ -95,6 +118,7 @@ PARTS, VALUES, MOTION
     Returns the number to use, and gives the user a slider. Always set part to the part it mainly affects, so the slider appears when they click that part. Add 1 to 3 sliders per important part for its main dimensions (length, width, count, angle). Keep labels short ("Length", "Blades").
   title("Name")                   names the model (used for the exported file)
   print(...values)                values to see in the tool result, for checking measurements
+  bounds(shape or profile)        { min, max, size }: the box around it, to measure before placing (how long a text is, how tall a part is)
 
 You can use normal JavaScript: const, functions, loops, Math. There is no import, file access or network.
 
