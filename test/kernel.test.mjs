@@ -118,6 +118,24 @@ test("sharp edges are drawn sharp, smooth surfaces smooth", () => {
   assert.equal(displayMesh(s).positions.length, s.positions.length);
 });
 
+test("a union of many parts gives exactly the nearest part's distance", () => {
+  // Spheres and boxes spread out and overlapping, as in an assembly.
+  const kids = [];
+  for (let i = 0; i < 12; i++) {
+    const at = [((i * 37) % 11) * 9 - 45, ((i * 53) % 7) * 12 - 36, ((i * 29) % 5) * 10 - 20];
+    kids.push(i % 2 ? { t: "move", v: at, c: { t: "sphere", r: 6 + (i % 4) * 3 } } : { t: "move", v: at, c: { t: "box", s: [10 + i, 8, 14 - (i % 3)] } });
+  }
+  const u = compile({ t: "union", c: kids });
+  const each = kids.map(compile);
+  let x = 0.5;
+  const rand = () => ((x = (x * 9301 + 49297) % 233280), (x / 233280) * 160 - 80);
+  for (let n = 0; n < 4000; n++) {
+    const p = [rand(), rand(), rand()];
+    const want = Math.min(...each.map((q) => q.f(...p)));
+    assert.ok(Math.abs(u.f(...p) - want) < 1e-12, `at ${p} union gives ${u.f(...p)}, nearest part ${want}`);
+  }
+});
+
 test("big parts are meshed as finely as asked, whatever the budget", () => {
   const { f, box } = compile({ t: "box", s: [1000, 1000, 20] });
   const coarse = meshSDF(f, box, { budget: 2000 });

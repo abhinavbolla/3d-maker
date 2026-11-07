@@ -28,10 +28,10 @@ self.onmessage = ({ data: job }) => {
       // Never export a mesh with holes: if the detail is more than the mesher
       // can close, try again coarser.
       let m;
-      for (let budget = job.budget; ; budget = Math.floor(budget / 2)) {
-        m = meshSDF(f, box, { budget });
+      for (let budget = job.budget, maxCell = job.maxCell ?? Infinity; ; budget = Math.floor(budget / 2), maxCell *= 2) {
+        m = meshSDF(f, box, { budget, maxCell });
         if (!m.incomplete && m.indices.length) break;
-        if (budget < 20000) throw new Error(m.indices.length ? "The model is too large to export as a closed mesh." : "There is nothing to export.");
+        if (budget < 1000) throw new Error(m.indices.length ? "A part is too large to export as a closed mesh." : "There is nothing to export.");
       }
       const bytes = toSTL([m]);
       self.postMessage({ id: job.id, ok: true, result: { bytes, triangles: m.indices.length / 3, bounds: meshBounds(m), volume: meshVolume(m), cellSize: m.cellSize } }, [bytes.buffer]);

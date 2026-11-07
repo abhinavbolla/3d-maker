@@ -30,7 +30,7 @@ npm start          # or the same app in your browser, at http://localhost:5173
 - Drag to orbit, right-drag to pan, scroll to zoom, F to fit the view, Esc to deselect.
 - ⌘Z / ⇧⌘Z undo and redo every change, Claude's included. ⌘S saves, ⌘O opens, ⌘E exports an STL. The model is also autosaved.
 
-Export STL joins all visible parts into one closed solid, ready for a slicer.
+Export STL writes every visible part as its own closed shell in one file, all at the same detail, ready for a slicer. Parts are meshed in parallel, so a 60-part rotor head exports in seconds.
 
 ## How it works
 
@@ -59,6 +59,7 @@ npm run test:e2e                       # the real prompt box with your real Clau
 npm run try -- "a rotor head"          # one prompt, saves pictures, script and plan in runs/
 node test/mcp.test.mjs                 # the MCP tools against an open app
 node test/check-stl.mjs model.stl      # checks an STL is well formed and closed
+node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
 cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude Code
 ```
 

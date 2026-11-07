@@ -963,8 +963,39 @@ const COMPILERS = {
     if (kids.length === 1 && !k) return kids[0];
     const fs = kids.map((q) => q.f), bs = kids.map((q) => q.box);
     const n = fs.length;
+    const box = grow(kids.reduce((b, q) => unionBox(b, q.box), EMPTY), k / 4);
+    if (!k && n >= 4) {
+      // Many children (a whole assembly): those whose box holds the point
+      // first, then the others nearest box first, stopping at the first box
+      // farther than the closest surface found so far. Far fewer children
+      // are evaluated than in model order.
+      const near = new Float64Array(n), order = new Int32Array(n);
+      return {
+        box,
+        f: (x, y, z) => {
+          let d = Infinity, m = 0;
+          for (let i = 0; i < n; i++) {
+            const bd = boxDist(bs[i], x, y, z);
+            if (bd <= 0) {
+              const v = fs[i](x, y, z);
+              if (v < d) d = v;
+            } else if (bd < d) {
+              let j = m++;
+              for (; j > 0 && near[j - 1] > bd; j--) (near[j] = near[j - 1]), (order[j] = order[j - 1]);
+              near[j] = bd;
+              order[j] = i;
+            }
+          }
+          for (let j = 0; j < m && near[j] < d; j++) {
+            const v = fs[order[j]](x, y, z);
+            if (v < d) d = v;
+          }
+          return d;
+        },
+      };
+    }
     return {
-      box: grow(kids.reduce((b, q) => unionBox(b, q.box), EMPTY), k / 4),
+      box,
       f: (x, y, z) => {
         let d = Infinity;
         for (let i = 0; i < n; i++) {

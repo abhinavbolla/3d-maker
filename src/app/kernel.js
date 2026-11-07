@@ -90,7 +90,19 @@ function boxArea(parts) {
   return Number.isFinite(a) ? a : 0;
 }
 
-const EXPORT_BUDGET = 500000;
+// Export detail: about this many surface cells over the whole model.
+const EXPORT_BUDGET = 250000;
+
+// One cell size for the whole export, so every part is as detailed as every
+// other, sized from the meshes already on screen: a part meshed at cell s
+// with T triangles has about T/2 surface cells, and (s/c)^2 times as many at
+// cell c. Each part's budget is its share at that cell size, so thin parts
+// still get their extra cells.
+export function exportDetail(parts, budget = EXPORT_BUDGET) {
+  const est = parts.map((p) => (p.mesh.indices.length / 6) * p.mesh.cellSize ** 2);
+  const cell = Math.sqrt(est.reduce((a, b) => a + b, 0) / budget);
+  return { cell, budgets: est.map((e) => Math.max(2000, Math.round(e / cell ** 2))) };
+}
 
 export function createKernel() {
   const job = createPool();
@@ -162,11 +174,22 @@ export function createKernel() {
     }
   }
 
-  // One closed solid of every visible part, at export detail.
+  // Every visible part as its own closed shell, in one STL. Parts are meshed
+  // in parallel at one cell size for the whole model (see exportDetail).
   async function exportSTL(parts) {
-    const nodes = parts.filter((p) => !p.hidden).map((p) => p.node);
-    if (!nodes.length) throw new Error("There is nothing to export.");
-    return job({ type: "stl", node: { t: "union", c: nodes }, budget: EXPORT_BUDGET }, MESH_TIMEOUT_MS, "Export took too long.");
+    const shown = parts.filter((p) => !p.hidden && p.mesh?.indices.length);
+    if (!shown.length) throw new Error("There is nothing to export.");
+    const { cell, budgets } = exportDetail(shown);
+    const pieces = await Promise.all(
+      shown.map((p, i) => job({ type: "stl", node: p.node, budget: budgets[i], maxCell: cell }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
+    );
+    const triangles = pieces.reduce((s, r) => s + r.triangles, 0);
+    const bytes = new Uint8Array(84 + triangles * 50);
+    bytes.set(pieces[0].bytes.subarray(0, 80));
+    new DataView(bytes.buffer).setUint32(80, triangles, true);
+    let o = 84;
+    for (const r of pieces) bytes.set(r.bytes.subarray(84), o), (o += r.bytes.length - 84);
+    return { bytes, triangles, cellSize: cell };
   }
 
   // Which parts pass into each other, at rest and over the motion loop. With
