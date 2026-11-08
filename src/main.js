@@ -290,12 +290,15 @@ const actions = {
     const where = await saveBytes(new TextEncoder().encode(JSON.stringify(doc, null, 2)), `${fileName()}.json`, "json");
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
-  async export() {
+  // kind: "stl" (each part its own shell), "solid" (one joined solid) or "3mf".
+  async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
-    say("Exporting", 0);
+    say(kind === "solid" ? "Joining the parts into one solid" : "Exporting", 0);
     try {
-      const r = await kernel.exportSTL(store.state.result.parts);
-      const where = await saveBytes(r.bytes, `${fileName()}.stl`, "stl");
+      const { parts, title } = store.state.result;
+      const r = kind === "3mf" ? await kernel.export3MF(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
+      const ext = kind === "3mf" ? "3mf" : "stl";
+      const where = await saveBytes(r.bytes, `${fileName()}.${ext}`, ext);
       say(where ? `Exported ${where.split("/").pop()}` : "");
     } catch (err) {
       say(err.message, 8000);
@@ -303,6 +306,30 @@ const actions = {
   },
 };
 document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("click", () => actions[b.dataset.action]().catch((err) => say(err.message, 8000))));
+
+// Export menu: STL, STL as one solid, or 3MF.
+const exportMenu = $("export-menu");
+const showExportMenu = (open) => {
+  exportMenu.hidden = !open;
+  $("export-button").setAttribute("aria-expanded", String(open));
+  if (open) exportMenu.querySelector("button").focus();
+};
+$("export-button").addEventListener("click", () => showExportMenu(exportMenu.hidden));
+exportMenu.querySelectorAll("[data-export]").forEach((b) =>
+  b.addEventListener("click", () => {
+    showExportMenu(false);
+    actions.export(b.dataset.export);
+  }),
+);
+document.addEventListener("pointerdown", (e) => {
+  if (!exportMenu.hidden && !e.target.closest(".menu")) showExportMenu(false);
+});
+exportMenu.addEventListener("keydown", (e) => {
+  const items = [...exportMenu.querySelectorAll("button")];
+  const at = items.indexOf(document.activeElement);
+  if (e.key === "Escape") e.stopPropagation(), showExportMenu(false), $("export-button").focus();
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") e.preventDefault(), items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+});
 
 addEventListener("keydown", (e) => {
   const typing = e.target.closest?.("textarea, input");

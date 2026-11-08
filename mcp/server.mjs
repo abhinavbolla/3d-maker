@@ -98,7 +98,7 @@ Before you write or change a script, call the reference tool once (unless you al
 
 In short: units are millimetres, +Z is up, the ground is z = 0. Write the whole script with set_model, change part of it with edit_model, and look at it with screenshot. Big or mechanical models are planned with set_plan, built step by step with append_to_model, and each step is checked with finish_step. check_fit finds parts passing into each other, at rest and during the motion. When done, answer in one or two short sentences; do not paste the script.`;
 
-const server = new McpServer({ name: "3d-maker", version: "0.5.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "3d-maker", version: "0.6.0" }, { instructions: INSTRUCTIONS });
 
 const json = (v) => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (err) => ({ isError: true, content: [{ type: "text", text: String(err?.message ?? err) }] });
@@ -182,19 +182,31 @@ tool(
   },
 );
 
+// Writes an exported file; path defaults to ~/Downloads/<title>.<ext>.
+async function save(r, path, ext) {
+  const base = (r.name || "model").replace(/[^\w.-]+/g, "-");
+  let out = path ? resolve(homedir(), path.replace(/^~(?=\/|$)/, homedir())) : resolve(homedir(), "Downloads", `${base}.${ext}`);
+  if (!extname(out)) out += `.${ext}`;
+  await mkdir(dirname(out), { recursive: true });
+  await writeFile(out, Buffer.from(r.base64, "base64"));
+  return json({ path: out, triangles: r.triangles, bytes: r.bytes });
+}
+
 tool(
   "export_stl",
-  "Export all visible parts as one closed STL mesh for 3D printing. path defaults to ~/Downloads/<title>.stl. Only do this when the user asks.",
-  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
-  async ({ path }) => {
-    const r = await call("export_stl");
-    const base = (r.name || "model").replace(/[^\w.-]+/g, "-");
-    let out = path ? resolve(homedir(), path.replace(/^~(?=\/|$)/, homedir())) : resolve(homedir(), "Downloads", `${base}.stl`);
-    if (!extname(out)) out += ".stl";
-    await mkdir(dirname(out), { recursive: true });
-    await writeFile(out, Buffer.from(r.base64, "base64"));
-    return json({ path: out, triangles: r.triangles, bytes: r.bytes });
+  "Export all visible parts as an STL for 3D printing, each part its own closed shell; with solid: true, all parts joined into one closed solid (slower). path defaults to ~/Downloads/<title>.stl. Only do this when the user asks.",
+  {
+    path: z.string().optional().describe("Absolute path, or relative to the home folder."),
+    solid: z.boolean().optional().describe("Join every part into one solid, to print in one piece."),
   },
+  async ({ path, solid }) => save(await call("export_stl", { solid: Boolean(solid) }), path, "stl"),
+);
+
+tool(
+  "export_3mf",
+  "Export all visible parts as a 3MF file: one named, coloured object per part, for slicers and other CAD tools. path defaults to ~/Downloads/<title>.3mf. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_3mf"), path, "3mf"),
 );
 
 await listen();

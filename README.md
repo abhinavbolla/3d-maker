@@ -28,9 +28,13 @@ npm start          # or the same app in your browser, at http://localhost:5173
 - The app checks how parts fit: which parts pass into each other, how deep and where, at rest and through the whole motion, so a rotor blade that strikes the tail during its turn is found. Claude sees this after each step of a plan and fixes it (cutting a hole where a shaft goes into a hub, for example). Parts pinned together at a joint may overlap around the pin; threads count as fitting when they mate.
 - Parts move in the view, and mechanisms work: a crank drives its rod and piston, a swashplate pitches rotor blades through their pitch links. Claude declares every joint (each pin, ball joint and rod end), and the app checks over the whole motion that no joint comes apart, so a mechanism that only looks right in one frame is caught. Pause stops the motion.
 - Drag to orbit, right-drag to pan, scroll to zoom, F to fit the view, Esc to deselect.
-- ⌘Z / ⇧⌘Z undo and redo every change, Claude's included. ⌘S saves, ⌘O opens, ⌘E exports an STL. The model is also autosaved.
+- ⌘Z / ⇧⌘Z undo and redo every change, Claude's included. ⌘S saves, ⌘O opens, ⌘E exports an STL; the Export menu also has one-solid STL and 3MF. The model is also autosaved.
 
-Export STL writes every visible part as its own closed shell in one file, all at the same detail, ready for a slicer. Parts are meshed in parallel, so a 60-part rotor head exports in seconds.
+Export writes every visible part at the same detail, meshed in parallel, so a 60-part rotor head exports in seconds:
+
+- **STL**: each part its own closed shell in one file, ready for a slicer.
+- **STL, one solid**: every part joined into one closed solid, to print in one piece (slower: one solid is meshed on one core).
+- **3MF**: one named, coloured object per part, for slicers and other CAD tools.
 
 ## How it works
 
@@ -41,7 +45,7 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
 ```
 
 - **Models are short scripts.** Claude writes JavaScript in a small modelling language (`sphere`, `capsule`, `revolve`, `union(..., smooth)`, `.symmetric("y")`, `.radial(4)`, `part(...)`, `param(...)`). Motion is part of the script too: a part can `follow` another, move by any function of time (`turn`, `slide`, `link` for rigid rods, `where` to track a point on another part), and `joint` declares connections the app checks. The full reference is the instructions in [mcp/server.mjs](mcp/server.mjs). Sliders are `param()` values, so a tweak re-runs the script and nothing downstream breaks.
-- **Our own geometry kernel** ([src/kernel](src/kernel)). Shapes are signed distance fields: a function that says how far any point is from the surface. Joining, cutting, blending and hollowing are a line of math each and cannot fail. The mesher refines coarse to fine near the surface, uses dual contouring so sharp edges stay sharp, adds detail where parts are thin, and repairs pinched spots, so every mesh is closed. Detail is shared out by surface area, so a big part is as detailed as a small one; each change shows a quick preview first, then the same model meshed finer in the background (Claude's screenshots wait for that). In the view, vertices are split along sharp edges, so each face is shaded flat to its edge instead of smearing into the next. Fit checks ([src/kernel/fit.js](src/kernel/fit.js)) work on the distance functions directly, with no meshes: space is split into boxes, searched deepest overlap first, and a box is settled as soon as its centre's distances show it is wholly inside both parts or outside one.
+- **Our own geometry kernel** ([src/kernel](src/kernel)). Shapes are signed distance fields: a function that says how far any point is from the surface. Joining, cutting, blending and hollowing are a line of math each and cannot fail. The mesher refines coarse to fine near the surface, uses dual contouring so sharp edges stay sharp, adds detail where parts are thin, and repairs pinched spots, so every mesh is closed. A part made by adding small pieces to a body (bolts on a hub) is meshed piece by piece, so each small piece gets cells that suit its size instead of the body's. Detail is shared out by surface area, so a big part is as detailed as a small one; each change shows a quick preview first, then the same model meshed finer in the background (Claude's screenshots wait for that). In the view, vertices are split along sharp edges, so each face is shaded flat to its edge instead of smearing into the next. Fit checks ([src/kernel/fit.js](src/kernel/fit.js)) work on the distance functions directly, with no meshes: space is split into boxes, searched deepest overlap first, and a box is settled as soon as its centre's distances show it is wholly inside both parts or outside one.
 - **The prompt box** starts your own `claude -p` with this app's MCP server and only its tools allowed. The desktop app does this from Rust ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)); the browser version uses a small endpoint in the dev server ([vite.config.js](vite.config.js)). Follow-up prompts continue the same Claude conversation.
 - Each window has its own id. A Claude run started from a window drives only that window, even with several windows or browser tabs open. The bridge only accepts the app itself (checked by WebSocket origin) on localhost.
 
@@ -59,6 +63,7 @@ npm run test:e2e                       # the real prompt box with your real Clau
 npm run try -- "a rotor head"          # one prompt, saves pictures, script and plan in runs/
 node test/mcp.test.mjs                 # the MCP tools against an open app
 node test/check-stl.mjs model.stl      # checks an STL is well formed and closed
+node test/check-3mf.mjs model.3mf      # checks a 3MF: zip, names, colours, every part closed
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
 cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude Code
 ```
@@ -67,8 +72,8 @@ cd src-tauri && cargo test -- --include-ignored   # finds and runs your Claude C
 
 ## Not done yet
 
-- No exact CAD surfaces: export is STL only (no STEP), and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where nothing fails.
-- Very fine detail on very large models (a 1 mm logo on a 10 m helicopter) is limited by mesh detail, and features smaller than a mesh cell (a 5 mm bevel on a 7 mm cell) come out saw-toothed. The view uses lighter meshes than the export.
+- No exact CAD surfaces: export is STL and 3MF meshes (no STEP), and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where nothing fails.
+- Very fine detail cut into a very large part (a 1 mm engraved logo on a 10 m fuselage) is limited by that part's mesh detail, and features smaller than a mesh cell (a 5 mm bevel on a 7 mm cell) come out saw-toothed. Small pieces added to a big part keep their own detail. The view uses lighter meshes than the export.
 - No dragging parts around in the view; changes are sliders or prompts.
 - Collisions in motion are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.
 - Threads are real helical solids, but on a big model they are finer than the mesh and look like smooth rods.

@@ -7,6 +7,10 @@ import { compile, threadRoot } from "../src/kernel/sdf.js";
 import { checkPairs } from "../src/kernel/fit.js";
 import { meshSDF, meshVolume, meshBounds, openEdges, toSTL, displayMesh } from "../src/kernel/mesh.js";
 import { runScript } from "../src/kernel/script.js";
+import { to3MF } from "../src/kernel/threemf.js";
+import { meshPart, splitPieces } from "../src/kernel/pieces.js";
+import { convexHullPlanes } from "../src/kernel/hull.js";
+import { check3MF } from "./check-3mf.mjs";
 
 const mesh = (node, budget = 40000) => {
   const { f, box } = compile(node);
@@ -36,12 +40,16 @@ function closedByPosition(m) {
   return [...edges.values()].every((n) => n === 2);
 }
 
+// Tests run one after another, in order; a test may be async.
 let passed = 0;
+let queue = Promise.resolve();
 const test = (name, fn) => {
-  const t = performance.now();
-  fn();
-  passed++;
-  console.log(`ok  ${name} (${Math.round(performance.now() - t)} ms)`);
+  queue = queue.then(async () => {
+    const t = performance.now();
+    await fn();
+    passed++;
+    console.log(`ok  ${name} (${Math.round(performance.now() - t)} ms)`);
+  });
 };
 
 test("volumes of simple shapes", () => {
@@ -134,6 +142,57 @@ test("a union of many parts gives exactly the nearest part's distance", () => {
     const want = Math.min(...each.map((q) => q.f(...p)));
     assert.ok(Math.abs(u.f(...p) - want) < 1e-12, `at ${p} union gives ${u.f(...p)}, nearest part ${want}`);
   }
+});
+
+test("3MF export: a valid zip with one named, coloured, closed object per part", async () => {
+  const shapes = [
+    ["Base & plate", "#8d939a", { t: "box", s: [40, 30, 6], r: 1 }],
+    ['Knob "A"', "#c0603a", { t: "move", v: [0, 0, 12], c: { t: "sphere", r: 7 } }],
+  ];
+  const objects = shapes.map(([name, color, node]) => {
+    const { f, box } = compile(node);
+    return { name, color, ...meshSDF(f, box, { budget: 8000 }) };
+  });
+  const bytes = await to3MF(objects, { title: "Test <plate>" });
+  const r = check3MF(Buffer.from(bytes));
+  assert.deepEqual(r.problems, []);
+  assert.equal(r.title, "Test &lt;plate&gt;");
+  assert.deepEqual(r.objects.map((o) => [o.name, o.color, o.triangles]), objects.map((o) => [o.name, `${o.color.toUpperCase()}FF`, o.indices.length / 3]));
+});
+
+test("small pieces of a big part keep their detail, and the volume stays right", () => {
+  // A 600 mm plate with 8 M10 bolts on it: meshed whole, the plate's cells
+  // are too big for a bolt head; in pieces, each bolt gets its own.
+  const r = runScript('let p = box(600, 600, 20);\nconst bolts = [];\nfor (let i = 0; i < 8; i++) bolts.push(bolt("M10", 30, { thread: false }).at(-250 + i * 70, 0, 10));\npart("Plate", p.add(bolts));');
+  const node = r.parts[0].node;
+  assert.ok(splitPieces(node).length > 8, "the plate and every bolt are pieces");
+  const whole = compile(node);
+  const one = meshSDF(whole.f, whole.box, { budget: 6000 });
+  const split = meshPart(node, { budget: 6000 });
+  assert.ok(!split.incomplete, "every piece is closed");
+  // Each piece is its own closed shell: every edge used exactly twice.
+  assert.equal(openEdges(split), 0, "the mesh in pieces is closed");
+  assert.ok(split.indices.length > 3 * one.indices.length, `${split.indices.length / 3} triangles in pieces, ${one.indices.length / 3} whole`);
+  // Same volume as meshing it whole very finely.
+  const fine = meshSDF(whole.f, whole.box, { budget: 400000 });
+  const v = meshVolume(fine);
+  assert.ok(Math.abs(split.volume - v) / v < 0.002, `volume ${split.volume} in pieces, ${v} whole`);
+  // A part with no small pieces is meshed exactly as before.
+  const cube = compile({ t: "box", s: [10, 10, 10] });
+  assert.equal(meshPart({ t: "box", s: [10, 10, 10] }, { budget: 2000 }).indices.length, meshSDF(cube.f, cube.box, { budget: 2000 }).indices.length);
+});
+
+test("hulls of many points on flat faces stay tidy and quick", () => {
+  // A grid of points on each face of a cube: every point but the corners
+  // lies in a face plane, which used to tangle the hull's faces.
+  const pts = [];
+  for (let i = 0; i <= 12; i++)
+    for (let j = 0; j <= 12; j++)
+      for (const [a, b, c] of [[i, j, 0], [i, j, 12], [i, 0, j], [i, 12, j], [0, i, j], [12, i, j]]) pts.push([a * 1.0001, b, c]);
+  const t = performance.now();
+  const planes = convexHullPlanes(pts);
+  assert.equal(planes.length, 6, `${planes.length} planes`);
+  assert.ok(performance.now() - t < 500, `${Math.round(performance.now() - t)} ms`);
 });
 
 test("big parts are meshed as finely as asked, whatever the budget", () => {
@@ -745,4 +804,5 @@ test("the app's Claude is allowed every tool the server offers", () => {
   assert.match(app, /import \{ REFERENCE \} from "..\/..\/mcp\/reference.mjs"/);
 });
 
+await queue;
 console.log(`${passed} tests passed`);

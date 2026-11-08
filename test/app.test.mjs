@@ -2,6 +2,11 @@
 // plans, step checks, appending code, ghosted screenshots, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
 import { startHarness, checks } from "./harness.mjs";
+import { writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { check3MF } from "./check-3mf.mjs";
 
 const { check, fail, done } = checks();
 const h = await startHarness({ port: 5179 });
@@ -90,6 +95,29 @@ try {
   // Export gives a closed STL.
   const stl = await h.stlIsClosed(w);
   check(stl.closed && stl.triangles > 0, `export gives a closed STL (${stl.triangles} triangles)`);
+
+  // Two parts, one sunk into the other: as separate shells, as one solid
+  // (one shell, less triangles: the hidden faces go), and as a 3MF with both
+  // parts named and coloured.
+  await call("set_model", { script: 'part("Base", box(40, 40, 10), { color: "#4f7cac" });\npart("Peg", cylinder(5, 20).at(0, 0, 12), { color: "#d9a441" });' });
+  const shells = await call("export_stl");
+  const solid = await call("export_stl", { solid: true });
+  const stlClosed = (r) => {
+    const path = join(tmpdir(), `3d-maker-${process.pid}-${Date.now()}.stl`);
+    writeFileSync(path, Buffer.from(r.base64, "base64"));
+    try {
+      return execFileSync(process.execPath, [new URL("./check-stl.mjs", import.meta.url).pathname, path], { encoding: "utf8" });
+    } catch {
+      return null;
+    } finally {
+      rmSync(path, { force: true });
+    }
+  };
+  const shellsOut = stlClosed(shells.result), solidOut = stlClosed(solid.result);
+  check(shellsOut && solidOut && solid.result.triangles < shells.result.triangles, `one solid is closed and smaller (${solid.result?.triangles} triangles, ${shells.result?.triangles} as two shells)`);
+  const m3 = await call("export_3mf");
+  const r3 = m3.result ? check3MF(Buffer.from(m3.result.base64, "base64")) : { problems: [m3.error], objects: [] };
+  check(!r3.problems.length && r3.objects.map((o) => `${o.name} ${o.color}`).join(", ") === "Base #4F7CACFF, Peg #D9A441FF", `3MF has both parts, named, coloured and closed (${r3.objects.map((o) => `${o.name} ${o.color} ${o.triangles}`).join(", ") || r3.problems})`);
 
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.

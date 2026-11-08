@@ -2,6 +2,12 @@
 // lies outside the hull so far removes the faces it can see and is joined
 // to the edge of that hole. Returns the hull's face planes [nx, ny, nz, d]
 // (n · p <= d inside), with coplanar faces merged.
+//
+// The faces a point sees are found by walking from the face it is furthest
+// above to neighbouring faces, so they always form one patch with a single
+// edge loop around it, even when many points lie in one plane (flat sides
+// of boxes and cylinders), where testing every face on its own can pick a
+// ragged set and leave the hull's faces tangled.
 export function convexHullPlanes(points) {
   // Drop repeats.
   const seen = new Set();
@@ -28,62 +34,89 @@ export function convexHullPlanes(points) {
   const d = ext((p) => Math.abs(dot(nabc, sub(p, a))));
   if (Math.abs(dot(nabc, sub(d, a))) <= eps * Math.max(1, Math.hypot(...nabc))) throw new Error("hull needs shapes that are not flat");
 
-  const faces = []; // { v: [i, j, k], n, off, dead }
   const pts = [a, b, c, d];
-  const centre = [0, 1, 2].map((k) => (a[k] + b[k] + c[k] + d[k]) / 4);
+  const M = P.length + 4; // vertex index bound, for edge keys
+  const faces = []; // { v: [i, j, k] (outward winding), n, off, area, dead }
+  const edgeFace = new Map(); // directed edge u * M + w -> face, for each live face's edges
   const addFace = (i, j, k) => {
     let n = cross(sub(pts[j], pts[i]), sub(pts[k], pts[i]));
-    const l = Math.hypot(...n) || 1;
-    n = n.map((v) => v / l);
-    let off = dot(n, pts[i]);
-    let v = [i, j, k];
-    // Outward: the centre is on the inside.
-    if (dot(n, centre) > off) (n = n.map((x) => -x)), (off = -off), (v = [i, k, j]);
-    faces.push({ v, n, off, dead: false });
+    const area = Math.hypot(...n);
+    n = n.map((v) => v / (area || 1));
+    const f = { v: [i, j, k], n, off: dot(n, pts[i]), area, dead: false };
+    faces.push(f);
+    edgeFace.set(i * M + j, f);
+    edgeFace.set(j * M + k, f);
+    edgeFace.set(k * M + i, f);
+    return f;
   };
-  addFace(0, 1, 2);
-  addFace(0, 1, 3);
-  addFace(0, 2, 3);
-  addFace(1, 2, 3);
+  // Outward winding for the tetrahedron: the fourth point is behind each face.
+  const tet = [[0, 1, 2, 3], [0, 1, 3, 2], [0, 2, 3, 1], [1, 2, 3, 0]];
+  for (const [i, j, k, o] of tet) {
+    const n = cross(sub(pts[j], pts[i]), sub(pts[k], pts[i]));
+    if (dot(n, sub(pts[o], pts[i])) > 0) addFace(i, k, j);
+    else addFace(i, j, k);
+  }
 
-  for (const p of P) {
-    if (p === a || p === b || p === c || p === d) continue;
-    const visible = faces.filter((f) => !f.dead && dot(f.n, p) - f.off > eps);
-    if (!visible.length) continue;
-    // Horizon: edges of visible faces whose other side is not visible.
-    const edges = new Map();
-    for (const f of visible) {
-      f.dead = true;
+  // Points in a shuffled order (seeded, so the result is repeatable): in the
+  // order they come, each new point would see much of the hull.
+  let seed = 12345;
+  const order = P.filter((p) => p !== a && p !== b && p !== c && p !== d);
+  for (let i = order.length - 1; i > 0; i--) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    const j = seed % (i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+
+  let dead = 0;
+  for (const p of order) {
+    // The face p is furthest above.
+    let best = null, bestD = eps;
+    for (const f of faces) {
+      if (f.dead) continue;
+      const h = dot(f.n, p) - f.off;
+      if (h > bestD) (bestD = h), (best = f);
+    }
+    if (!best) continue;
+    // Walk to the neighbours p also sees; the edges where the walk stops are
+    // the loop the new faces hang from.
+    const visible = new Set([best]);
+    const stack = [best];
+    const horizon = [];
+    while (stack.length) {
+      const f = stack.pop();
       for (let e = 0; e < 3; e++) {
         const u = f.v[e], w = f.v[(e + 1) % 3];
-        const back = `${w},${u}`;
-        if (edges.has(back)) edges.delete(back);
-        else edges.set(`${u},${w}`, [u, w]);
+        const g = edgeFace.get(w * M + u);
+        if (!g || visible.has(g)) continue;
+        if (dot(g.n, p) - g.off > eps) (visible.add(g), stack.push(g));
+        else horizon.push([u, w]);
       }
+    }
+    dead += visible.size;
+    for (const f of visible) {
+      f.dead = true;
+      const [i, j, k] = f.v;
+      for (const key of [i * M + j, j * M + k, k * M + i]) if (edgeFace.get(key) === f) edgeFace.delete(key);
     }
     const pi = pts.length;
     pts.push(p);
-    for (const [u, w] of edges.values()) {
-      let n = cross(sub(pts[w], pts[u]), sub(p, pts[u]));
-      const l = Math.hypot(...n) || 1;
-      n = n.map((x) => x / l);
-      faces.push({ v: [u, w, pi], n, off: dot(n, p), dead: false });
-    }
-    // Compact now and then.
-    if (faces.length > 4 * pts.length + 64) {
-      const live = faces.filter((f) => !f.dead);
+    for (const [u, w] of horizon) addFace(u, w, pi);
+    // Drop dead faces now and then.
+    if (dead > faces.length / 2) {
+      const keep = faces.filter((f) => !f.dead);
       faces.length = 0;
-      faces.push(...live);
+      faces.push(...keep);
+      dead = 0;
     }
   }
 
-  // Merge faces that lie in the same plane. Points packed very close
-  // together can leave a sliver face turned the wrong way; a face that has
-  // points outside it is dropped (that only makes the hull a hair larger).
+  // Merge faces that lie in the same plane. Slivers too thin to have a
+  // reliable normal are skipped, and so is any face with points outside it
+  // (that only makes the hull a hair larger).
   const tol = 1e-6 * Math.max(size, 1);
   const planes = [];
   for (const f of faces) {
-    if (f.dead) continue;
+    if (f.dead || f.area <= 1e-12 * Math.max(size * size, 1)) continue;
     if (pts.some((p) => dot(f.n, p) - f.off > tol)) continue;
     if (planes.some((q) => dot(q, f.n) > 1 - 1e-9 && Math.abs(q[3] - f.off) < 1e-6 * Math.max(size, 1))) continue;
     planes.push([...f.n, f.off]);

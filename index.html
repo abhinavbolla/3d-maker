@@ -15,7 +15,14 @@
         <button data-action="new" title="New model">New</button>
         <button data-action="open" title="Open (⌘O)">Open</button>
         <button data-action="save" title="Save (⌘S)">Save</button>
-        <button data-action="export" title="Export STL for 3D printing (⌘E)">Export STL</button>
+        <div class="menu">
+          <button id="export-button" type="button" title="Export for 3D printing (⌘E exports an STL)" aria-haspopup="menu" aria-expanded="false">Export</button>
+          <div id="export-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-export="stl"><span>STL</span><small>Each part a closed shell</small></button>
+            <button type="button" role="menuitem" data-export="solid"><span>STL, one solid</span><small>All parts joined, to print in one piece</small></button>
+            <button type="button" role="menuitem" data-export="3mf"><span>3MF</span><small>Named, coloured parts</small></button>
+          </div>
+        </div>
       </nav>
     </header>
 

@@ -3,6 +3,7 @@
 // (JSON shape trees per part), so it can be meshed in parallel and cached.
 import { compile, compile2, isEmptyBox, threadRoot, threadPitchRadius, hullDirections } from "./sdf.js";
 import { meshSDF } from "./mesh.js";
+import { convexHullPlanes } from "./hull.js";
 import { makePoseApi, sampleMotion, defaultLoop } from "./motion.js";
 import { layoutText } from "./font.js";
 
@@ -724,6 +725,42 @@ function tube(pts, smooth = 0) {
 // re-running a script is quick.
 const HULL_DIRS = 2000;
 const hullCache = new Map();
+
+// The vertices of P (packed x, y, z) that can be furthest in some
+// direction. Most of a mesh's vertices lie inside, or on the surface of, the
+// hull of its furthest vertices in 96 directions, and those never are.
+function candidates(P) {
+  const rough = new Set();
+  for (const [x, y, z] of hullDirections(96)) {
+    let best = -Infinity, at = 0;
+    for (let i = 0; i < P.length; i += 3) {
+      const v = x * P[i] + y * P[i + 1] + z * P[i + 2];
+      if (v > best) (best = v), (at = i);
+    }
+    rough.add(at);
+  }
+  let planes;
+  try {
+    planes = convexHullPlanes([...rough].map((i) => [P[i], P[i + 1], P[i + 2]]));
+  } catch {
+    return P; // flat or tiny: keep every vertex
+  }
+  let size = 1;
+  for (let i = 0; i < P.length; i++) size = Math.max(size, Math.abs(P[i]));
+  const tol = 1e-6 * size;
+  const out = [];
+  for (const i of rough) out.push(P[i], P[i + 1], P[i + 2]);
+  for (let i = 0; i < P.length; i += 3) {
+    if (rough.has(i)) continue;
+    for (const n of planes)
+      if (n[0] * P[i] + n[1] * P[i + 1] + n[2] * P[i + 2] - n[3] > tol) {
+        out.push(P[i], P[i + 1], P[i + 2]);
+        break;
+      }
+  }
+  return Float64Array.from(out);
+}
+
 function hull(...args) {
   const { nodes } = shapesAndSmooth(args, "hull");
   if (!nodes.length) fail("hull needs at least one shape");
@@ -735,15 +772,16 @@ function hull(...args) {
     const P = meshSDF(f, box, { budget: 30000 }).positions;
     if (!P.length) fail("hull of nothing: the shapes are empty");
     const picked = new Set();
+    const C = candidates(P);
     for (const [x, y, z] of hullDirections(HULL_DIRS)) {
       let best = -Infinity, at = 0;
-      for (let i = 0; i < P.length; i += 3) {
-        const v = x * P[i] + y * P[i + 1] + z * P[i + 2];
+      for (let i = 0; i < C.length; i += 3) {
+        const v = x * C[i] + y * C[i + 1] + z * C[i + 2];
         if (v > best) (best = v), (at = i);
       }
       picked.add(at);
     }
-    pts = [...picked].map((i) => [R5(P[i]), R5(P[i + 1]), R5(P[i + 2])]);
+    pts = [...picked].map((i) => [R5(C[i]), R5(C[i + 1]), R5(C[i + 2])]);
     hullCache.set(key, pts);
     if (hullCache.size > 50) hullCache.delete(hullCache.keys().next().value);
   }

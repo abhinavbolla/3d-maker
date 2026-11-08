@@ -42,6 +42,12 @@ const MAX_STEPS = 40;
 const OVERLAP_NOTE = "These parts pass into each other by overlap_mm, volume_cm3 in all (at at_seconds into the motion, for moving parts); where is the box around the overlap. Solid parts should touch, not overlap: where one part fits into another (a shaft into a hub, a blade root into a grip, a bolt into a plate), cut a hole for it; otherwise move or resize them. Overlap around a joint() is left out. Threads count as fitting when they mate.";
 
 export function createCommands({ store, viewport, kernel }) {
+  // An exported file, as the MCP server takes it back.
+  const exported = (r) => {
+    let bin = "";
+    for (let i = 0; i < r.bytes.length; i += 0x8000) bin += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000));
+    return { name: store.state.result?.title || "model", base64: btoa(bin), triangles: r.triangles, bytes: r.bytes.length };
+  };
   const partsByName = () => new Map((store.state.result?.parts ?? []).map((p) => [p.name, p]));
   // Pictures for Claude show the fine detail: wait for the background pass
   // (at most 15 s; after that the preview is shown).
@@ -144,11 +150,7 @@ export function createCommands({ store, viewport, kernel }) {
       return out;
     },
     screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
-    export_stl: async () => {
-      const r = await kernel.exportSTL(store.state.result?.parts ?? []);
-      let bin = "";
-      for (let i = 0; i < r.bytes.length; i += 0x8000) bin += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000));
-      return { name: store.state.result?.title || "model", base64: btoa(bin), triangles: r.triangles, bytes: r.bytes.length };
-    },
+    export_stl: async ({ solid = false } = {}) => exported(await kernel.exportSTL(store.state.result?.parts ?? [], { solid: Boolean(solid) })),
+    export_3mf: async () => exported(await kernel.export3MF(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
   };
 }

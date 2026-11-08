@@ -1,10 +1,13 @@
 // Runs model scripts and meshes parts on a pool of workers, with a cache so
 // only parts that changed are meshed again.
 import { worldBox, boxesMeet } from "../kernel/fit.js";
+import { toSTL } from "../kernel/mesh.js";
+import { to3MF } from "../kernel/threemf.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
-const RUN_TIMEOUT_MS = 10000;
+const RUN_TIMEOUT_MS = 30000;
 const MESH_TIMEOUT_MS = 120000;
+const SOLID_TIMEOUT_MS = 300000;
 const FIT_TIMEOUT_MS = 60000;
 // Moments of the motion loop checked for parts hitting each other.
 const FIT_FRAMES = 120;
@@ -98,6 +101,12 @@ const EXPORT_BUDGET = 250000;
 // with T triangles has about T/2 surface cells, and (s/c)^2 times as many at
 // cell c. Each part's budget is its share at that cell size, so thin parts
 // still get their extra cells.
+function visible(parts) {
+  const shown = parts.filter((p) => !p.hidden && p.mesh?.indices.length);
+  if (!shown.length) throw new Error("There is nothing to export.");
+  return shown;
+}
+
 export function exportDetail(parts, budget = EXPORT_BUDGET) {
   const est = parts.map((p) => (p.mesh.indices.length / 6) * p.mesh.cellSize ** 2);
   const cell = Math.sqrt(est.reduce((a, b) => a + b, 0) / budget);
@@ -174,22 +183,41 @@ export function createKernel() {
     }
   }
 
-  // Every visible part as its own closed shell, in one STL. Parts are meshed
-  // in parallel at one cell size for the whole model (see exportDetail).
-  async function exportSTL(parts) {
-    const shown = parts.filter((p) => !p.hidden && p.mesh?.indices.length);
-    if (!shown.length) throw new Error("There is nothing to export.");
+  // Closed meshes of every visible part, meshed in parallel at one cell size
+  // for the whole model (see exportDetail): [{ name, color, positions, indices }].
+  async function exportMeshes(parts) {
+    const shown = visible(parts);
     const { cell, budgets } = exportDetail(shown);
-    const pieces = await Promise.all(
-      shown.map((p, i) => job({ type: "stl", node: p.node, budget: budgets[i], maxCell: cell }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
+    return Promise.all(
+      shown.map(async (p, i) => ({
+        name: p.name,
+        color: p.color,
+        ...(await job({ type: "export", node: p.node, budget: budgets[i], maxCell: cell, what: `Part "${p.name}"` }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
+      })),
     );
-    const triangles = pieces.reduce((s, r) => s + r.triangles, 0);
-    const bytes = new Uint8Array(84 + triangles * 50);
-    bytes.set(pieces[0].bytes.subarray(0, 80));
-    new DataView(bytes.buffer).setUint32(80, triangles, true);
-    let o = 84;
-    for (const r of pieces) bytes.set(r.bytes.subarray(84), o), (o += r.bytes.length - 84);
-    return { bytes, triangles, cellSize: cell };
+  }
+
+  // STL of every visible part, each its own closed shell; with solid, all of
+  // them joined into one closed solid (slower: one worker meshes it all).
+  async function exportSTL(parts, { solid = false } = {}) {
+    if (!solid) {
+      const meshes = await exportMeshes(parts);
+      return { bytes: toSTL(meshes), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0) };
+    }
+    const shown = visible(parts);
+    const { cell } = exportDetail(shown);
+    const m = await job(
+      { type: "export", solid: true, node: { t: "union", c: shown.map((p) => p.node) }, budget: EXPORT_BUDGET, maxCell: cell, what: "The model" },
+      SOLID_TIMEOUT_MS,
+      "Joining the parts into one solid took too long. Export them as separate parts instead.",
+    );
+    return { bytes: toSTL([m]), triangles: m.indices.length / 3 };
+  }
+
+  // 3MF: one named, coloured object per visible part.
+  async function export3MF(parts, title) {
+    const meshes = await exportMeshes(parts);
+    return { bytes: await to3MF(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0) };
   }
 
   // Which parts pass into each other, at rest and over the motion loop. With
@@ -234,5 +262,5 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, checkFit };
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, checkFit };
 }
