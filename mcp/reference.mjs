@@ -26,6 +26,10 @@ PRIMITIVES (all centred on the origin)
   loft([[z, profile], ...], { smooth })
                                   a solid through profiles at increasing heights z (smooth by default): wings and blades (airfoil sections), fuselages, hulls, bottles, shoes, handles, transitions from round to square.
                                   Sections morph into each other in proportion, so chord, thickness and sweep change smoothly. Loft along Z, then rotate it into place.
+  views({ side, top, front }, smooth?)
+                                  a solid from its outlines in two or three views, the way a body is drawn on paper: the solid is what all the outlines share.
+                                  side: outline x = world X, outline y = world Z. top: x = X, y = Y. front: x = Y, y = Z. smooth rounds the edges where the views meet.
+                                  The best way to get a recognisable vehicle body (fuselage, car body, hull, cab): draw the real side and top outlines with path() curves.
 
 PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and loft)
   circle(r)    rect(w, h, round?)    polygon([[x,y], ...], round?)     round = corner radius
@@ -155,6 +159,15 @@ EXAMPLE
   part("Arm", capsule([0, 0, 16], top, 9), { color: "#9aa3ad" });
   const shade = cone(70, 25, 90).shell(2).cut(cylinder(68, 20).at(0, 0, -45)).rotateY(110).at(top[0] + 40, 0, top[2] - 20);
   part("Shade", shade, { color: "#b8483e" });
+
+MAKING IT LOOK REAL (vehicles, aircraft, machines)
+- Proportions first. Put the real overall dimensions at the top as constants (length, height, width, wheelbase or rotor diameter, cabin size) and check the result with bounds() and print().
+- Shape the body from its outlines: views() with the real side outline (nose, windshield rake, roof line, the hump over the engines, belly, how the tail tapers) and top outline (how it narrows to nose and tail), plus a front outline for flat sides with rounded corners. Use loft only where the cross-section itself changes character. A loft of plain rounded rectangles reads as a tube.
+- The eye knows a vehicle by its features. Add them as separate small pieces, each a real shape: glazing split into framed panes, doors with frames, hinges and handles, steps and grab handles, antennas, navigation and anti-collision lights, pitot tubes, intake screens, exhaust deflectors, access panels standing slightly proud, mirrors, wipers, tie-downs. Small pieces added to a part keep their own mesh detail.
+- A mechanism inside a vehicle (a rotor head, a landing gear, a suspension) gets the same pieces it would get if it were asked for alone.
+- Detail finer than about twice a part's detail_mm (finish_step lists it) cannot show; panel lines and rivets on a big body need to be separate pieces or left out.
+- Real colours: the real paint, dark tinted glass, black rubber, grey metal, and slightly different shades for different materials.
+- Point the nose toward +X. Then screenshot view "front" shows the side (the views() side outline), "top" the plan and "right" the nose. When the shape is done, take all three and compare each with the real object seen that way. Fix proportions and outlines before adding more detail.
 
 HOW TO WORK
 - Small things (up to about 5 parts: a mug, a bracket, a lamp): write the whole script with one set_model call, then screenshot and fix.

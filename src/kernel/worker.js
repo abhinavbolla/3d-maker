@@ -2,7 +2,7 @@
 // parallel; each job is independent.
 import { runScript } from "./script.js";
 import { compile } from "./sdf.js";
-import { meshSDF, meshBounds, displayMesh } from "./mesh.js";
+import { meshSDF, meshBounds, meshArea, displayMesh } from "./mesh.js";
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
 
@@ -19,7 +19,7 @@ self.onmessage = ({ data: job }) => {
       // Volume and size from the closed mesh; the copy for drawing has
       // vertices split along sharp edges.
       const d = displayMesh(m);
-      const result = { ...d, cellSize: m.cellSize, volume: m.volume, bounds: m.indices.length ? meshBounds(m) : null };
+      const result = { ...d, cellSize: m.cellSize, volume: m.volume, area: meshArea(m), bounds: m.indices.length ? meshBounds(m) : null };
       self.postMessage({ id: job.id, ok: true, result }, [d.positions.buffer, d.indices.buffer, d.normals.buffer]);
     } else if (job.type === "fit") {
       self.postMessage({ id: job.id, ok: true, result: checkPairs(job.parts, job.pairs, job) });

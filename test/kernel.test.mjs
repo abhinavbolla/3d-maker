@@ -182,6 +182,22 @@ test("small pieces of a big part keep their detail, and the volume stays right",
   assert.equal(meshPart({ t: "box", s: [10, 10, 10] }, { budget: 2000 }).indices.length, meshSDF(cube.f, cube.box, { budget: 2000 }).indices.length);
 });
 
+test("views: a solid from side, top and front outlines", () => {
+  // Side: x -50..50, z 30..70. Top: x -40..60, y -5..15. Front: a circle at
+  // height 50 that clips the corners. The solid is what all three share.
+  const r = runScript('const b = views({ side: rect(100, 40).move(0, 50), top: rect(100, 20).move(10, 5), front: circle(19).move(5, 50) });\nprint(bounds(b));\npart("A", b);');
+  assert.equal(r.error, undefined);
+  const b = JSON.parse(r.prints[0]);
+  assert.deepEqual(b.min.map(Math.round), [-40, -5, 31]);
+  assert.deepEqual(b.max.map(Math.round), [50, 15, 69]);
+  const { f, box } = compile(r.parts[0].node);
+  const v = meshVolume(meshSDF(f, box, { budget: 40000 }));
+  // 90 mm long, cross-section = the 20 x 40 rectangle inside the circle.
+  assert.ok(v > 90 * 600 && v < 90 * 800, `volume ${v}`);
+  assert.match(runScript('part("A", views({ side: rect(10, 10) }));').error, /at least two/);
+  assert.match(runScript('part("A", views({ side: rect(10, 10), back: rect(10, 10) }));').error, /unknown view "back"/);
+});
+
 test("hulls of many points on flat faces stay tidy and quick", () => {
   // A grid of points on each face of a cube: every point but the corners
   // lies in a face plane, which used to tangle the hull's faces.
@@ -372,7 +388,7 @@ test("thin parts are not lost", () => {
 });
 
 test("model scripts: example, test helicopter, Claude's helicopter", () => {
-  const lamp = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8").match(/EXAMPLE\n([\s\S]*?)\n\nHOW TO WORK/)[1];
+  const lamp = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8").match(/EXAMPLE\n([\s\S]*?)\n\n[A-Z]/)[1];
   for (const src of [lamp, ...["helicopter.js", "claude-helicopter.js"].map((f) => readFileSync(new URL(`./models/${f}`, import.meta.url), "utf8"))]) {
     const r = runScript(src);
     assert.equal(r.error, undefined, r.error);

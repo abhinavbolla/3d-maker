@@ -523,6 +523,18 @@ function solveVertex(hitsList, lo, c) {
 }
 
 // ---- mesh helpers ----
+// Surface area (mm2).
+export function meshArea({ positions: p, indices: t }) {
+  let s = 0;
+  for (let n = 0; n < t.length; n += 3) {
+    const a = t[n] * 3, b = t[n + 1] * 3, c = t[n + 2] * 3;
+    const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+    const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+    s += Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+  }
+  return s / 2;
+}
+
 export function meshVolume({ positions: p, indices: t }) {
   let v = 0;
   for (let n = 0; n < t.length; n += 3) {

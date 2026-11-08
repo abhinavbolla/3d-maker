@@ -151,7 +151,9 @@ export function createKernel() {
     const budget = Math.round(q.budget(n));
     // Rounded to quarter steps of a power of two, so small changes to the
     // model do not re-mesh every part either.
-    const area = boxArea(parts);
+    // The fine pass knows each part's real surface from its preview mesh;
+    // boxes overstate it, most of all for spread-out parts like a rotor.
+    const area = parts.every((p) => p.mesh?.area >= 0) ? parts.reduce((a, p) => a + (p.hidden ? 0 : p.mesh.area), 0) : boxArea(parts);
     const maxCell = area > 0 ? 2 ** (Math.round(4 * Math.log2(Math.sqrt(area / q.cells))) / 4) : Infinity;
     return { budget, maxCell, maxCells: q.partCap, key: `${quality}|${budget}|${maxCell}` };
   }

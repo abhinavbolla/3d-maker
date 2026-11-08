@@ -816,13 +816,39 @@ function subtract(...args) {
   if (nodes.length < 2) fail("subtract needs a shape and at least one shape to cut away");
   return new Shape({ t: "subtract", a: nodes[0], b: nodes.slice(1), k });
 }
+// A solid from its outlines in up to three views, the way a body is drawn on
+// paper: side (the outline's x is world X, its y is world Z), top (x is X,
+// y is Y) and front (x is Y, y is Z). Each outline is pushed
+// straight through the others and the solid is what all of them share; any
+// two views are enough. smooth rounds the edges where the views meet.
+function views(v, smooth) {
+  if (typeof v !== "object" || v === null || Array.isArray(v) || v instanceof Shape || v instanceof Profile)
+    fail("views expects outlines by view, like views({ side: path(...).close(), top: ..., front: ... })");
+  const known = ["side", "top", "front"];
+  for (const k of Object.keys(v)) if (!known.includes(k)) fail(`views: unknown view "${k}"; the views are side, top and front`);
+  const given = known.filter((k) => v[k] !== undefined);
+  if (given.length < 2) fail("views needs at least two of side, top and front");
+  let L = 1;
+  for (const k of given) {
+    const b = compile2(profileNode(v[k], `views ${k}`)).box;
+    if (!(b[2] > b[0] && b[3] > b[1])) fail(`views: the ${k} outline is empty`);
+    L = Math.max(L, ...b.map(Math.abs));
+  }
+  const H = 4 * L;
+  const slabs = [];
+  if (v.side) slabs.push(extrude(v.side, H).rotateX(90));
+  if (v.top) slabs.push(extrude(v.top, H));
+  if (v.front) slabs.push(extrude(v.front, H).rotateX(90).rotateZ(90));
+  return smooth === undefined ? intersect(...slabs) : intersect(...slabs, num(smooth, "views smooth", { nonneg: true }));
+}
+
 function intersect(...args) {
   const { nodes, k } = shapesAndSmooth(args, "intersect");
   if (nodes.length < 2) fail("intersect needs at least two shapes");
   return new Shape({ t: "intersect", c: nodes, k });
 }
 
-const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "circle", "rect", "polygon", "path", "airfoil", "text", "helix", "sweep", "loft", "hull", "bounds", "thread", "hole", "bolt", "nut", "washer", "metric", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
+const API_NAMES = ["box", "sphere", "ellipsoid", "cylinder", "cone", "capsule", "torus", "extrude", "revolve", "tube", "circle", "rect", "polygon", "path", "airfoil", "text", "helix", "sweep", "loft", "views", "hull", "bounds", "thread", "hole", "bolt", "nut", "washer", "metric", "union", "subtract", "intersect", "part", "param", "title", "print", "turn", "slide", "link", "still", "where", "joint", "loop"];
 const DEG = Math.PI / 180;
 // A joint may open by this much (mm) over the loop before it is reported.
 export const JOINT_TOLERANCE_MM = 1;
@@ -949,7 +975,7 @@ export function runScript(source, values = {}) {
   const loop = (seconds) => (loopSeconds = num(seconds, "loop seconds", { positive: true }));
   const print = (...a) => prints.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 
-  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, text, helix, sweep, loft, hull, bounds, thread, hole, bolt, nut, washer, metric, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
+  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, text, helix, sweep, loft, views, hull, bounds, thread, hole, bolt, nut, washer, metric, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
   try {
     // In its own block, so the script may reuse a built-in name (const hole = ...).
     const fn = new Function(...API_NAMES, ...BLOCKED, `"use strict"; {\n${source}\n}\n//# sourceURL=model.js`);
