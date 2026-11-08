@@ -39,7 +39,10 @@ export function planProgress(plan) {
 }
 
 const MAX_STEPS = 40;
-const OVERLAP_NOTE = "These parts pass into each other by overlap_mm, volume_cm3 in all (at at_seconds into the motion, for moving parts); where is the box around the overlap. Solid parts should touch, not overlap: where one part fits into another (a shaft into a hub, a blade root into a grip, a bolt into a plate), cut a hole for it; otherwise move or resize them. Overlap around a joint() is left out. Threads count as fitting when they mate.";
+const OVERLAP_NOTE = "These parts pass into each other by overlap_mm, volume_cm3 in all (at at_seconds into the motion, for moving parts); where is the box around the overlap. Solid parts should touch, not overlap: where one part fits into another (a shaft into a hub, a blade root into a grip, a bolt into a plate), cut a hole for it; otherwise move or resize them. Overlap around a joint() is left out. Threads count as fitting when they mate. Fix every one before you finish.";
+// Added when an overlap is between parts that share joints.
+const JOINT_NOTE = "joints: how many joint()s the two parts share. The overlap close around each joint is left out, so what is listed is somewhere else. One joint() covers one connection: where a part is several copies (radial, array), each copy has its own connection, and copies that move on their own (pitch links, blade grips, wheels on their own axles) must be separate parts, each with its own joint().";
+const overlapsNote = (overlaps) => (overlaps.some((o) => o.joints) ? `${OVERLAP_NOTE} ${JOINT_NOTE}` : OVERLAP_NOTE);
 
 export function createCommands({ store, viewport, kernel }) {
   // An exported file, as the MCP server takes it back.
@@ -121,7 +124,7 @@ export function createCommands({ store, viewport, kernel }) {
       return {
         step: s.name,
         parts: summary.parts.filter((p) => s.parts.includes(p.name)),
-        ...(fit.overlaps.length ? { overlaps: fit.overlaps, overlaps_note: OVERLAP_NOTE } : {}),
+        ...(fit.overlaps.length ? { overlaps: fit.overlaps, overlaps_note: overlapsNote(fit.overlaps) } : {}),
         plan: planProgress(updated),
         png: viewport.screenshot({ view: "iso", parts: s.parts, ghost: true, width: 900, height: 700 }),
       };
@@ -145,7 +148,7 @@ export function createCommands({ store, viewport, kernel }) {
       const { pairs, overlaps, gaps } = await checkFit(parts);
       const out = { checked_pairs: pairs, overlaps };
       if (parts?.length === 2) out.gap_mm = overlaps.length ? 0 : gaps[0]?.gap_mm ?? null;
-      if (overlaps.length) out.overlaps_note = OVERLAP_NOTE;
+      if (overlaps.length) out.overlaps_note = overlapsNote(overlaps);
       else out.note = store.state.result?.motion ? "No parts pass into each other, at rest or during the motion." : "No parts pass into each other.";
       return out;
     },

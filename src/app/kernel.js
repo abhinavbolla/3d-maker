@@ -140,7 +140,7 @@ export function createKernel() {
     );
     // Keep this build's meshes and a few recent ones (slider back-and-forth).
     for (const key of cache.keys()) if (!keep.has(key) && cache.size > keep.size + 60) cache.delete(key);
-    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, motion: r.motion, parts, ms: Math.round(performance.now() - t0), quality };
+    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, motion: r.motion, joints: r.joints, parts, ms: Math.round(performance.now() - t0), quality };
   }
 
   function detailFor(parts, quality) {
@@ -252,7 +252,7 @@ export function createKernel() {
       }
     const chunks = Array.from({ length: Math.min(SIZE, pairs.length) }, () => []);
     pairs.forEach((p, k) => chunks[k % chunks.length].push(p));
-    const joints = result.motion?.joints ?? [];
+    const joints = result.joints ?? result.motion?.joints ?? [];
     const found = await Promise.all(
       chunks.map((chunk) => {
         const used = [...new Set(chunk.flat())];

@@ -249,7 +249,7 @@ export function checkPairs(parts, pairs, { frames = [0], frameCount = 0, loop = 
     if (worst && moving) worst = { ...worst, ...deepest(worst.fa, worst.fb, worst.region, { cell, gap }) };
     if (!worst) continue;
     const res = { a: A.name, b: B.name };
-    if (pins.length) res.joined = true;
+    if (pins.length) res.joints = pins.length;
     const thick = -2 * worst.m;
     if (thick > TOUCH_MM) {
       // Volume at the worst moment, in boxes half as big as the overlap is thick,

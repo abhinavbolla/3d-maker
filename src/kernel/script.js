@@ -1034,7 +1034,8 @@ export function runScript(source, values = {}) {
   }
   const out = parts.map(({ own, ...p }) => ({ ...p, frames: sampled.frames.get(p.name) ?? null }));
   const motion = sampled.count ? { loop: loopLen, frames: sampled.count, joints: jointReport, links } : null;
-  return { title: modelTitle, parts: out, params, prints, warnings, motion };
+  // joints also go on their own, so the fit check leaves their overlap out in a model that does not move.
+  return { title: modelTitle, parts: out, params, prints, warnings, motion, joints: jointReport };
 }
 
 function niceStep(range) {

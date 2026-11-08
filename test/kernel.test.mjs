@@ -502,7 +502,7 @@ function fitOf(r, opts = {}) {
   const count = r.motion?.frames ?? 0;
   const step = Math.max(1, Math.ceil(count / 120));
   const frames = count ? Array.from({ length: Math.ceil(count / step) }, (_, k) => k * step) : [0];
-  return checkPairs(parts, pairs, { frames, frameCount: count, loop: r.motion?.loop ?? 0, joints: r.motion?.joints ?? [], ...opts });
+  return checkPairs(parts, pairs, { frames, frameCount: count, loop: r.motion?.loop ?? 0, joints: r.joints ?? [], ...opts });
 }
 const run = (src) => {
   const r = runScript(src);
@@ -638,6 +638,14 @@ test("fit: overlaps measured exactly, gaps, and collisions in motion", () => {
   // The hub moves with the blade: their overlap is found once, with no moment.
   const hub = hit.find((x) => x.b === "Hub");
   assert.ok(hub && hub.at_seconds === undefined, JSON.stringify(hub));
+
+  // One joint on four copies leaves out only that copy's overlap; the other
+  // three are listed, with how many joints the pair shares.
+  const copies = 'part("Horns", sphere(10).at(50, 0, 0).radial(4, "z")); part("Links", capsule([50, 0, 0], [50, 0, -60], 4).radial(4, "z"));';
+  const one = fitOf(run(`${copies} joint("Links", "Horns", [50, 0, 0]);`))[0];
+  assert.ok(one && one.joints === 1 && one.where.max[0] < 0 + 15 && one.where.min[0] < -40, JSON.stringify(one));
+  const all = fitOf(run(`${copies} for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; joint("Links", "Horns", [50 * Math.cos(a), 50 * Math.sin(a), 0]); }`));
+  assert.deepEqual(all, []);
 });
 
 // ---- round 3: bend, twist, taper, lattices, text, hull ----
