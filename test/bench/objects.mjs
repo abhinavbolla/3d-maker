@@ -78,7 +78,6 @@ async function one(o, port) {
         stl_closed: r.stl.closed,
         overlaps: r.fit?.overlaps.length ?? null,
         joints: r.summary.motion?.joints?.length ?? 0,
-        moving_parts: r.summary.parts.filter((p) => p.moves).length,
       }
     : { failed: true };
   const score = { id: o.id, prompt: o.prompt, checks, judge: await judge(o, dir) };

@@ -20,8 +20,10 @@ export async function startHarness({ port = 5178 } = {}) {
   process.on("exit", () => chrome.kill());
 
   const portFile = join(profile, "DevToolsActivePort");
-  for (let i = 0; i < 100 && !existsSync(portFile); i++) await sleep(100);
-  const [cdpPort, cdpPath] = readFileSync(portFile, "utf8").trim().split("\n");
+  // Chrome creates the file before it writes it, so wait for both lines.
+  const portLines = () => (existsSync(portFile) ? readFileSync(portFile, "utf8").trim().split("\n") : []);
+  for (let i = 0; i < 150 && !(portLines().length >= 2 && portLines()[1]); i++) await sleep(100);
+  const [cdpPort, cdpPath] = portLines();
   const cdp = new WebSocket(`ws://127.0.0.1:${cdpPort}${cdpPath}`);
   await new Promise((ok, fail) => ((cdp.onopen = ok), (cdp.onerror = fail)));
   let seq = 0;
