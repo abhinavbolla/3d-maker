@@ -2,6 +2,8 @@
   "name": "3d-maker",
   "version": "0.2.0",
   "private": true,
+  "license": "MIT",
+  "description": "Describe what you want to make, and Claude builds it as a 3D model you can 3D print.",
   "type": "module",
   "scripts": {
     "dev": "vite",

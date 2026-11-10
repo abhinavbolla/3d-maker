@@ -1,6 +1,11 @@
 # 3D Maker
 
-Describe what you want to make, and Claude builds it as a 3D model you can 3D print. Click any part to tweak it with a few sliders, or select it and describe the change.
+[![CI](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Describe what you want to make, and Claude builds it as a 3D model you can 3D print.** Click any part to tweak it with a few sliders, or select it and describe the change.
+
+> **3D Maker is in early development.** It runs from a clone of this repository, and there is no installer yet. See [Limitations](#limitations).
 
 ![A helicopter Claude made in 3D Maker](docs/helicopter.png)
 
@@ -49,6 +54,8 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
 - **The prompt box** starts your own `claude -p` with this app's MCP server and only its tools allowed. The desktop app does this from Rust ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)); the browser version uses a small endpoint in the dev server ([vite.config.js](vite.config.js)). Follow-up prompts continue the same Claude conversation.
 - Each window has its own id. A Claude run started from a window drives only that window, even with several windows or browser tabs open. The bridge only accepts the app itself (checked by WebSocket origin) on localhost.
 
+[docs/architecture.md](docs/architecture.md) walks through a prompt end to end and every file of the kernel.
+
 You can also drive the app from Claude Code or Claude Desktop directly by adding the MCP server:
 
 ```bash
@@ -87,7 +94,7 @@ node test/render-run.mjs runs/x/model.js runs/x "Part A,Part B"   # pictures and
 
 `npm run test:e2e` opens two app windows in headless Chrome, types two prompts into the first ("a 30 mm cube with a 10 mm hole", then, with it selected, "make this 50 mm wide") and checks the result by measuring it, not by reading Claude's reply: the part's size from its mesh, the hole from its volume, a closed STL, and that the second window was not touched. A third prompt (a desk fan) must be built with a plan, with every step finished and every planned part present. It needs Google Chrome and uses a little of your Claude plan. It does not drive the desktop window itself (WebDriver for Tauri does not run on macOS); the desktop app's way of starting Claude is covered by the Rust test.
 
-## Not done yet
+## Limitations
 
 - No exact CAD surfaces: export is STL and 3MF meshes (no STEP), and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where nothing fails.
 - Very fine detail cut into a very large part (a 1 mm engraved logo on a 10 m fuselage) is limited by that part's mesh detail, and features smaller than a mesh cell (a 5 mm bevel on a 7 mm cell) come out saw-toothed. Thin edges and rods are much better than they were, but the very tip of a sharp trailing edge is still a few mm short. Small pieces added to a big part keep their own detail. The view uses lighter meshes than the export.
@@ -98,6 +105,12 @@ node test/render-run.mjs runs/x/model.js runs/x "Part A,Part B"   # pictures and
 - Packaging: the app runs from this folder. It finds the MCP server and Node here, so there is no installer, no signing and no real icon yet.
 - Running your own `claude -p` from an app is fine for your own use. Check Anthropic's terms before giving the app to others.
 
-## Licenses
+## Contributing
 
-Our code has no license yet. Dependencies are MIT (three.js, MCP SDK, ws, zod, Vite, Tauri's JS packages) or MIT/Apache-2.0 (Tauri). One build-time-only dependency of Vite, lightningcss, is MPL-2.0; it is not shipped in the app.
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test and open a pull request. Please report security problems privately, as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+3D Maker is licensed under the [MIT License](LICENSE).
+
+Its dependencies are MIT (three.js, MCP SDK, ws, zod, Vite, Tauri's JS packages) or MIT/Apache-2.0 (Tauri). One build-time-only dependency of Vite, lightningcss, is MPL-2.0; it is not shipped in the app.
