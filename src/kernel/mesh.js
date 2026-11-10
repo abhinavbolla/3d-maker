@@ -71,7 +71,47 @@ const EMPTY_MESH = () => ({ positions: new Float32Array(0), indices: new Uint32A
 // the budget, until cells are about this small (mm; cells halve each level,
 // so they end up at most 1.41x maxCell), so the big parts of a model are as
 // detailed as the small ones. maxCells: hard cap.
-export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals = false, minCell = 0, maxCell = Infinity } = {}) {
+// A flat part (a blade, a wing, a plate) is thin along one axis only. Cells
+// fine enough for its thickness everywhere would cost far too many, and cells
+// sized by its area leave its thin edges thinner than a cell, where they come
+// out bitten. So such a part is meshed stretched along its thin axis, up to
+// 8x, and the mesh squeezed back: its cells are that much finer through the
+// thickness while its broad faces, which are most of its surface, need few
+// more of them. (A blade's box is also deepened by its twist, so the stretch
+// is up to twice how flat its box is.)
+const MAX_STRETCH = 8;
+export function stretchFor(box) {
+  const ext = [box[3] - box[0], box[4] - box[1], box[5] - box[2]];
+  const order = [0, 1, 2].sort((a, b) => ext[a] - ext[b]);
+  const thin = ext[order[0]], mid = ext[order[1]];
+  if (!(thin > 0) || mid / thin < 3) return null;
+  const s = [1, 1, 1];
+  s[order[0]] = Math.min(MAX_STRETCH, (2 * mid) / thin);
+  return s;
+}
+
+// Only parts whose plain mesh misses thin slivers (blades and wings, which
+// taper to an edge) are meshed again stretched; a plate's square edges come
+// out sharp either way, and stretched it would spend cells on its sides.
+const SLIVERS = 0.001;
+export function meshSDF(f, box, opts = {}) {
+  const s = stretchFor(box);
+  if (!s) return meshGrid(f, box, opts);
+  // The search alone (no surface yet) says the cell size and what it misses.
+  const probe = meshGrid(f, box, opts, null, true);
+  if (!(probe.missed > SLIVERS)) return meshGrid(f, box, opts);
+  // Never coarser along the broad faces than the plain mesh would be.
+  const stretched = meshGrid(f, box, { ...opts, maxCell: Math.min(opts.maxCell ?? Infinity, probe.cellSize) }, s);
+  return stretched.incomplete || stretched.cellSize > probe.cellSize * 1.01 ? meshGrid(f, box, opts) : stretched;
+}
+
+function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = false, minCell = 0, maxCell = Infinity } = {}, stretch = null, probe = false) {
+  // Stretched (see stretchFor): the grid works on the shape stretched by S.
+  // Distances are measured before the stretch, so they never exceed the
+  // stretched ones: still a safe underestimate for the search.
+  const S = stretch ?? [1, 1, 1];
+  const f = stretch ? (x, y, z) => fw(x / S[0], y / S[1], z / S[2]) : fw;
+  const box = stretch ? [boxw[0] * S[0], boxw[1] * S[1], boxw[2] * S[2], boxw[3] * S[0], boxw[4] * S[1], boxw[5] * S[2]] : boxw;
   const ext = [box[3] - box[0], box[4] - box[1], box[5] - box[2]];
   const L = Math.max(...ext);
   if (!(L > 0) || !Number.isFinite(L)) return EMPTY_MESH();
@@ -86,10 +126,10 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
 
   // Lipschitz margin: smooth blends and scaled shapes are slight underestimates, never over.
   const LIP = 1.5;
-  let kept;
+  let kept, centres;
   for (let level = 0; ; level++) {
     kept = [];
-    const centres = [];
+    centres = [];
     const lim = LIP * c * HALF_DIAG;
     for (let n = 0; n < cells.length; n += 3) {
       const i = cells[n], j = cells[n + 1], k = cells[n + 2];
@@ -114,6 +154,8 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
     }
     c /= 2;
   }
+
+  if (probe) return { missed: missedDetail(f, O, c, kept, centres), cellSize: c };
 
   // ---- 2. dual contouring at cell size c ----
   const cornerVals = new Map();
@@ -185,12 +227,24 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
     }
   }
 
-  // Crossing point and surface normal on each sign-changing edge.
-  const eps = c * 0.02;
-  const grad = (x, y, z, out, o) => {
-    const a = f(x + eps, y - eps, z - eps), b = f(x - eps, y - eps, z + eps), d = f(x - eps, y + eps, z - eps), g = f(x + eps, y + eps, z + eps);
-    let nx = a - b - d + g, ny = -a - b + d + g, nz = -a + b - d + g;
+  // Crossing point and surface normal on each sign-changing edge. Normals
+  // come from the shape before the stretch (stretched, it changes faster
+  // across than along, so samples near an edge would mix the two faces), and
+  // are turned into the stretched space for placing vertices.
+  const eps = (c * 0.002) / Math.max(...S);
+  const worldNormal = (x, y, z, out, o) => {
+    (x /= S[0]), (y /= S[1]), (z /= S[2]);
+    const a = fw(x + eps, y - eps, z - eps), b = fw(x - eps, y - eps, z + eps), d = fw(x - eps, y + eps, z - eps), g = fw(x + eps, y + eps, z + eps);
+    const nx = a - b - d + g, ny = -a - b + d + g, nz = -a + b - d + g;
     const len = Math.hypot(nx, ny, nz) || 1;
+    out[o] = nx / len;
+    out[o + 1] = ny / len;
+    out[o + 2] = nz / len;
+  };
+  const grad = (x, y, z, out, o) => {
+    worldNormal(x, y, z, out, o);
+    if (!stretch) return;
+    const nx = out[o] / S[0], ny = out[o + 1] / S[1], nz = out[o + 2] / S[2], len = Math.hypot(nx, ny, nz) || 1;
     out[o] = nx / len;
     out[o + 1] = ny / len;
     out[o + 2] = nz / len;
@@ -208,13 +262,24 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
     };
     const end = [i, j, k];
     end[a] += 1;
+    // Regula falsi, Illinois variant: when one end keeps its place, its
+    // value is halved, so it converges even where the distances on the two
+    // sides grow at very different rates (thin walls, stretched meshes).
     let ta = 0, fa = corner(i, j, k), tb = 1, fb = corner(end[0], end[1], end[2]);
-    let t = fa / (fa - fb);
-    for (let it = 0; it < 3; it++) {
+    let t = fa / (fa - fb), side = 0;
+    for (let it = 0; it < 12; it++) {
       const ft = f(...at(t));
-      if (ft < 0 === fa < 0) (ta = t), (fa = ft);
-      else (tb = t), (fb = ft);
-      if (Math.abs(fa - fb) < 1e-12) break;
+      if (Math.abs(ft) < c * 1e-6) break;
+      if (ft < 0 === fa < 0) {
+        (ta = t), (fa = ft);
+        if (side === -1) fb /= 2;
+        side = -1;
+      } else {
+        (tb = t), (fb = ft);
+        if (side === 1) fa /= 2;
+        side = 1;
+      }
+      if (tb - ta < 1e-5 || Math.abs(fa - fb) < 1e-12) break;
       t = ta + ((tb - ta) * fa) / (fa - fb);
     }
     h = new Float64Array(6);
@@ -321,9 +386,10 @@ export function meshSDF(f, box, { budget = 40000, maxCells = 3_000_000, normals 
   const out = { positions, indices: Uint32Array.from(idx), cellSize: c, incomplete: incomplete || missing > 0 };
   if (normals) {
     const nrm = new Float32Array(positions.length);
-    for (let n = 0; n < pos.length; n += 3) grad(pos[n], pos[n + 1], pos[n + 2], nrm, n);
+    for (let n = 0; n < pos.length; n += 3) worldNormal(pos[n], pos[n + 1], pos[n + 2], nrm, n);
     out.normals = nrm;
   }
+  if (stretch) for (let n = 0; n < positions.length; n += 3) (positions[n] /= S[0]), (positions[n + 1] /= S[1]), (positions[n + 2] /= S[2]);
   return out;
 }
 

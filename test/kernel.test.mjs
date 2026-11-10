@@ -221,6 +221,39 @@ test("views with round: rounded sections sized by the side and top outlines", ()
   assert.match(runScript(`part("A", views({ side: rect(10, 10), top: rect(10, 10), tumble: 0.2 }));`).error, /go with round/);
 });
 
+test("thin edges and thin rods come out whole, not bitten or speckled", () => {
+  // A twisted wing whose trailing edge tapers to nothing: along the span,
+  // its edge in the mesh must follow a smooth line, without bites a cell
+  // deep (they were, before flat parts were meshed stretched).
+  const wing = runScript('part("W", loft([[0, airfoil("0012", 200).move(-50, 0).rotate(6)], [1500, airfoil("0012", 200).move(-50, 0).rotate(-4)]]).rotateX(-90));');
+  const m = meshPart(wing.parts[0].node, { budget: 6000 });
+  const P = m.positions, bins = Math.floor(1290 / (2 * m.cellSize)), te = new Array(bins).fill(-Infinity);
+  for (let i = 0; i < P.length; i += 3) {
+    const b = Math.floor(((P[i + 1] - 105) / 1290) * bins);
+    if (b >= 0 && b < bins) te[b] = Math.max(te[b], P[i]);
+  }
+  const worst = Math.max(...te.map((v, b) => Math.max(...te.slice(Math.max(0, b - 3), b + 4)) - v));
+  assert.ok(worst < 0.75 * m.cellSize, `trailing edge bitten ${worst.toFixed(1)} mm deep with ${m.cellSize.toFixed(1)} mm cells`);
+  // Wire spokes 8 mm thick on a 600 mm wheel: every spoke is there all along
+  // (on the wheel's coarse cells they were speckled).
+  const wheel = runScript('const s = []; for (let i = 0; i < 24; i++) { const a = i * 15 * Math.PI / 180; s.push(capsule([60 * Math.cos(a), 60 * Math.sin(a), 0], [280 * Math.cos(a + 0.3), 280 * Math.sin(a + 0.3), i % 2 ? 30 : -30], 4)); }\npart("S", union(s).add(torus(290, 12)));');
+  const w = meshPart(wheel.parts[0].node, { budget: 3000 });
+  const near = new Set();
+  const key = (x, y, z) => `${Math.round(x / 5)},${Math.round(y / 5)},${Math.round(z / 5)}`;
+  for (let i = 0; i < w.positions.length; i += 3) near.add(key(w.positions[i], w.positions[i + 1], w.positions[i + 2]));
+  let shown = 0, total = 0;
+  for (let i = 0; i < 24; i++)
+    for (let t = 0.1; t <= 0.9; t += 0.02) {
+      const a = i * 15 * Math.PI / 180, x = (1 - t) * 60 * Math.cos(a) + t * 280 * Math.cos(a + 0.3), y = (1 - t) * 60 * Math.sin(a) + t * 280 * Math.sin(a + 0.3), z = t * (i % 2 ? 30 : -30);
+      total++;
+      let hit = false;
+      for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) for (let dz = -1; dz <= 1 && !hit; dz++) hit = near.has(key(x + dx * 5, y + dy * 5, z + dz * 5));
+      if (hit) shown++;
+    }
+  assert.equal(shown, total, `${total - shown} of ${total} points along the spokes have no mesh near them`);
+  assert.equal(openEdges(w), 0);
+});
+
 test("tube takes smooth as a radius, or true and false as sweep does", () => {
   const pts = "[[0, 0, 0, 5], [50, 0, 0, 5], [50, 50, 0, 5]]";
   for (const s of ["", ", 3", ", true", ", false"]) assert.equal(runScript(`part("T", tube(${pts}${s}));`).error, undefined, `tube(...${s})`);

@@ -28,6 +28,20 @@ export function splitPieces(node) {
 }
 
 const extent = (b) => Math.max(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
+const boxVolume = (b) => (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]);
+// Long but thin pieces (wire spokes, rods, cables, antennas) are too long to
+// count as small, but thinner than the body's cells, so meshed with it they
+// come out speckled. A piece counts as thin when no point of a 12 x 12 x 12
+// grid over its box is deeper inside it than THIN of the part's size.
+const THIN = 1 / 50;
+function isThin(p, L) {
+  const [x0, y0, z0, x1, y1, z1] = p.box, N = 12;
+  for (let i = 0; i < N; i++)
+    for (let j = 0; j < N; j++)
+      for (let k = 0; k < N; k++)
+        if (p.f(x0 + ((i + 0.5) * (x1 - x0)) / N, y0 + ((j + 0.5) * (y1 - y0)) / N, z0 + ((k + 0.5) * (z1 - z0)) / N) < -L * THIN) return false;
+  return true;
+}
 const isEmptyBox = (b) => !(b[3] >= b[0] && b[4] >= b[1] && b[5] >= b[2]);
 // A piece is small when it is less than this part of the whole part's size.
 export const SMALL = 1 / 8;
@@ -40,7 +54,10 @@ export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals =
   if (pieces.length > 1) {
     const compiled = pieces.map((n) => ({ n, ...compile(n) })).filter((p) => !isEmptyBox(p.box));
     const L = extent(whole.box);
-    const small = compiled.filter((p) => extent(p.box) < L * SMALL);
+    // Small, or thin and taking up little of the part's box (a thin skin
+    // over the whole part is the body, not a detail).
+    const room = boxVolume(whole.box) / 8;
+    const small = compiled.filter((p) => extent(p.box) < L * SMALL || (boxVolume(p.box) < room && isThin(p, L)));
     if (small.length) {
       const big = compiled.filter((p) => !small.includes(p));
       const opts = { maxCells, normals };
