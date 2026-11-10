@@ -1,0 +1,10 @@
+[
+ { "id": "helicopter", "prompt": "a twin-engine utility helicopter like a UH-60, with a main rotor whose blades change pitch through a swashplate and a turning tail rotor" },
+ { "id": "drone", "prompt": "a camera quadcopter drone with four spinning propellers, a 3-axis camera gimbal and folding landing legs" },
+ { "id": "robot-arm", "prompt": "a 6-axis industrial robot arm on a floor base, every joint rotating through a slow demo motion" },
+ { "id": "race-car", "prompt": "a 1960s open-wheel racing car with steering front wheels, wire-spoke wheels, exhaust pipes and a roll hoop" },
+ { "id": "watch", "prompt": "a mechanical wristwatch with moving hour, minute and second hands, a crown, a bezel and strap lugs" },
+ { "id": "yacht", "prompt": "a 12 m sailing yacht with its hull, fin keel, a rudder that turns, mast, boom and sails" },
+ { "id": "office-chair", "prompt": "an office chair with a five-star base, swivelling casters, a gas lift, a tilting seat and armrests" },
+ { "id": "engine", "prompt": "a single-cylinder engine whose crankshaft, connecting rod and piston move together, with a finned cylinder and a flywheel" }
+]

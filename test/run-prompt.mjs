@@ -21,7 +21,7 @@ try {
   const t = Date.now();
   let lastLine = "";
   const reply = await h.prompt(w, text, {
-    timeoutMs: 45 * 60 * 1000,
+    timeoutMs: Number(process.env.TIMEOUT_MIN ?? 45) * 60 * 1000,
     async onTick() {
       const line = `${await w('document.getElementById("status").textContent')} | ${await w('document.getElementById("progress").hidden ? "" : document.getElementById("progress-text").textContent')}`;
       if (line.replace(/\d+ s/, "") !== lastLine.replace(/\d+ s/, "")) console.log(`  ${line}`);
@@ -36,6 +36,8 @@ try {
   }
   // The script first, so a failed export or fit check loses nothing.
   writeFileSync(join(out, "model.js"), summary.script);
+  const mesh = await w("window.__3dmaker.exportSTL()").catch(() => null);
+  if (mesh?.base64) writeFileSync(join(out, "model.stl"), Buffer.from(mesh.base64, "base64"));
   const stl = await h.stlIsClosed(w).catch((e) => ({ closed: false, triangles: 0, error: String(e.message ?? e) }));
   const fit = (await h.command(w, "check_fit")).result ?? null;
   writeFileSync(join(out, "result.json"), JSON.stringify({ prompt: text, seconds: Math.round((Date.now() - t) / 1000), reply, stl, fit, summary: { ...summary, script: undefined } }, null, 1));
