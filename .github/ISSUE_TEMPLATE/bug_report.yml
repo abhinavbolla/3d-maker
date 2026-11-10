@@ -1,0 +1,37 @@
+name: Bug report
+description: Something doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you asked for, what you expected, and what you got instead. A screenshot helps.
+    validations:
+      required: true
+  - type: textarea
+    id: prompt
+    attributes:
+      label: Prompt and model
+      description: >-
+        The prompt you typed. If the model looks wrong, attach the saved model (⌘S) or paste the
+        script, so we can load it without Claude.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. npm run app
+        2. Type "a desk lamp with a weighted base"
+        3. Click the shade and type "make this wider"
+        4. ...
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      description: Desktop app or browser, OS, Node version, Claude Code version (`claude --version`) and the commit.
+      placeholder: Desktop app, macOS 26.1, Node 22.11, Claude Code 2.x, commit abc1234
+    validations:
+      required: true
