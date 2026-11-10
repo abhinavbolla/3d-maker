@@ -277,6 +277,35 @@ export function createViewport(container, { onPick }) {
     return center;
   }
 
+  // A straight-on view without perspective (like a drawing), fitted to the
+  // model: sizes compare truly across the picture and the model fills it.
+  // Used for pictures from the side, top, front and so on.
+  function flatCamera(view, box, aspect) {
+    const dir = new THREE.Vector3(...VIEWS[view]).normalize();
+    const center = box.getCenter(new THREE.Vector3());
+    const reach = Math.max(box.getSize(new THREE.Vector3()).length(), 1);
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, reach / 100, reach * 4);
+    cam.up.set(0, 0, 1);
+    if (view === "top") cam.up.set(0, 1, 0);
+    if (view === "bottom") cam.up.set(0, -1, 0);
+    cam.position.copy(center).addScaledVector(dir, reach * 2);
+    cam.lookAt(center);
+    cam.updateMatrixWorld(true);
+    let w = 0, h = 0;
+    for (let i = 0; i < 8; i++) {
+      const c = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).applyMatrix4(cam.matrixWorldInverse);
+      w = Math.max(w, Math.abs(c.x));
+      h = Math.max(h, Math.abs(c.y));
+    }
+    w = Math.max(w, 1e-3) * 1.06;
+    h = Math.max(h, 1e-3) * 1.06;
+    if (w / h < aspect) w = h * aspect;
+    else h = w / aspect;
+    Object.assign(cam, { left: -w, right: w, top: h, bottom: -h });
+    cam.updateProjectionMatrix();
+    return cam;
+  }
+
   function fit(view = "iso") {
     const center = placeCamera(camera, view, modelBox());
     orbit.target.copy(center);
@@ -297,9 +326,11 @@ export function createViewport(container, { onPick }) {
   function screenshot({ view, width = 1024, height = 768, parts: only, ghost = false, at = 0 } = {}) {
     const unknown = (only ?? []).filter((n) => !parts.has(n));
     if (unknown.length) throw new Error(`There is no part named ${unknown.map((n) => `"${n}"`).join(", ")}.`);
-    const cam = camera.clone();
+    let cam = camera.clone();
     cam.aspect = width / height;
-    if (view || only) placeCamera(cam, view ?? "iso", modelBox(only));
+    const v = view ?? (only ? "iso" : null);
+    if (v && v !== "iso" && VIEWS[v] && modelBox(only)) cam = flatCamera(v, modelBox(only), width / height);
+    else if (v) placeCamera(cam, v, modelBox(only));
     else cam.updateProjectionMatrix();
     const ghosted = [];
     if (only && ghost) {

@@ -167,7 +167,7 @@ tool(
 
 tool(
   "screenshot",
-  "Render the model and return a PNG so you can see it. at: pose moving parts at that many seconds into the motion. view: iso, top, bottom, front, back, left or right; omit it to use the user's current camera. part: frame just that part. parts: frame these parts and show the rest faintly.",
+  "Render the model and return a PNG so you can see it. at: pose moving parts at that many seconds into the motion. view: iso (in perspective), or top, bottom, front, back, left or right (flat and true to scale, like a drawing, filling the picture); omit it to use the user's current camera. part: frame just that part. parts: frame these parts and show the rest faintly.",
   {
     view: z.enum(["iso", "top", "bottom", "front", "back", "left", "right"]).optional(),
     part: z.string().optional(),

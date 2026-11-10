@@ -824,8 +824,12 @@ function subtract(...args) {
 function views(v, smooth) {
   if (typeof v !== "object" || v === null || Array.isArray(v) || v instanceof Shape || v instanceof Profile)
     fail("views expects outlines by view, like views({ side: path(...).close(), top: ..., front: ... })");
-  const known = ["side", "top", "front"];
-  for (const k of Object.keys(v)) if (!known.includes(k)) fail(`views: unknown view "${k}"; the views are side, top and front`);
+  const known = ["side", "top", "front"], shaping = ["round", "belly", "tumble", "stations"];
+  for (const k of Object.keys(v)) if (!known.includes(k) && !shaping.includes(k)) fail(`views: unknown option "${k}"; the views are side, top and front, and round, belly, tumble and stations shape a rounded body`);
+  if (shaping.some((k) => v[k] !== undefined)) {
+    if (v.round === undefined) fail("views: belly, tumble and stations go with round");
+    return roundViews(v); // already round: smooth has nothing to round
+  }
   const given = known.filter((k) => v[k] !== undefined);
   if (given.length < 2) fail("views needs at least two of side, top and front");
   let L = 1;
@@ -840,6 +844,89 @@ function views(v, smooth) {
   if (v.top) slabs.push(extrude(v.top, H));
   if (v.front) slabs.push(extrude(v.front, H).rotateX(90).rotateZ(90));
   return smooth === undefined ? intersect(...slabs) : intersect(...slabs, num(smooth, "views smooth", { nonneg: true }));
+}
+
+// views({ side, top, round }): a body along X from its side outline (x, z)
+// and top outline (x, y), with rounded cross-sections instead of the
+// box-like ones the plain views() gives: at each
+// station the section is a superellipse as tall as the side outline and as
+// wide as the top outline there. round sets its shape (2 an oval, 3 a soft
+// box, 5 or more nearly square), belly the lower half's (default round), and
+// tumble how much the upper half narrows towards the top (0 to 0.4, as a
+// cabin's sides lean in). Each can be one number or a table [[x, value], ...]
+// so a cabin can flow into an oval tail cone and a round boom.
+const BODY_POINTS = 64;
+function roundViews(v) {
+  if (v.front) fail("views with round uses the side and top outlines only; leave out front (round sets the cross-section instead)");
+  if (!v.side || !v.top) fail("views with round needs both a side outline (x, z) and a top outline (x, y)");
+  const side = compile2(profileNode(v.side, "views side")), top = compile2(profileNode(v.top, "views top"));
+  const x0 = Math.max(side.box[0], top.box[0]), x1 = Math.min(side.box[2], top.box[2]);
+  if (!(x1 > x0)) fail("views: the side and top outlines do not overlap along X");
+  const L = x1 - x0;
+  const table = (val, name, dflt) => {
+    if (val === undefined) return () => dflt;
+    if (typeof val === "number") {
+      num(val, `views ${name}`);
+      return () => val;
+    }
+    if (!Array.isArray(val) || val.length < 1) fail(`views ${name} must be a number or a table [[x, value], ...]`);
+    const t = val.map((q, i) => {
+      if (!Array.isArray(q) || q.length !== 2) fail(`views ${name} entry ${i} must be [x, value], got ${what(q)}`);
+      return [num(q[0], `views ${name} x`), num(q[1], `views ${name} value`)];
+    }).sort((a, b) => a[0] - b[0]);
+    return (x) => {
+      if (x <= t[0][0]) return t[0][1];
+      for (let i = 1; i < t.length; i++) if (x <= t[i][0]) return t[i - 1][1] + ((t[i][1] - t[i - 1][1]) * (x - t[i - 1][0])) / (t[i][0] - t[i - 1][0]);
+      return t[t.length - 1][1];
+    };
+  };
+  const round = table(v.round, "round", 3), belly = table(v.belly, "belly", undefined), tumble = table(v.tumble, "tumble", 0);
+  const stations = Math.round(num(v.stations ?? 40, "views stations", { positive: true }));
+  if (stations < 4 || stations > 200) fail("views stations must be between 4 and 200");
+  // The outline's extent across a vertical line at x: [low, high] or null.
+  const span = (o, x) => {
+    const lo0 = o.box[1], hi0 = o.box[3], N = 256;
+    let first = -1, last = -1;
+    for (let i = 0; i <= N; i++) {
+      if (o.f(x, lo0 + ((hi0 - lo0) * i) / N) < 0) {
+        if (first < 0) first = i;
+        last = i;
+      }
+    }
+    if (first < 0) return null;
+    const edge = (inside, outside) => {
+      let a = inside, b = outside;
+      for (let k = 0; k < 30; k++) {
+        const m = (a + b) / 2;
+        if (o.f(x, m) < 0) a = m;
+        else b = m;
+      }
+      return a;
+    };
+    const at = (i) => lo0 + ((hi0 - lo0) * i) / N;
+    return [first > 0 ? edge(at(first), at(first - 1)) : at(0), last < N ? edge(at(last), at(last + 1)) : at(N)];
+  };
+  const minSize = L * 0.002;
+  const secs = [];
+  for (let i = 0; i <= stations; i++) {
+    // Closer together near the ends, where the shape changes fastest.
+    const x = x0 + L * (0.002 + 0.996 * (1 - Math.cos((Math.PI * i) / stations)) / 2);
+    const s = span(side, x), w = span(top, x);
+    if (!s || !w) continue;
+    const zc = (s[0] + s[1]) / 2, b = Math.max((s[1] - s[0]) / 2, minSize), yc = (w[0] + w[1]) / 2, a = Math.max((w[1] - w[0]) / 2, minSize);
+    const nUp = Math.max(1.2, round(x)), nLo = Math.max(1.2, belly(x) ?? nUp), th = Math.min(Math.max(tumble(x), 0), 0.9);
+    const pts = [];
+    for (let k = 0; k < BODY_POINTS; k++) {
+      const t = (k / BODY_POINTS) * 2 * Math.PI, c = Math.cos(t), sn = Math.sin(t), n = sn >= 0 ? nUp : nLo;
+      const zz = b * Math.sign(sn) * Math.abs(sn) ** (2 / n);
+      let yy = a * Math.sign(c) * Math.abs(c) ** (2 / n);
+      if (zz > 0) yy *= 1 - th * (zz / b) ** 2;
+      pts.push([yc + yy, zc + zz]);
+    }
+    secs.push([x, outline(pts)]);
+  }
+  if (secs.length < 2) fail("views: the side and top outlines share too little length to make a body");
+  return loft(secs).rotateY(90).rotateX(90);
 }
 
 function intersect(...args) {

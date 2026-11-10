@@ -29,7 +29,12 @@ PRIMITIVES (all centred on the origin)
   views({ side, top, front }, smooth?)
                                   a solid from its outlines in two or three views, the way a body is drawn on paper: the solid is what all the outlines share.
                                   side: outline x = world X, outline y = world Z. top: x = X, y = Y. front: x = Y, y = Z. smooth rounds the edges where the views meet.
-                                  The best way to get a recognisable vehicle body (fuselage, car body, hull, cab): draw the real side and top outlines with path() curves.
+                                  Plain views() gives box-like cross-sections: right for flat-sided things (a truck box, a cabinet, a bracket).
+  views({ side, top, round, belly, tumble })
+                                  a body with ROUNDED cross-sections along X: at each x the section is as tall as the side outline and as wide as the top outline there.
+                                  round: its shape, 2 an oval, 3 a soft box, 5+ nearly square; belly: the lower half's (default round); tumble: 0 to 0.4, how much the
+                                  sides lean in towards the top. Each is a number or a table [[x, value], ...] along the length, so a squarish cabin flows into an oval
+                                  tail cone and a round boom. No front outline. The best way to make fuselages, hulls, car bodies, nacelles, drone and robot shells.
 
 PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and loft)
   circle(r)    rect(w, h, round?)    polygon([[x,y], ...], round?)     round = corner radius
@@ -160,16 +165,25 @@ EXAMPLE
   const shade = cone(70, 25, 90).shell(2).cut(cylinder(68, 20).at(0, 0, -45)).rotateY(110).at(top[0] + 40, 0, top[2] - 20);
   part("Shade", shade, { color: "#b8483e" });
 
+MAKING IT LOOK REAL (anything)
+- Form: no visible main part is a bare box, cylinder or sphere. Make each one the way the real one is shaped:
+  bodies, hulls, shells and housings: views({ side, top, round }) or a loft of sections that change along the length;
+  turned parts (watch cases, hubs, flywheels, pistons, lift columns, knobs): revolve a real profile with its steps, chamfers, grooves and a domed or curved back;
+  seats, backs, panels and covers people touch: curved (loft between curved profiles, .bend()), with rounded, thicker edges;
+  keels, rudders, fins, wings, blades, propellers: loft of airfoil() sections that taper and twist;
+  castings (crankcases, gearboxes, robot links, brackets): rounded sections, bosses where shafts enter, ribs, and union(a, b, smooth) where pieces of one casting meet so they read as one part, not glued-on blocks.
+- Before you finish, go through the main visible parts: any still made from a plain primitive with nothing shaping it gets reshaped.
+
 MAKING IT LOOK REAL (vehicles, aircraft, machines)
 - Proportions first. Put the real overall dimensions at the top as constants (length, height, width, wheelbase or rotor diameter, cabin size) and check the result with bounds() and print().
-- Shape the body from its outlines: views() with the real side outline (nose, windshield rake, roof line, the hump over the engines, belly, how the tail tapers) and top outline (how it narrows to nose and tail), plus a front outline for flat sides with rounded corners. Draw each outline with every break the real one has (usually 15 to 30 points and curves), not a few round corners. Use loft only where the cross-section itself changes character. A loft of plain rounded rectangles reads as a tube.
+- Shape the body from its outlines: views({ side, top, round }) with the real side outline (nose, windshield rake, roof line, the hump over the engines, belly, how the tail tapers) and top outline (how it narrows to nose and tail). Draw each outline with every break the real one has (usually 15 to 30 points and curves), not a few round corners. Then give the sections their real shape with a round table along the length: a cabin about 3.5 with a flatter belly (belly 5) and tumble 0.1, a tail cone easing to 2.4, a boom 2. Plain views() with a front outline gives slab sides with rounded corners, which reads as a box.
 - Let sections flow into each other the way the real skin does: a tail cone continues the cabin's roof and belly lines and tapers to the tail, a nacelle or fairing widens smoothly out of the roof. A thin tube or box stuck onto the end of another reads as a toy. Draw the body and tail cone as one outline, or blend them with union(a, b, smooth).
 - The eye knows a vehicle by its features. Add them as separate small pieces, each a real shape: glazing split into framed panes, doors with frames, hinges and handles, steps and grab handles, antennas, navigation and anti-collision lights, pitot tubes, intake screens, exhaust deflectors, access panels standing slightly proud, mirrors, wipers, tie-downs. Small pieces added to a part keep their own mesh detail.
 - A mechanism inside a vehicle (a rotor head, a landing gear, a suspension) gets the same pieces, motion and joints it would get if it were asked for alone. A helicopter rotor head: the swashplate tilts, and as the rotor turns each pitch link pushes its horn so that blade's pitch changes; every blade, grip, horn and link is its own part, made in a loop, with a joint() at both ends of each link.
 - Legs, struts, booms and arms carry weight and look it: a landing-gear strut is about a fifth to a quarter of its wheel's diameter thick, with a fork or axle yoke, a drag brace and a shock absorber; no load-carrying tube is thinner than about a fifteenth of its length. Keep them short by putting wheels and mounts where the real ones are.
 - Detail finer than about twice a part's detail_mm (finish_step lists it) cannot show; panel lines and rivets on a big body need to be separate pieces or left out.
 - Real colours: the real paint, dark tinted glass, black rubber, grey metal, and slightly different shades for different materials.
-- Point the nose toward +X. Then screenshot view "front" shows the side (the views() side outline), "top" the plan and "right" the nose. When the shape is done, take all three and compare each with the real object seen that way. Fix proportions and outlines before adding more detail.
+- Point the nose toward +X. Then screenshot view "front" shows the side (the views() side outline), "top" the plan and "right" the nose. These straight-on views are flat, like a drawing (no perspective), so lengths compare truly across the picture. When the shape is done, take all three and compare each with the real object seen that way. Fix proportions and outlines before adding more detail.
 
 HOW TO WORK
 - Small things (up to about 5 parts: a mug, a bracket, a lamp): write the whole script with one set_model call, then screenshot and fix.

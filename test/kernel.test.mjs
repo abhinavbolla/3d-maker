@@ -195,7 +195,30 @@ test("views: a solid from side, top and front outlines", () => {
   // 90 mm long, cross-section = the 20 x 40 rectangle inside the circle.
   assert.ok(v > 90 * 600 && v < 90 * 800, `volume ${v}`);
   assert.match(runScript('part("A", views({ side: rect(10, 10) }));').error, /at least two/);
-  assert.match(runScript('part("A", views({ side: rect(10, 10), back: rect(10, 10) }));').error, /unknown view "back"/);
+  assert.match(runScript('part("A", views({ side: rect(10, 10), back: rect(10, 10) }));').error, /unknown option "back"/);
+});
+
+test("views with round: rounded sections sized by the side and top outlines", () => {
+  // Side: x -50..50, z 30..70. Top: x -50..50, y -5..15. round 2 makes every
+  // section an ellipse 20 wide and 40 tall: an elliptic cylinder.
+  const shape = (opts) => `views({ side: rect(100, 40).move(0, 50), top: rect(100, 20).move(0, 5), ${opts} })`;
+  const r = runScript(`const b = ${shape("round: 2")};\nprint(bounds(b));\npart("A", b);`);
+  assert.equal(r.error, undefined, r.error);
+  const b = JSON.parse(r.prints[0]);
+  assert.deepEqual(b.min.slice(1).map(Math.round), [-5, 30]);
+  assert.deepEqual(b.max.slice(1).map(Math.round), [15, 70]);
+  assert.ok(b.min[0] < -49 && b.max[0] > 49, `length ${b.min[0]}..${b.max[0]}`);
+  close(volumeOf(`part("A", ${shape("round: 2")});`), Math.PI * 10 * 20 * 100, 0.03, "oval body");
+  // Higher round fills out towards the box; tumble narrows the top half.
+  const square = volumeOf(`part("A", ${shape("round: 8")});`);
+  assert.ok(square > 0.9 * 20 * 40 * 100 && square < 20 * 40 * 100, `round 8 volume ${square}`);
+  const leaning = volumeOf(`part("A", ${shape("round: 8, tumble: 0.3")});`);
+  assert.ok(leaning < square * 0.97, `tumble ${leaning} vs ${square}`);
+  // A table changes the section along the length: square at one end, oval at the other.
+  const mixed = volumeOf(`part("A", ${shape("round: [[-50, 8], [50, 2]]")});`);
+  assert.ok(mixed < square && mixed > Math.PI * 10 * 20 * 100, `mixed volume ${mixed}`);
+  assert.match(runScript(`part("A", views({ side: rect(10, 10), top: rect(10, 10), front: rect(10, 10), round: 3 }));`).error, /leave out front/);
+  assert.match(runScript(`part("A", views({ side: rect(10, 10), top: rect(10, 10), tumble: 0.2 }));`).error, /go with round/);
 });
 
 test("hulls of many points on flat faces stay tidy and quick", () => {
