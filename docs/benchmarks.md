@@ -2,6 +2,36 @@
 
 How to run these: see "Benchmarks" in the [README](../README.md). Each section is one run, newest first, so later changes can be compared against it.
 
+## Rounded bodies and flat views, 10 November 2026 (commit d78c876)
+
+**What changed:**
+- `views({ side, top, round, belly, tumble })` makes bodies with rounded cross-sections.
+- Side, top and front screenshots are now flat, true to scale, and fill the picture.
+- The reference has new form rules for every kind of object.
+
+**How it was compared:** the baseline models were re-rendered with the new camera and judged again, so both columns are scored from the same kind of picture. With the new pictures the baseline scored 5.9 overall and 5.0 for form, the same as with the old ones.
+
+| Object | Overall, before | Overall, after | Form, before | Form, after | Time (s), after |
+|---|---|---|---|---|---|
+| helicopter | 5.7 | 6.2 | 5.3 | 6.0 | 990 |
+| drone | 5.6 | 5.9 | 5.0 | 5.3 | 755 |
+| robot arm | 5.9 | 6.7 | 5.0 | 6.3 | 668 |
+| race car | 6.4 | 6.7 | 6.3 | 7.0 | 1059 |
+| watch | 5.8 | 6.3 | 4.3 | 4.7 | 226 |
+| yacht | 6.1 | 6.4 | 5.0 | 5.0 | 863 |
+| office chair | 6.3 | 7.0 | 4.3 | 5.7 | 536 |
+| engine | 5.7 | 5.8 | 5.0 | 5.0 | 252 |
+| **mean** | **5.9** | **6.4** | **5.0** | **5.6** | |
+
+**Results:**
+- All 8 objects scored higher overall.
+- Detail rose from 5.3 to 6.0, and mechanism from 5.7 to 6.0.
+- Claude used rounded bodies in 5 of the 8 objects, and revolve in all of them.
+
+**Costs and side effects:**
+- Runs took longer: the helicopter went from 476 to 990 s. Part of that is 3 runs sharing the machine instead of 2. The rest is more changes and more looks per model.
+- 4 of 8 runs lost a turn to `tube(..., true/false)`. Since this run, tube accepts that.
+
 ## Baseline, 10 November 2026 (commit 7ee0890)
 
 ### CADPrompt: 20 of 200 parts, prompts with measurements

@@ -716,7 +716,10 @@ function tube(pts, smooth = 0) {
   });
   const segs = [];
   for (let i = 1; i < p.length; i++) segs.push({ t: "capsule", a: p[i - 1].slice(0, 3), b: p[i].slice(0, 3), r1: p[i - 1][3], r2: p[i][3] });
-  return new Shape({ t: "union", c: segs, k: num(smooth, "tube smooth", { nonneg: true }) });
+  // smooth is a blend radius; true/false (as sweep and loft take it) mean a
+  // gentle blend of half the thinnest radius, or none.
+  const k = smooth === true ? Math.min(...p.map((q) => q[3])) / 2 : smooth === false ? 0 : num(smooth, "tube smooth", { nonneg: true });
+  return new Shape({ t: "union", c: segs, k });
 }
 
 // The convex hull of shapes: the smallest convex solid around them all, like

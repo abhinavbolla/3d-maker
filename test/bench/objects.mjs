@@ -97,7 +97,8 @@ const lines = [
   `${"object".padEnd(13)} ${keys.map((k) => k.slice(0, 5).padStart(6)).join("")}   parts overl  time`,
   ...scores.map((s) => `${s.id.padEnd(13)} ${keys.map((k) => String(s.judge?.[k] ?? "–").padStart(6)).join("")}   ${String(s.checks.parts ?? "–").padStart(5)} ${String(s.checks.overlaps ?? "–").padStart(5)} ${String(s.checks.seconds ?? "–").padStart(5)}`),
 ];
-const mean = (k) => (scores.reduce((t, s) => t + (s.judge?.[k] ?? 0), 0) / (scores.length || 1)).toFixed(1);
-lines.push(`${"mean".padEnd(13)} ${keys.map((k) => mean(k).padStart(6)).join("")}`);
+const judged = scores.filter((s) => typeof s.judge?.overall === "number");
+const mean = (k) => (judged.reduce((t, s) => t + s.judge[k], 0) / (judged.length || 1)).toFixed(1);
+lines.push(`${`mean of ${judged.length}`.padEnd(13)} ${keys.map((k) => mean(k).padStart(6)).join("")}`);
 console.log(`\n${lines.join("\n")}`);
 writeFileSync(join(out, "summary.txt"), `${lines.join("\n")}\n`);

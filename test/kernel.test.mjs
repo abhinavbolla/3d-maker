@@ -221,6 +221,12 @@ test("views with round: rounded sections sized by the side and top outlines", ()
   assert.match(runScript(`part("A", views({ side: rect(10, 10), top: rect(10, 10), tumble: 0.2 }));`).error, /go with round/);
 });
 
+test("tube takes smooth as a radius, or true and false as sweep does", () => {
+  const pts = "[[0, 0, 0, 5], [50, 0, 0, 5], [50, 50, 0, 5]]";
+  for (const s of ["", ", 3", ", true", ", false"]) assert.equal(runScript(`part("T", tube(${pts}${s}));`).error, undefined, `tube(...${s})`);
+  assert.match(runScript(`part("T", tube(${pts}, "yes"));`).error, /tube smooth/);
+});
+
 test("hulls of many points on flat faces stay tidy and quick", () => {
   // A grid of points on each face of a cube: every point but the corners
   // lies in a face plane, which used to tangle the hull's faces.
