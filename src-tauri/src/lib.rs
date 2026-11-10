@@ -54,24 +54,21 @@ fn shell_env() -> &'static ShellEnv {
     static ENV: OnceLock<ShellEnv> = OnceLock::new();
     ENV.get_or_init(|| {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let out = Command::new(&shell)
-            .args(["-l", "-c", "printf '%s\\n%s' \"$PATH\" \"$(command -v claude)\""])
-            .stdin(Stdio::null())
-            .output();
+        let out = Command::new(&shell).args(["-l", "-c", "printf '%s\\n%s' \"$PATH\" \"$(command -v claude)\""]).stdin(Stdio::null()).output();
         let home = std::env::var("HOME").unwrap_or_default();
         let (mut path, mut claude) = (std::env::var("PATH").unwrap_or_default(), None);
         if let Ok(o) = out {
             let text = String::from_utf8_lossy(&o.stdout).to_string();
             let mut lines = text.lines();
-            if let Some(p) = lines.next() {
-                if !p.is_empty() {
-                    path = p.to_string();
-                }
+            if let Some(p) = lines.next()
+                && !p.is_empty()
+            {
+                path = p.to_string();
             }
-            if let Some(c) = lines.next() {
-                if !c.trim().is_empty() {
-                    claude = Some(c.trim().to_string());
-                }
+            if let Some(c) = lines.next()
+                && !c.trim().is_empty()
+            {
+                claude = Some(c.trim().to_string());
             }
         }
         if claude.is_none() {
