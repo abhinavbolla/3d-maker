@@ -191,8 +191,14 @@ mod tests {
     }
 
     #[test]
+    fn reads_path_from_login_shell() {
+        assert!(shell_env().path.contains('/'));
+    }
+
+    // Needs Claude Code installed: cargo test -- --ignored
+    #[test]
+    #[ignore]
     fn finds_claude_through_login_shell() {
         assert!(shell_env().claude.is_some());
-        assert!(shell_env().path.contains('/'));
     }
 }
