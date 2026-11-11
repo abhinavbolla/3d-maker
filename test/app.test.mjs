@@ -215,6 +215,59 @@ joint("Rod", "Piston", top);` });
   await w('document.querySelector("[data-view=top]").click()');
   const fromTop = await w('window.__3dmaker.screenPosition("Body")');
   check(Math.abs(fromTop.x - 640) < 40, `Top brings the model back to the middle of the view (${JSON.stringify(fromTop)})`);
+
+  // Turning shows what it turns around: the point you grabbed on the model,
+  // or the middle of the view when you grab empty space.
+  const pivots = await w(`(async () => {
+    const canvas = document.querySelector("#viewport canvas");
+    const ev = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button: 0, pointerId: 8, bubbles: true }));
+    const mid = canvas.getBoundingClientRect();
+    window.__3dmaker.fit("iso");
+    const idle = window.__3dmaker.turningPoint();
+    const grab = window.__3dmaker.screenPosition("Body");
+    ev("pointerdown", grab.x, grab.y); ev("pointermove", grab.x + 30, grab.y + 6);
+    const started = window.__3dmaker.turningPoint();
+    ev("pointermove", grab.x + 90, grab.y + 30);
+    const later = window.__3dmaker.turningPoint();
+    ev("pointerup", grab.x + 90, grab.y + 30);
+    const after = window.__3dmaker.turningPoint();
+    ev("pointerdown", 40, 120); ev("pointermove", 60, 124);
+    const empty = window.__3dmaker.turningPoint();
+    ev("pointerup", 60, 124);
+    return { idle, grab, started, later, after, empty, middle: { x: mid.left + mid.width / 2, y: mid.top + mid.height / 2 } };
+  })()`);
+  const pxBetween = (a, b) => (a && b ? Math.hypot(a.x - b.x, a.y - b.y) : Infinity);
+  check(pivots.idle === null && pivots.after === null, "no turning point shows while the view is still");
+  check(pxBetween(pivots.started, pivots.grab) < 3, `a drag on the model turns around the point you grabbed (${JSON.stringify(pivots.started)} for ${JSON.stringify(pivots.grab)})`);
+  check(pxBetween(pivots.later, pivots.grab) < 3, "and that point stays put on screen while the view turns");
+  check(pxBetween(pivots.empty, pivots.middle) < 3, `a drag on empty space turns around the middle of the view (${JSON.stringify(pivots.empty)})`);
+
+  // The axis compass follows the camera; choosing an end looks from that side.
+  const compass = await w(`(async () => {
+    const dot = (sel) => { const c = document.querySelector("#compass " + sel + " circle"); return { x: Number(c.getAttribute("cx")), y: Number(c.getAttribute("cy")) }; };
+    // The view turns over a few frames, and frames are slow without a GPU.
+    const until = async (done) => { for (let i = 0; i < 150 && !done(); i++) await new Promise((r) => setTimeout(r, 100)); };
+    const shown = !document.getElementById("compass").hasAttribute("hidden");
+    document.querySelector("#compass .end.z:not(.far)").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await until(() => Math.hypot(dot(".z:not(.far)").x, dot(".z:not(.far)").y) < 0.5);
+    const above = { x: dot(".x:not(.far)"), y: dot(".y:not(.far)"), z: dot(".z:not(.far)") };
+    document.querySelector("#compass .end.y.far").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await until(() => dot(".z:not(.far)").y < -29.5);
+    return { shown, ends: document.querySelectorAll("#compass .end").length, above, front: { x: dot(".x:not(.far)"), z: dot(".z:not(.far)") } };
+  })()`);
+  check(compass.shown && compass.ends === 6, "the axis compass shows with a model");
+  check(Math.hypot(compass.above.z.x, compass.above.z.y) < 1 && compass.above.x.x > 29 && compass.above.y.y < -29, `choosing Z looks from above: X points right and Y up (${JSON.stringify(compass.above)})`);
+  check(compass.front.x.x > 29 && compass.front.z.y < -29, `choosing the front looks along Y: X points right and Z up (${JSON.stringify(compass.front)})`);
+
+  // Two fingers moved sideways on a trackpad slide the view with them.
+  const swiped = await w(`(async () => {
+    const canvas = document.querySelector("#viewport canvas");
+    const before = window.__3dmaker.screenPosition("Body");
+    for (let i = 0; i < 4; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: before.x, clientY: before.y, deltaX: 20, deltaY: 2, bubbles: true, cancelable: true }));
+    const after = window.__3dmaker.screenPosition("Body");
+    return { dx: after.x - before.x, dy: after.y - before.y };
+  })()`);
+  check(Math.abs(swiped.dx + 80) < 20 && Math.abs(swiped.dy) < 3, `a sideways scroll slides the view sideways (${JSON.stringify(swiped)})`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

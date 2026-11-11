@@ -1,11 +1,15 @@
 // Moving around the model. Nothing is tied to a fixed centre: every move
 // works from the point under the pointer.
-//   drag          orbit around the point you grabbed
+//   drag          turn the view. Grab the model and it turns around the point
+//                 you grabbed; grab empty space and it turns around the
+//                 middle of the view. onPivot says where that point is, so
+//                 the view can show it while you turn.
 //   right-drag    slide the view; the grabbed point stays under the pointer
 //   (or middle-drag, or shift-drag)
 //   scroll/pinch  move towards or away from the point under the pointer;
 //                 over empty space it flies along that line, so you can
 //                 travel to any part of a big model
+//   sideways scroll (two fingers on a trackpad)  slide the view sideways
 //   double-click  bring that point to the middle of the view
 import * as THREE from "three";
 
@@ -16,7 +20,8 @@ const Z = new THREE.Vector3(0, 0, 1);
 
 // surfaceAt(clientX, clientY): the point of the model under the pointer, or
 // null. size(): the model's overall size in mm. floor(): the ground's z.
-export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange }) {
+// onPivot(point | null): a turn around that point has started, or has ended.
+export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange, onPivot = () => {} }) {
   // The point the camera looks at. It is the pivot when you drag on empty
   // space, and how far away it is sets the pace over empty space.
   const target = new THREE.Vector3();
@@ -29,16 +34,17 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
     ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
     return ray.ray;
   }
-  // What the pointer is over: { point, solid }. The model's surface, else the
-  // ground if it is not far off, else a point as far away as the target.
+  // What the pointer is over: { point, solid, model }. The model's surface,
+  // else the ground if it is not far off, else a point as far away as the
+  // target.
   function under(e, offModel = false) {
     const hit = offModel ? null : surfaceAt(e.clientX, e.clientY);
-    if (hit) return { point: hit, solid: true };
+    if (hit) return { point: hit, solid: true, model: true };
     const r = pointerRay(e);
     const reach = Math.max(camera.position.distanceTo(target), size() / 4);
     const t = r.direction.z ? (floor() - r.origin.z) / r.direction.z : -1;
-    if (t > 0 && t < reach * 4) return { point: r.at(t, new THREE.Vector3()), solid: true };
-    return { point: r.at(reach, new THREE.Vector3()), solid: false };
+    if (t > 0 && t < reach * 4) return { point: r.at(t, new THREE.Vector3()), solid: true, model: false };
+    return { point: r.at(reach, new THREE.Vector3()), solid: false, model: false };
   }
   const depthOf = (point) => Math.max(v.subVectors(point, camera.position).dot(camera.getWorldDirection(new THREE.Vector3())), 1e-6);
 
@@ -93,8 +99,11 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
     if (!press.mode) {
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) <= DRAG_START) return;
       press.mode = press.slides ? "slide" : "orbit";
-      press.pivot = press.at.solid ? press.at.point : target.clone();
+      // A point on the ground far behind the model would swing the model
+      // across the window, so only the model itself can be grabbed to turn.
+      press.pivot = press.at.model ? press.at.point : target.clone();
       press.depth = depthOf(press.at.point);
+      if (press.mode === "orbit") onPivot(press.pivot);
       try {
         dom.setPointerCapture(e.pointerId);
       } catch {
@@ -113,6 +122,7 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
     if (!press || e.pointerId !== press.id) return;
     if (press.mode && dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId);
     dom.style.cursor = "";
+    if (press.mode === "orbit") onPivot(null);
     press = null;
   };
   dom.addEventListener("pointerup", release);
@@ -123,8 +133,14 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
     "wheel",
     (e) => {
       e.preventDefault();
+      const lines = e.deltaMode === 1 ? 16 : 1;
+      // Two fingers moved sideways on a trackpad: slide the view with them.
+      if (!e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        slide(depthOf(scrollAim(e).point), -e.deltaX * lines, 0);
+        return changed();
+      }
       // A pinch arrives as small ctrl-wheel steps; a mouse wheel in lines.
-      const steps = e.deltaY * (e.deltaMode === 1 ? 16 : 1) * (e.ctrlKey ? 8 : 1);
+      const steps = e.deltaY * lines * (e.ctrlKey ? 8 : 1);
       const scale = Math.exp(THREE.MathUtils.clamp(steps, -400, 400) * 0.0016);
       const at = scrollAim(e);
       const from = v.subVectors(camera.position, at.point).clone();

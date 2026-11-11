@@ -11,6 +11,9 @@
   --viewport-glow: #fbfbfc;
   --grid: #dfe2e5;
   --grid-major: #cbcfd4;
+  --axis-x: #d2554c;
+  --axis-y: #3f9a5b;
+  --axis-z: #3d78d8;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 16px rgb(0 0 0 / 0.06);
   color-scheme: light;
 }
@@ -27,6 +30,9 @@
     --viewport-glow: #3d3f44;
     --grid: #3a3c41;
     --grid-major: #4a4d53;
+    --axis-x: #e0685f;
+    --axis-y: #56b071;
+    --axis-z: #5b8def;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
     color-scheme: dark;
   }
@@ -372,6 +378,63 @@ button {
   #views {
     bottom: auto;
     top: 58px;
+  }
+}
+
+/* ---- axis compass: which way the model faces; an end looks from that side ---- */
+#compass {
+  position: fixed;
+  right: 14px;
+  bottom: 16px;
+  width: 92px;
+  height: 92px;
+  overflow: visible;
+  user-select: none;
+}
+#compass .end {
+  cursor: pointer;
+  outline: none;
+}
+#compass .x {
+  --axis: var(--axis-x);
+}
+#compass .y {
+  --axis: var(--axis-y);
+}
+#compass .z {
+  --axis: var(--axis-z);
+}
+#compass line {
+  stroke: var(--axis);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+#compass circle {
+  fill: var(--axis);
+  stroke: var(--axis);
+  stroke-width: 1.5;
+}
+#compass .far circle {
+  fill: color-mix(in srgb, var(--axis) 22%, var(--viewport));
+}
+#compass .end:hover circle,
+#compass .end:focus-visible circle {
+  stroke: var(--text);
+}
+#compass text {
+  fill: #ffffff;
+  font-size: 10px;
+  font-weight: 650;
+  pointer-events: none;
+}
+@media (max-width: 900px) {
+  #compass {
+    bottom: auto;
+    top: 96px;
+    right: auto;
+    left: 14px;
+    width: 76px;
+    height: 76px;
   }
 }
 

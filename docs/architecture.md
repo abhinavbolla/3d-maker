@@ -28,7 +28,8 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
 5. [src/app/viewport.js](../src/app/viewport.js) draws the parts with three.js in a studio (a
    key light with shadows, a floor with a faint reflection, and materials), plays their motion,
    and takes the screenshots Claude looks at. [src/app/navigate.js](../src/app/navigate.js)
-   moves the camera around the point under the pointer.
+   moves the camera around the point under the pointer, and
+   [src/app/compass.js](../src/app/compass.js) draws the axis compass.
 
 ## The model
 

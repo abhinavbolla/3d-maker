@@ -57,10 +57,11 @@ npm start          # or the same app in your browser, at http://localhost:5173
 
 **Looking around**
 
-- Drag to orbit around the point you grabbed.
-- Right-drag (or shift-drag) to slide the view.
+- Drag to turn the view. Grab the model and it turns around the point you grabbed; grab empty space and it turns around the middle of the view. A ring shows the point and the axis it turns around.
+- Right-drag or shift-drag to slide the view. On a trackpad, two fingers moved sideways slide it too.
 - Scroll or pinch to move towards what the pointer is on. Over empty space you keep flying, so you can travel to any part of a big model and look at it up close.
 - Double-click a point to bring it to the middle. The buttons at the bottom left fit the model or look from a corner, the top, the front or the side. F fits, and Esc deselects.
+- The compass at the bottom right shows which way X, Y and Z point. Click an end to look from that side without losing your place. The red and green lines on the ground are the X and Y axes.
 - Moving parts play in the view; Pause stops them.
 
 **What Claude can draw**

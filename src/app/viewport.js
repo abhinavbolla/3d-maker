@@ -1,7 +1,8 @@
 // The 3D view: the model in a studio (a key light that casts shadows, a floor
 // with a soft shadow and a faint reflection, metal, paint, rubber and glass),
-// a ground grid scaled to the model, click to pick a part, free movement
-// around the model, and motion for parts that spin or swing.
+// a ground grid scaled to the model with the X and Y axes drawn on it, click
+// to pick a part, free movement around the model with the turning point shown
+// while you turn, and motion for parts that spin or swing.
 import * as THREE from "three";
 import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 import { createNavigation } from "./navigate.js";
@@ -131,7 +132,8 @@ function lookOf(part) {
 
 const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 
-export function createViewport(container, { onPick }) {
+// onView(camera): the camera has turned, for the axis compass.
+export function createViewport(container, { onPick, onView = () => {} }) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.toneMapping = THREE.NeutralToneMapping;
@@ -166,17 +168,34 @@ export function createViewport(container, { onPick }) {
   Object.assign(mirror.material, { transparent: true, premultipliedAlpha: true, depthWrite: false });
   mirror.renderOrder = -1;
   scene.add(shadowFloor, mirror);
+
+  // ---- the turning point: shown while a drag turns the view around it ----
+  // A dot on the point, the upright axis through it, and a ring lying flat
+  // around it: the view swings round that axis, along that ring.
+  const pivotInk = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  const inked = (geometry, opacity) => new THREE.Mesh(geometry, Object.assign(pivotInk.clone(), { opacity, side: THREE.DoubleSide }));
+  const pivot = new THREE.Group();
+  pivot.add(inked(new THREE.CircleGeometry(1, 72), 0.09), inked(new THREE.TorusGeometry(1, 0.016, 8, 96), 0.8), inked(new THREE.CylinderGeometry(0.014, 0.014, 2.8, 8).rotateX(Math.PI / 2), 0.5), inked(new THREE.SphereGeometry(0.08, 16, 12), 1));
+  pivot.traverse((o) => (o.renderOrder = 10));
+  pivot.visible = false;
+  scene.add(pivot);
+  const PIVOT_RING = 46; // the ring's radius on screen, px
+  function sizePivot() {
+    const depth = pivot.position.clone().sub(camera.position).dot(camera.getWorldDirection(new THREE.Vector3()));
+    pivot.scale.setScalar((PIVOT_RING * 2 * Math.max(depth, 1e-6) * Math.tan((camera.fov * DEG) / 2)) / renderer.domElement.clientHeight);
+  }
+
   // The mirror's own picture holds just the model: no backdrop, grid or shadow.
   const reflect = mirror.onBeforeRender;
   mirror.onBeforeRender = function (...args) {
-    const was = [scene.background, renderer.getClearAlpha(), grid.visible, shadowFloor.visible];
+    const was = [scene.background, renderer.getClearAlpha(), grid.visible, shadowFloor.visible, pivot.visible];
     scene.background = null;
     renderer.setClearAlpha(0);
-    grid.visible = shadowFloor.visible = false;
+    grid.visible = shadowFloor.visible = pivot.visible = false;
     mirrorFade.value.x = 1;
     reflect.apply(this, args);
     mirrorFade.value.x = 0;
-    [scene.background, , grid.visible, shadowFloor.visible] = was;
+    [scene.background, , grid.visible, shadowFloor.visible, pivot.visible] = was;
     renderer.setClearAlpha(was[1]);
   };
 
@@ -211,10 +230,18 @@ export function createViewport(container, { onPick }) {
   let fitted = false;
   let lastBox = null;
 
-  const colors = () => ({ bg: backdrop(cssVar("--viewport-glow", "#fbfbfc"), cssVar("--viewport", "#dfe1e5")), grid: new THREE.Color(cssVar("--grid", "#d6d9dd")), major: new THREE.Color(cssVar("--grid-major", "#c3c7cc")), accent: new THREE.Color(cssVar("--accent", "#2f6fde")) });
+  const colors = () => ({
+    bg: backdrop(cssVar("--viewport-glow", "#fbfbfc"), cssVar("--viewport", "#dfe1e5")),
+    grid: new THREE.Color(cssVar("--grid", "#d6d9dd")),
+    major: new THREE.Color(cssVar("--grid-major", "#c3c7cc")),
+    accent: new THREE.Color(cssVar("--accent", "#2f6fde")),
+    x: new THREE.Color(cssVar("--axis-x", "#d2554c")),
+    y: new THREE.Color(cssVar("--axis-y", "#3f9a5b")),
+  });
   let theme = null;
 
-  // ---- grid: 10 cells of a round size around the model ----
+  // ---- grid: 10 cells of a round size around the model, with the X axis
+  // (red) and the Y axis (green) drawn on it where they cross it ----
   function makeGrid(box) {
     grid.traverse((o) => o.geometry?.dispose());
     grid.clear();
@@ -226,9 +253,19 @@ export function createViewport(container, { onPick }) {
     const minor = [], major = [];
     for (let v = -half; v <= half + 1e-9; v += step) {
       const list = Math.abs(Math.round(v / step)) % 10 === 0 ? major : minor;
-      list.push(cx - half, cy + v, floorZ, cx + half, cy + v, floorZ, cx + v, cy - half, floorZ, cx + v, cy + half, floorZ);
+      // The grid lines the X and Y axes lie on are left out; the axes are drawn there.
+      if (Math.abs(cy + v) > step / 2) list.push(cx - half, cy + v, floorZ, cx + half, cy + v, floorZ);
+      if (Math.abs(cx + v) > step / 2) list.push(cx + v, cy - half, floorZ, cx + v, cy + half, floorZ);
     }
     for (const [pts, color] of [[minor, theme.grid], [major, theme.major]]) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      grid.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color })));
+    }
+    const axes = [];
+    if (Math.abs(cy) <= half) axes.push([[cx - half, 0, floorZ, cx + half, 0, floorZ], theme.x]);
+    if (Math.abs(cx) <= half) axes.push([[0, cy - half, floorZ, 0, cy + half, floorZ], theme.y]);
+    for (const [pts, color] of axes) {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
       grid.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color })));
@@ -240,6 +277,7 @@ export function createViewport(container, { onPick }) {
     theme?.bg.dispose();
     theme = colors();
     scene.background = theme.bg;
+    pivot.traverse((o) => o.material?.color.copy(theme.accent));
     makeGrid(lastBox);
     highlight();
   }
@@ -247,6 +285,7 @@ export function createViewport(container, { onPick }) {
 
   // ---- render loop: only runs while something moves ----
   let frame = 0;
+  const seen = new THREE.Quaternion(0, 0, 0, 0); // the camera's turn when the compass last heard of it
   const timer = new THREE.Timer();
   let time = 0;
   let loopSeconds = 4;
@@ -257,7 +296,10 @@ export function createViewport(container, { onPick }) {
     const dt = timer.getDelta();
     if (moving()) time += Math.min(dt, 0.1);
     pose(time);
+    if (pivot.visible) sizePivot();
     renderer.render(scene, camera);
+    if (!seen.equals(camera.quaternion)) onView(camera);
+    seen.copy(camera.quaternion);
     if (moving()) render();
   }
   function render() {
@@ -413,6 +455,11 @@ export function createViewport(container, { onPick }) {
     size: () => stageSize,
     floor: () => floorZ,
     onChange: () => render(),
+    onPivot(point) {
+      pivot.visible = Boolean(point);
+      if (point) pivot.position.copy(point);
+      render();
+    },
   });
   let down = null;
   renderer.domElement.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
@@ -495,6 +542,35 @@ export function createViewport(container, { onPick }) {
     fitted = true;
   }
 
+  // Turns the view to look from a standard direction at what it is looking at
+  // now, from as far away as it is now. Unlike fit, it keeps your place.
+  let turning = 0;
+  const stopTurning = () => cancelAnimationFrame(turning);
+  renderer.domElement.addEventListener("pointerdown", stopTurning);
+  renderer.domElement.addEventListener("wheel", stopTurning, { passive: true });
+  function lookFrom(view) {
+    if (!VIEWS[view]) return;
+    stopTurning();
+    const distance = camera.position.distanceTo(nav.target);
+    const end = camera.clone();
+    end.up.set(0, view === "top" ? 1 : view === "bottom" ? -1 : 0, view === "top" || view === "bottom" ? 0 : 1);
+    end.position.copy(nav.target).addScaledVector(new THREE.Vector3(...VIEWS[view]).normalize(), distance);
+    end.lookAt(nav.target);
+    const from = camera.quaternion.clone();
+    const started = performance.now();
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const step = () => {
+      const t = still ? 1 : Math.min((performance.now() - started) / 260, 1);
+      camera.quaternion.slerpQuaternions(from, end.quaternion, t * t * (3 - 2 * t));
+      // The camera looks down its own -z, so it stands at +z from the target.
+      camera.position.set(0, 0, distance).applyQuaternion(camera.quaternion).add(nav.target);
+      camera.up.copy(end.up);
+      nav.lookAt(nav.target);
+      if (t < 1) turning = requestAnimationFrame(step);
+    };
+    step();
+  }
+
   // Frames the model the first time one appears, so new models are in view.
   function fitIfNew() {
     if (!fitted && parts.size) fit();
@@ -529,11 +605,11 @@ export function createViewport(container, { onPick }) {
     content.updateMatrixWorld(true);
     // These pictures are for measuring by eye, so the floor's shadow and
     // reflection are left out of them.
-    const floor = [shadowFloor.visible, mirror.visible];
-    shadowFloor.visible = mirror.visible = false;
+    const floor = [shadowFloor.visible, mirror.visible, pivot.visible];
+    shadowFloor.visible = mirror.visible = pivot.visible = false;
     renderer.setRenderTarget(target);
     renderer.render(scene, cam);
-    [shadowFloor.visible, mirror.visible] = floor;
+    [shadowFloor.visible, mirror.visible, pivot.visible] = floor;
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
     renderer.setRenderTarget(null);
@@ -558,10 +634,10 @@ export function createViewport(container, { onPick }) {
     const { clientWidth: w, clientHeight: h } = container;
     const W = Math.min(Math.round(width), renderer.capabilities.maxTextureSize);
     const H = Math.round((W * h) / w);
-    const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, shadow: key.shadow.mapSize.x };
+    const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, shadow: key.shadow.mapSize.x, pivot: pivot.visible };
     selected = null;
     highlight();
-    grid.visible = false;
+    grid.visible = pivot.visible = false;
     scene.background = paper;
     key.shadow.mapSize.setScalar(4096);
     key.shadow.map?.dispose();
@@ -576,12 +652,20 @@ export function createViewport(container, { onPick }) {
     key.shadow.map?.dispose();
     key.shadow.map = null;
     grid.visible = was.grid;
+    pivot.visible = was.pivot;
     scene.background = theme.bg;
     renderer.setPixelRatio(was.ratio);
     selected = was.selected;
     highlight();
     resize();
     return { png, width: W, height: H };
+  }
+
+  // Where a point of the model is in the window, px.
+  function onScreen(point) {
+    const p = point.project(camera);
+    const rect = renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
   }
 
   function setPlaying(on) {
@@ -598,6 +682,7 @@ export function createViewport(container, { onPick }) {
     select,
     fit,
     fitIfNew,
+    lookFrom,
     screenshot,
     picture,
     setPlaying,
@@ -613,11 +698,11 @@ export function createViewport(container, { onPick }) {
     isPlaying: () => playing,
     screenPosition(name) {
       const box = modelBox(name);
-      if (!box) return null;
-      const p = box.getCenter(new THREE.Vector3()).project(camera);
-      const rect = renderer.domElement.getBoundingClientRect();
-      return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
+      return box ? onScreen(box.getCenter(new THREE.Vector3())) : null;
     },
+    // Where the turning point is drawn in the window, or null when the view
+    // is not being turned.
+    turningPoint: () => (pivot.visible ? onScreen(pivot.position.clone()) : null),
     resetFit: () => (fitted = false),
   };
 }

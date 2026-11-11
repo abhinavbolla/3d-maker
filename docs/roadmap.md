@@ -10,7 +10,7 @@ This page says where it stands against that goal and what comes next. The order 
 |---|---|
 | Making 3D models | By prompt, with sliders on parts. Outlines, extrude, revolve, sweep, loft, bodies from views, bend, twist, taper, threads and hardware. |
 | Mechanisms | Motion, joints checked over the whole loop, collision checks. |
-| Looking at the model | Studio view with shadows, a reflecting floor and materials. Free movement around the model. |
+| Looking at the model | Studio view with shadows, a reflecting floor and materials. Free movement around the model, with an axis compass and the turning point shown. |
 | Pictures | PNG studio shots of any view. |
 | 2D drawings | None. |
 | Files for other apps | Meshes only: STL and 3MF. |

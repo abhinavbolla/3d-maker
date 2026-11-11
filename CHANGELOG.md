@@ -28,8 +28,12 @@ Notable changes to 3D Maker. The format follows
 - A studio view: a key light that casts shadows, a floor with a soft shadow and a faint
   reflection, and parts drawn as metal, paint, plastic, rubber or glass. Scripts can name a
   part's material.
-- Free movement around the model: orbit around the point you grab, slide the view, and scroll
+- Free movement around the model: turn around the point you grab, slide the view, and scroll
   towards whatever the pointer is on, with no fixed centre. Buttons for standard views.
+- While you turn the view, a ring shows the point and the upright axis it turns around. A drag
+  on empty space turns around the middle of the view.
+- An axis compass that follows the camera; click an end to look from that side. The X and Y axes
+  are drawn on the ground grid. A sideways two-finger scroll slides the view.
 - Export > Picture saves the view as a studio shot (PNG).
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.

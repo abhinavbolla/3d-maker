@@ -1,5 +1,6 @@
 // 3D Maker: type what you want, Claude builds it, click a part to tweak it.
 import { createViewport } from "./app/viewport.js";
+import { createCompass } from "./app/compass.js";
 import { createKernel } from "./app/kernel.js";
 import { createStore, emptyDoc } from "./app/store.js";
 import { createCommands } from "./app/commands.js";
@@ -23,10 +24,12 @@ function say(text, ms = 4000) {
 }
 
 // ---- viewport ----
+const compass = createCompass($("compass"), { onLook: (view) => viewport.lookFrom(view) });
 const viewport = createViewport($("viewport"), {
   onPick(name) {
     store.select(name);
   },
+  onView: (camera) => compass.update(camera),
 });
 
 // ---- Claude ----
@@ -245,6 +248,7 @@ function renderAll() {
   const count = result?.parts.length ?? 0;
   $("facts").textContent = size ? `${count} ${count === 1 ? "part" : "parts"}, ${size.map((v) => Math.round(v)).join(" × ")} mm` : "";
   $("views").hidden = !count;
+  $("compass").toggleAttribute("hidden", !count);
   $("start").hidden = Boolean(count) || Boolean(working) || !$("reply").hidden;
   if (count) moveHint();
   document.title = title ? `${title} · 3D Maker` : "3D Maker";
@@ -269,7 +273,7 @@ function moveHint() {
   } catch {
     return;
   }
-  say("Drag to look around. Right-drag to slide. Scroll to move towards what you point at.", 12000);
+  say("Drag to turn the view around the point you grab. Shift-drag or right-drag to slide it. Scroll to move towards what you point at.", 12000);
 }
 
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => viewport.fit(b.dataset.view === "fit" ? "iso" : b.dataset.view)));
@@ -400,6 +404,7 @@ if (import.meta.env.DEV) {
     picture: (opts) => viewport.picture(opts),
     fit: (view, names) => viewport.fit(view, names),
     screenPosition: (name) => viewport.screenPosition(name),
+    turningPoint: () => viewport.turningPoint(),
     call: (name, args = {}) => commands[name](args),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
   };
