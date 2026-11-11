@@ -57,11 +57,11 @@ npm start          # or the same app in your browser, at http://localhost:5173
 
 **Looking around**
 
-- Drag to turn the view. Grab the model and it turns around the point you grabbed; grab empty space and it turns around the middle of the view. A ring shows the point and the axis it turns around.
-- Right-drag or shift-drag to slide the view. On a trackpad, two fingers moved sideways slide it too.
-- Scroll or pinch to move towards what the pointer is on. Over empty space you keep flying, so you can travel to any part of a big model and look at it up close.
-- Double-click a point to bring it to the middle. The buttons at the bottom left fit the model or look from a corner, the top, the front or the side. F fits, and Esc deselects.
-- The compass at the bottom right shows which way X, Y and Z point. Click an end to look from that side without losing your place. The red and green lines on the ground are the X and Y axes.
+- Drag to turn the view. It turns around the middle of the window, which starts as the middle of the model, and the model stays upright. While you turn, a ring marks that centre, and the origin's axes and its three planes show.
+- Right-drag or shift-drag to slide the view. On a trackpad, slide two fingers.
+- Scroll with a mouse wheel, or pinch on a trackpad, to move towards what the pointer is on. Over empty space you keep flying, so you can travel to any part of a big model and look at it up close.
+- Double-click a point to bring it to the middle; the view then turns around it. Fit (or F) frames the whole model from a corner, and Esc deselects.
+- The view cube at the bottom right turns with the model. Click a side, an edge or a corner to look from there without losing your place, or drag the cube to turn the view. Its red, green and blue lines are the X, Y and Z axes, and the red and green lines on the ground are the X and Y axes.
 - Moving parts play in the view; Pause stops them.
 
 **What Claude can draw**

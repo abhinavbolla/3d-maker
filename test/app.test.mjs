@@ -174,7 +174,7 @@ joint("Rod", "Piston", top);` });
   check(/no visible part named "Nope"/.test((await call("check_fit", { parts: ["Nope"] })).error ?? ""), "check_fit with an unknown part is refused");
 
   // The view: a studio picture, the model's facts, materials, and moving
-  // around from the point under the pointer (not a fixed centre).
+  // around the way CAD programs do.
   const still = await call("set_model", { script: 'part("Body", box(200, 80, 60).at(0, 0, 30), { color: "#b8483e" }); part("Window", box(60, 82, 30).at(40, 0, 50), { material: "glass" }); part("Wheel", cylinder(20, 10).rotateX(90).at(-60, -45, 20), { color: "#111111", material: "rubber" });' });
   check(!still.error, `a model with materials builds (${still.error ?? "ok"})`);
   check(/^3 parts, 200 × \d+ × \d+ mm$/.test(await w('document.getElementById("facts").textContent')), `the heading gives the parts and size (${await w('document.getElementById("facts").textContent')})`);
@@ -212,19 +212,19 @@ joint("Rod", "Piston", top);` });
   })()`);
   check(turned.slid > 40, `a right-drag slides the view with the pointer (${Math.round(turned.slid)} px for 80)`);
   check(Math.hypot(turned.c.x - turned.b.x, turned.c.y - turned.b.y) > 5, "a drag turns the view");
-  await w('document.querySelector("[data-view=top]").click()');
+  await w('window.__3dmaker.fit("top")');
   const fromTop = await w('window.__3dmaker.screenPosition("Body")');
   check(Math.abs(fromTop.x - 640) < 40, `Top brings the model back to the middle of the view (${JSON.stringify(fromTop)})`);
 
-  // Turning shows what it turns around: the point you grabbed on the model,
-  // or the middle of the view when you grab empty space.
+  // The view turns around its centre, the middle of the window, wherever
+  // you grab, and shows that centre while it turns.
   const pivots = await w(`(async () => {
     const canvas = document.querySelector("#viewport canvas");
     const ev = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button: 0, pointerId: 8, bubbles: true }));
     const mid = canvas.getBoundingClientRect();
     window.__3dmaker.fit("iso");
     const idle = window.__3dmaker.turningPoint();
-    const grab = window.__3dmaker.screenPosition("Body");
+    const grab = window.__3dmaker.screenPosition("Wheel");
     ev("pointerdown", grab.x, grab.y); ev("pointermove", grab.x + 30, grab.y + 6);
     const started = window.__3dmaker.turningPoint();
     ev("pointermove", grab.x + 90, grab.y + 30);
@@ -234,13 +234,13 @@ joint("Rod", "Piston", top);` });
     ev("pointerdown", 40, 120); ev("pointermove", 60, 124);
     const empty = window.__3dmaker.turningPoint();
     ev("pointerup", 60, 124);
-    return { idle, grab, started, later, after, empty, middle: { x: mid.left + mid.width / 2, y: mid.top + mid.height / 2 } };
+    return { idle, started, later, after, empty, middle: { x: mid.left + mid.width / 2, y: mid.top + mid.height / 2 } };
   })()`);
   const pxBetween = (a, b) => (a && b ? Math.hypot(a.x - b.x, a.y - b.y) : Infinity);
   check(pivots.idle === null && pivots.after === null, "no turning point shows while the view is still");
-  check(pxBetween(pivots.started, pivots.grab) < 3, `a drag on the model turns around the point you grabbed (${JSON.stringify(pivots.started)} for ${JSON.stringify(pivots.grab)})`);
-  check(pxBetween(pivots.later, pivots.grab) < 3, "and that point stays put on screen while the view turns");
-  check(pxBetween(pivots.empty, pivots.middle) < 3, `a drag on empty space turns around the middle of the view (${JSON.stringify(pivots.empty)})`);
+  check(pxBetween(pivots.started, pivots.middle) < 3, `a drag on the model turns around the middle of the view (${JSON.stringify(pivots.started)} for ${JSON.stringify(pivots.middle)})`);
+  check(pxBetween(pivots.later, pivots.middle) < 3, "and that centre stays put while the view turns");
+  check(pxBetween(pivots.empty, pivots.middle) < 3, `a drag on empty space turns around the same centre (${JSON.stringify(pivots.empty)})`);
 
   // A press whose release never arrives (it ended outside the window) must
   // not stop the next drag from turning the view.
@@ -257,32 +257,65 @@ joint("Rod", "Piston", top);` });
   })()`);
   check(lost.moved > 5 && lost.during !== null && lost.still === null, `a press that was never released does not block the next drag (${JSON.stringify(lost)})`);
 
-  // The axis compass follows the camera; choosing an end looks from that side.
-  const compass = await w(`(async () => {
-    const dot = (sel) => { const c = document.querySelector("#compass " + sel + " circle"); return { x: Number(c.getAttribute("cx")), y: Number(c.getAttribute("cy")) }; };
+  // The view cube follows the camera. A side, an edge or a corner looks from
+  // there, and dragging the cube turns the view.
+  const cube = await w(`(async () => {
+    const faces = [...document.querySelectorAll("#viewcube .face")];
+    const face = (name) => faces.find((f) => f.children[4].textContent === name);
+    const lie = (name) => face(name).style.transform.match(/-?[\\d.]+/g).map(Number);
+    const shown = () => faces.filter((f) => f.style.visibility !== "hidden").map((f) => f.children[4].textContent).sort().join();
+    const straight = (name) => { const m = lie(name); return shown() === name && Math.abs(m[0] - 1) < 0.01 && Math.abs(m[3] - 1) < 0.01 && Math.abs(m[1]) < 0.01 && Math.abs(m[2]) < 0.01; };
     // The view turns over a few frames, and frames are slow without a GPU.
-    const until = async (done) => { for (let i = 0; i < 150 && !done(); i++) await new Promise((r) => setTimeout(r, 100)); };
-    const shown = !document.getElementById("compass").hasAttribute("hidden");
-    document.querySelector("#compass .end.z:not(.far)").dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await until(() => Math.hypot(dot(".z:not(.far)").x, dot(".z:not(.far)").y) < 0.5);
-    const above = { x: dot(".x:not(.far)"), y: dot(".y:not(.far)"), z: dot(".z:not(.far)") };
-    document.querySelector("#compass .end.y.far").dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await until(() => dot(".z:not(.far)").y < -29.5);
-    return { shown, ends: document.querySelectorAll("#compass .end").length, above, front: { x: dot(".x:not(.far)"), z: dot(".z:not(.far)") } };
+    const until = async (done) => { for (let i = 0; i < 150 && !done(); i++) await new Promise((r) => setTimeout(r, 100)); return done(); };
+    const visible = !document.getElementById("viewcube").hidden;
+    window.__3dmaker.fit("iso");
+    await until(() => shown() === "Front,Right,Top");
+    const first = shown();
+    face("Top").children[4].click();
+    const top = await until(() => straight("Top"));
+    face("Top").children[8].click();
+    const corner = await until(() => shown() === "Front,Right,Top");
+    const cornerTitle = face("Top").children[8].title;
+    face("Front").children[4].click();
+    const front = await until(() => straight("Front"));
+    const root = document.getElementById("viewcube");
+    const r = root.getBoundingClientRect();
+    const ev = (type, x, y) => root.dispatchEvent(new PointerEvent(type, { clientX: r.left + x, clientY: r.top + y, button: 0, buttons: 1, pointerId: 41, bubbles: true }));
+    const before = window.__3dmaker.screenPosition("Wheel");
+    ev("pointerdown", 50, 50); ev("pointermove", 60, 52); ev("pointermove", 90, 64);
+    const during = window.__3dmaker.turningPoint();
+    ev("pointerup", 90, 64);
+    const after = window.__3dmaker.screenPosition("Wheel");
+    await until(() => shown() !== "Front");
+    return { visible, sides: faces.length, places: root.querySelectorAll("button").length, first, top, corner, cornerTitle, front, dragged: Math.hypot(after.x - before.x, after.y - before.y), during, still: window.__3dmaker.turningPoint(), turned: shown() };
   })()`);
-  check(compass.shown && compass.ends === 6, "the axis compass shows with a model");
-  check(Math.hypot(compass.above.z.x, compass.above.z.y) < 1 && compass.above.x.x > 29 && compass.above.y.y < -29, `choosing Z looks from above: X points right and Y up (${JSON.stringify(compass.above)})`);
-  check(compass.front.x.x > 29 && compass.front.z.y < -29, `choosing the front looks along Y: X points right and Z up (${JSON.stringify(compass.front)})`);
+  check(cube.visible && cube.sides === 6 && cube.places === 54, `the view cube shows with a model (${JSON.stringify(cube)})`);
+  check(cube.first === "Front,Right,Top", `from a corner it shows its front, right and top (${cube.first})`);
+  check(cube.top, "choosing Top looks straight down, with the front at the bottom");
+  check(cube.corner && cube.cornerTitle === "Look from the top front right", `choosing a corner looks from that corner (${cube.cornerTitle})`);
+  check(cube.front, "choosing Front looks straight at the front, upright");
+  check(cube.dragged > 5 && cube.during !== null && cube.still === null && cube.turned !== "Front", `dragging the cube turns the view (${JSON.stringify({ dragged: cube.dragged, turned: cube.turned })})`);
 
-  // Two fingers moved sideways on a trackpad slide the view with them.
+  // Two fingers on a trackpad slide the view with them, both ways. A mouse
+  // wheel used after that still zooms.
   const swiped = await w(`(async () => {
     const canvas = document.querySelector("#viewport canvas");
+    window.__3dmaker.fit("iso");
     const before = window.__3dmaker.screenPosition("Body");
-    for (let i = 0; i < 4; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: before.x, clientY: before.y, deltaX: 20, deltaY: 2, bubbles: true, cancelable: true }));
+    for (let i = 0; i < 4; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: before.x, clientY: before.y, deltaX: 20, deltaY: 10, bubbles: true, cancelable: true }));
     const after = window.__3dmaker.screenPosition("Body");
-    return { dx: after.x - before.x, dy: after.y - before.y };
+    for (let i = 0; i < 3; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: after.x, clientY: after.y, deltaY: -120, bubbles: true, cancelable: true }));
+    const wheeled = window.__3dmaker.screenPosition("Body");
+    const pinchAt = window.__3dmaker.screenPosition("Wheel");
+    for (let i = 0; i < 3; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: after.x, clientY: after.y, deltaY: -6, ctrlKey: true, bubbles: true, cancelable: true }));
+    const pinched = window.__3dmaker.screenPosition("Wheel");
+    return { dx: after.x - before.x, dy: after.y - before.y, wheel: Math.hypot(wheeled.x - after.x, wheeled.y - after.y), pinch: Math.hypot(pinched.x - pinchAt.x, pinched.y - pinchAt.y) };
   })()`);
-  check(Math.abs(swiped.dx + 80) < 20 && Math.abs(swiped.dy) < 3, `a sideways scroll slides the view sideways (${JSON.stringify(swiped)})`);
+  // The surface under the pointer moves with the fingers (80 px, 40 px); the
+  // middle of the body is further away, so it moves a little less.
+  check(swiped.dx < -55 && swiped.dx > -90 && Math.abs(swiped.dy - swiped.dx / 2) < 4, `two fingers on a trackpad slide the view both ways (${JSON.stringify(swiped)})`);
+  check(swiped.wheel < 12, `a mouse wheel still zooms to the pointer after that (${Math.round(swiped.wheel)} px)`);
+  check(swiped.pinch > 3, `and a pinch zooms (${Math.round(swiped.pinch)} px)`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

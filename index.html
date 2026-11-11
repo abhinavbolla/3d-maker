@@ -40,17 +40,12 @@
     </section>
 
     <div id="views" hidden>
-      <button type="button" data-view="fit" title="Fit the model in the view (F)">Fit</button>
-      <span class="rule"></span>
-      <button type="button" data-view="iso" title="Look from a corner">Corner</button>
-      <button type="button" data-view="top" title="Look from above">Top</button>
-      <button type="button" data-view="front" title="Look from the front">Front</button>
-      <button type="button" data-view="right" title="Look from the side">Side</button>
+      <button type="button" data-view="fit" title="Fit the model in the view, seen from a corner (F)">Fit</button>
       <span class="rule" id="play-rule" hidden></span>
       <button id="play" type="button" hidden>Pause</button>
     </div>
 
-    <svg id="compass" hidden aria-label="The model's axes. Choose an end to look from that side."></svg>
+    <div id="viewcube" hidden></div>
 
     <div id="dock">
       <div id="start" hidden>

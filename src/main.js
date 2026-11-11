@@ -1,6 +1,6 @@
 // 3D Maker: type what you want, Claude builds it, click a part to tweak it.
 import { createViewport } from "./app/viewport.js";
-import { createCompass } from "./app/compass.js";
+import { createViewCube } from "./app/viewcube.js";
 import { createKernel } from "./app/kernel.js";
 import { createStore, emptyDoc } from "./app/store.js";
 import { createCommands } from "./app/commands.js";
@@ -24,12 +24,16 @@ function say(text, ms = 4000) {
 }
 
 // ---- viewport ----
-const compass = createCompass($("compass"), { onLook: (view) => viewport.lookFrom(view) });
+const cube = createViewCube($("viewcube"), {
+  onLook: (from) => viewport.lookFrom(from),
+  onTurn: (dx, dy) => viewport.turn(dx, dy),
+  onTurning: (on) => viewport.turning(on),
+});
 const viewport = createViewport($("viewport"), {
   onPick(name) {
     store.select(name);
   },
-  onView: (camera) => compass.update(camera),
+  onView: (camera) => cube.update(camera),
 });
 
 // ---- Claude ----
@@ -248,7 +252,7 @@ function renderAll() {
   const count = result?.parts.length ?? 0;
   $("facts").textContent = size ? `${count} ${count === 1 ? "part" : "parts"}, ${size.map((v) => Math.round(v)).join(" × ")} mm` : "";
   $("views").hidden = !count;
-  $("compass").toggleAttribute("hidden", !count);
+  $("viewcube").hidden = !count;
   $("start").hidden = Boolean(count) || Boolean(working) || !$("reply").hidden;
   if (count) moveHint();
   document.title = title ? `${title} · 3D Maker` : "3D Maker";
@@ -268,12 +272,12 @@ store.subscribe(renderAll);
 // Said once, the first time a model is on screen.
 function moveHint() {
   try {
-    if (localStorage.getItem("3d-maker:move-hint")) return;
-    localStorage.setItem("3d-maker:move-hint", "1");
+    if (localStorage.getItem("3d-maker:move-hint") === "2") return;
+    localStorage.setItem("3d-maker:move-hint", "2");
   } catch {
     return;
   }
-  say("Drag to turn the view around the point you grab. Shift-drag or right-drag to slide it. Scroll to move towards what you point at.", 12000);
+  say("Drag to turn the view. Right-drag, shift-drag or two fingers on a trackpad slide it. Scroll or pinch to zoom. The cube at the bottom right looks from any side.", 14000);
 }
 
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => viewport.fit(b.dataset.view === "fit" ? "iso" : b.dataset.view)));

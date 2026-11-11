@@ -381,60 +381,82 @@ button {
   }
 }
 
-/* ---- axis compass: which way the model faces; an end looks from that side ---- */
-#compass {
+/* ---- view cube: which way the model faces; a side, edge or corner looks from there ---- */
+#viewcube {
   position: fixed;
-  right: 14px;
-  bottom: 16px;
-  width: 92px;
-  height: 92px;
-  overflow: visible;
+  right: 26px;
+  bottom: 28px;
+  width: 100px;
+  height: 100px;
   user-select: none;
+  touch-action: none;
+  cursor: grab;
 }
-#compass .end {
-  cursor: pointer;
-  outline: none;
+#viewcube.turning {
+  cursor: grabbing;
 }
-#compass .x {
+#viewcube svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+#viewcube .x {
   --axis: var(--axis-x);
 }
-#compass .y {
+#viewcube .y {
   --axis: var(--axis-y);
 }
-#compass .z {
+#viewcube .z {
   --axis: var(--axis-z);
 }
-#compass line {
+#viewcube line {
   stroke: var(--axis);
   stroke-width: 2;
   stroke-linecap: round;
 }
-#compass circle {
+#viewcube text {
   fill: var(--axis);
-  stroke: var(--axis);
-  stroke-width: 1.5;
-}
-#compass .far circle {
-  fill: color-mix(in srgb, var(--axis) 22%, var(--viewport));
-}
-#compass .end:hover circle,
-#compass .end:focus-visible circle {
-  stroke: var(--text);
-}
-#compass text {
-  fill: #ffffff;
   font-size: 10px;
   font-weight: 650;
-  pointer-events: none;
+}
+#viewcube .face {
+  position: absolute;
+  left: 23px;
+  top: 23px;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  grid-template: 11px 1fr 11px / 11px 1fr 11px;
+  border: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  background: color-mix(in srgb, var(--surface) calc(62% + 38% * var(--facing, 1)), var(--viewport));
+}
+#viewcube button {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: inherit;
+}
+#viewcube button:hover,
+#viewcube button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+  outline: none;
+}
+#viewcube.turning button:hover {
+  background: none;
+  color: var(--muted);
 }
 @media (max-width: 900px) {
-  #compass {
+  #viewcube {
     bottom: auto;
-    top: 96px;
+    top: 104px;
     right: auto;
-    left: 14px;
-    width: 76px;
-    height: 76px;
+    left: 22px;
+    transform: scale(0.84);
+    transform-origin: top left;
   }
 }
 
