@@ -196,7 +196,7 @@ function commitValue(key, v) {
 }
 
 $("card-close").addEventListener("click", () => store.select(null));
-$("reply-close").addEventListener("click", () => ($("reply").hidden = true));
+$("reply-close").addEventListener("click", () => (($("reply").hidden = true), renderAll()));
 $("chip-clear").addEventListener("click", () => store.select(null));
 
 // ---- rendering ----
@@ -241,12 +241,18 @@ function renderAll() {
   viewport.select(selected);
   const title = result?.title || "";
   $("title").textContent = title || "3D Maker";
+  const size = viewport.size();
+  const count = result?.parts.length ?? 0;
+  $("facts").textContent = size ? `${count} ${count === 1 ? "part" : "parts"}, ${size.map((v) => Math.round(v)).join(" × ")} mm` : "";
+  $("views").hidden = !count;
+  $("start").hidden = Boolean(count) || Boolean(working) || !$("reply").hidden;
+  if (count) moveHint();
   document.title = title ? `${title} · 3D Maker` : "3D Maker";
   $("chip").hidden = !selected;
   $("chip-name").textContent = selected ?? "";
   $("input").placeholder = selected ? `Change ${selected}` : result?.parts.length ? "Describe a change" : "Describe what to make";
   const motion = viewport.hasMotion();
-  $("play").hidden = !motion;
+  $("play").hidden = $("play-rule").hidden = !motion;
   $("play").textContent = viewport.isPlaying() ? "Pause" : "Play";
   renderCard();
   renderSend();
@@ -254,6 +260,26 @@ function renderAll() {
   renderProgress();
 }
 store.subscribe(renderAll);
+
+// Said once, the first time a model is on screen.
+function moveHint() {
+  try {
+    if (localStorage.getItem("3d-maker:move-hint")) return;
+    localStorage.setItem("3d-maker:move-hint", "1");
+  } catch {
+    return;
+  }
+  say("Drag to look around. Right-drag to slide. Scroll to move towards what you point at.", 12000);
+}
+
+document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => viewport.fit(b.dataset.view === "fit" ? "iso" : b.dataset.view)));
+document.querySelectorAll("#ideas button").forEach((b) =>
+  b.addEventListener("click", () => {
+    $("input").value = b.textContent;
+    fitInput();
+    $("input").focus();
+  }),
+);
 
 $("play").addEventListener("click", () => {
   viewport.setPlaying(!viewport.isPlaying());
@@ -290,9 +316,15 @@ const actions = {
     const where = await saveBytes(new TextEncoder().encode(JSON.stringify(doc, null, 2)), `${fileName()}.json`, "json");
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
-  // kind: "stl" (each part its own shell), "solid" (one joined solid) or "3mf".
+  // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
+  // or "png" (a studio picture of the view).
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
+    if (kind === "png") {
+      const { png } = viewport.picture();
+      const where = await saveBytes(Uint8Array.from(atob(png), (c) => c.charCodeAt(0)), `${fileName()}.png`, "png");
+      return say(where ? `Saved ${where.split("/").pop()}` : "");
+    }
     say(kind === "solid" ? "Joining the parts into one solid" : "Exporting", 0);
     try {
       const { parts, title } = store.state.result;
@@ -307,7 +339,7 @@ const actions = {
 };
 document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("click", () => actions[b.dataset.action]().catch((err) => say(err.message, 8000))));
 
-// Export menu: STL, STL as one solid, or 3MF.
+// Export menu: a picture, STL, STL as one solid, or 3MF.
 const exportMenu = $("export-menu");
 const showExportMenu = (open) => {
   exportMenu.hidden = !open;
@@ -365,6 +397,9 @@ if (import.meta.env.DEV) {
     select: (name) => store.select(name),
     setValue: (key, value) => store.setValue(key, value, { final: true }),
     exportSTL: () => commands.export_stl({}),
+    picture: (opts) => viewport.picture(opts),
+    fit: (view, names) => viewport.fit(view, names),
+    screenPosition: (name) => viewport.screenPosition(name),
     call: (name, args = {}) => commands[name](args),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
   };

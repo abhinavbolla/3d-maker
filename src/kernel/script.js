@@ -943,6 +943,8 @@ const DEG = Math.PI / 180;
 // A joint may open by this much (mm) over the loop before it is reported.
 export const JOINT_TOLERANCE_MM = 1;
 // Globals a model script has no business touching inside the worker.
+// How a part's surface is drawn. Without one the view picks from the colour.
+const MATERIALS = ["metal", "paint", "plastic", "rubber", "glass"];
 const BLOCKED = ["self", "globalThis", "window", "fetch", "importScripts", "XMLHttpRequest", "WebSocket", "postMessage", "close", "indexedDB", "caches", "Worker", "Function"];
 
 let lineOffset = null;
@@ -992,6 +994,8 @@ export function runScript(source, values = {}) {
     if (opts === null || typeof opts !== "object") fail(`part "${name}" options must be an object`);
     let color = opts.color ?? PALETTE[parts.length % PALETTE.length];
     if (typeof color !== "string" || !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) fail(`part "${name}" color must look like "#7a8590", got ${what(color)}`);
+    const material = opts.material ?? null;
+    if (material !== null && !MATERIALS.includes(material)) fail(`part "${name}" material must be one of ${MATERIALS.join(", ")}, got ${what(material)}`);
     const motion = []; // a description, for get_model
     const own = []; // t -> pose matrix, applied in order
     if (opts.spin) {
@@ -1027,7 +1031,7 @@ export function runScript(source, values = {}) {
       follow = opts.follow;
       motion.push({ type: "follow", part: follow });
     }
-    parts.push({ name, color, motion, own, follow, node, hidden: opts.hidden === true });
+    parts.push({ name, color, material, motion, own, follow, node, hidden: opts.hidden === true });
   }
 
   function param(label, value, opts = {}) {

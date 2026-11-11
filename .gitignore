@@ -6,3 +6,4 @@ src-tauri/gen/
 *.stl
 *.step
 runs/
+.claude/skills/

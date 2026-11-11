@@ -172,6 +172,49 @@ joint("Rod", "Piston", top);` });
   const gap = await call("check_fit", { parts: ["Blade", "Wall"] });
   check(Math.abs(gap.result?.gap_mm - 45) < 0.2, `the gap between the blade and the wall (${gap.result?.gap_mm} mm, 45 expected)`);
   check(/no visible part named "Nope"/.test((await call("check_fit", { parts: ["Nope"] })).error ?? ""), "check_fit with an unknown part is refused");
+
+  // The view: a studio picture, the model's facts, materials, and moving
+  // around from the point under the pointer (not a fixed centre).
+  const still = await call("set_model", { script: 'part("Body", box(200, 80, 60).at(0, 0, 30), { color: "#b8483e" }); part("Window", box(60, 82, 30).at(40, 0, 50), { material: "glass" }); part("Wheel", cylinder(20, 10).rotateX(90).at(-60, -45, 20), { color: "#111111", material: "rubber" });' });
+  check(!still.error, `a model with materials builds (${still.error ?? "ok"})`);
+  check(/^3 parts, 200 × \d+ × \d+ mm$/.test(await w('document.getElementById("facts").textContent')), `the heading gives the parts and size (${await w('document.getElementById("facts").textContent')})`);
+  check(!(await w('document.getElementById("views").hidden')) && (await w('document.getElementById("start").hidden')), "the view bar shows with a model, and the invitation is gone");
+  const picture = async () => {
+    const p = await w("window.__3dmaker.picture({ width: 320 })");
+    return { ...p, bytes: Buffer.from(p.png, "base64") };
+  };
+  const first = await picture();
+  check(first.bytes.subarray(1, 4).toString() === "PNG" && first.width === 320 && first.bytes.readUInt32BE(16) === 320, "Export > Picture makes a PNG of the asked width");
+  // Scroll in over the wheel, well off the middle of the window: the camera
+  // heads for the wheel, so the wheel stays under the pointer and grows.
+  const moved = await w(`(async () => {
+    const canvas = document.querySelector("#viewport canvas");
+    const at = window.__3dmaker.screenPosition("Wheel");
+    const before = { ...at };
+    for (let i = 0; i < 6; i++) {
+      canvas.dispatchEvent(new WheelEvent("wheel", { clientX: at.x, clientY: at.y, deltaY: -120, bubbles: true, cancelable: true }));
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    const after = window.__3dmaker.screenPosition("Wheel");
+    return { before, after };
+  })()`);
+  check(Math.hypot(moved.after.x - moved.before.x, moved.after.y - moved.before.y) < 12, `scrolling zooms to the pointer: the wheel stays under it (${JSON.stringify(moved)})`);
+  check((await picture()).png !== first.png, "and the view has moved in");
+  const turned = await w(`(async () => {
+    const canvas = document.querySelector("#viewport canvas");
+    const ev = (type, x, y, button = 0) => canvas.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button, pointerId: 7, bubbles: true }));
+    const body = () => window.__3dmaker.screenPosition("Body");
+    const a = body();
+    ev("pointerdown", 300, 300, 2); ev("pointermove", 340, 300, 2); ev("pointermove", 380, 300, 2); ev("pointerup", 380, 300, 2);
+    const b = body();
+    ev("pointerdown", 300, 300); ev("pointermove", 360, 320); ev("pointermove", 420, 340); ev("pointerup", 420, 340);
+    return { slid: b.x - a.x, c: body(), b };
+  })()`);
+  check(turned.slid > 40, `a right-drag slides the view with the pointer (${Math.round(turned.slid)} px for 80)`);
+  check(Math.hypot(turned.c.x - turned.b.x, turned.c.y - turned.b.y) > 5, "a drag turns the view");
+  await w('document.querySelector("[data-view=top]").click()');
+  const fromTop = await w('window.__3dmaker.screenPosition("Body")');
+  check(Math.abs(fromTop.x - 640) < 40, `Top brings the model back to the middle of the view (${JSON.stringify(fromTop)})`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

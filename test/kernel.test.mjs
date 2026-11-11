@@ -254,6 +254,14 @@ test("thin edges and thin rods come out whole, not bitten or speckled", () => {
   assert.equal(openEdges(w), 0);
 });
 
+test("a part can name its material", () => {
+  const r = runScript('part("Tyre", sphere(10), { material: "rubber" }); part("Rim", sphere(5));');
+  assert.equal(r.error, undefined);
+  assert.equal(r.parts[0].material, "rubber");
+  assert.equal(r.parts[1].material, null);
+  assert.match(runScript('part("A", sphere(10), { material: "wood" });').error, /material must be one of metal, paint, plastic, rubber, glass/);
+});
+
 test("tube takes smooth as a radius, or true and false as sweep does", () => {
   const pts = "[[0, 0, 0, 5], [50, 0, 0, 5], [50, 50, 0, 5]]";
   for (const s of ["", ", 3", ", true", ", false"]) assert.equal(runScript(`part("T", tube(${pts}${s}));`).error, undefined, `tube(...${s})`);

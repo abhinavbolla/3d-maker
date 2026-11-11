@@ -3,6 +3,8 @@
 // the fit check. For comparing a hand-edited model with what Claude made.
 // Usage: node test/render-run.mjs runs/<name>/model.js [outDir] ["Part A,Part B"]
 // The optional part list adds close-ups (side.png, close.png) framed on those parts.
+// It also saves studio.png, the picture Export > Picture makes, from a low
+// angle (framed on the listed parts if there are any).
 import { startHarness } from "./harness.mjs";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -32,6 +34,9 @@ try {
     if (shot.error) throw new Error(shot.error);
     writeFileSync(join(out, `${name}.png`), Buffer.from(shot.result.png, "base64"));
   }
+  await w(`window.__3dmaker.fit("low", ${JSON.stringify(close?.length ? close : null)} ?? undefined)`);
+  const studio = await w("window.__3dmaker.picture({ width: 2400 })");
+  writeFileSync(join(out, "studio.png"), Buffer.from(studio.png, "base64"));
   const fit = (await h.command(w, "check_fit")).result ?? null;
   const parts = set.result.parts?.length ?? "?";
   console.log(`${file}: ${parts} parts, ${Math.round((Date.now() - t) / 1000)} s, ${fit ? `${fit.overlaps.length} overlaps` : "fit not checked"}${set.result.warnings?.length ? `, warnings: ${set.result.warnings.join("; ")}` : ""}`);
