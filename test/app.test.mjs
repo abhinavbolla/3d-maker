@@ -309,13 +309,17 @@ joint("Rod", "Piston", top);` });
     const pinchAt = window.__3dmaker.screenPosition("Wheel");
     for (let i = 0; i < 3; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: after.x, clientY: after.y, deltaY: -6, ctrlKey: true, bubbles: true, cancelable: true }));
     const pinched = window.__3dmaker.screenPosition("Wheel");
-    return { dx: after.x - before.x, dy: after.y - before.y, wheel: Math.hypot(wheeled.x - after.x, wheeled.y - after.y), pinch: Math.hypot(pinched.x - pinchAt.x, pinched.y - pinchAt.y) };
+    const downAt = window.__3dmaker.screenPosition("Body");
+    for (let i = 0; i < 4; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: downAt.x, clientY: downAt.y, deltaY: 10, bubbles: true, cancelable: true }));
+    const down = window.__3dmaker.screenPosition("Body");
+    return { dx: after.x - before.x, dy: after.y - before.y, wheel: Math.hypot(wheeled.x - after.x, wheeled.y - after.y), pinch: Math.hypot(pinched.x - pinchAt.x, pinched.y - pinchAt.y), straight: { dx: down.x - downAt.x, dy: down.y - downAt.y } };
   })()`);
   // The surface under the pointer moves with the fingers (80 px, 40 px); the
   // middle of the body is further away, so it moves a little less.
   check(swiped.dx < -55 && swiped.dx > -90 && Math.abs(swiped.dy - swiped.dx / 2) < 4, `two fingers on a trackpad slide the view both ways (${JSON.stringify(swiped)})`);
   check(swiped.wheel < 12, `a mouse wheel still zooms to the pointer after that (${Math.round(swiped.wheel)} px)`);
   check(swiped.pinch > 3, `and a pinch zooms (${Math.round(swiped.pinch)} px)`);
+  check(swiped.straight.dy < -15 && Math.abs(swiped.straight.dx) < 4, `and two fingers moved straight up slide the view, not zoom it (${JSON.stringify(swiped.straight)})`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);
