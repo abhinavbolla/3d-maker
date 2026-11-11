@@ -242,6 +242,21 @@ joint("Rod", "Piston", top);` });
   check(pxBetween(pivots.later, pivots.grab) < 3, "and that point stays put on screen while the view turns");
   check(pxBetween(pivots.empty, pivots.middle) < 3, `a drag on empty space turns around the middle of the view (${JSON.stringify(pivots.empty)})`);
 
+  // A press whose release never arrives (it ended outside the window) must
+  // not stop the next drag from turning the view.
+  const lost = await w(`(async () => {
+    const canvas = document.querySelector("#viewport canvas");
+    const ev = (type, x, y, id, first = false) => canvas.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button: 0, pointerId: id, isPrimary: first, bubbles: true }));
+    ev("pointerdown", 200, 200, 31); ev("pointermove", 230, 210, 31);
+    const before = window.__3dmaker.screenPosition("Wheel");
+    ev("pointerdown", 300, 220, 32, true); ev("pointermove", 340, 230, 32, true); ev("pointermove", 420, 250, 32, true);
+    const during = window.__3dmaker.turningPoint();
+    ev("pointerup", 420, 250, 32, true);
+    const after = window.__3dmaker.screenPosition("Wheel");
+    return { moved: Math.hypot(after.x - before.x, after.y - before.y), during, still: window.__3dmaker.turningPoint() };
+  })()`);
+  check(lost.moved > 5 && lost.during !== null && lost.still === null, `a press that was never released does not block the next drag (${JSON.stringify(lost)})`);
+
   // The axis compass follows the camera; choosing an end looks from that side.
   const compass = await w(`(async () => {
     const dot = (sel) => { const c = document.querySelector("#compass " + sel + " circle"); return { x: Number(c.getAttribute("cx")), y: Number(c.getAttribute("cy")) }; };

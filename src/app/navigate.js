@@ -89,13 +89,34 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
     return heading.at.solid ? heading.at : under(e, true);
   }
 
-  let press = null; // { x, y, button, shift, id, mode, pivot, depth }
+  let press = null; // { x, y, id, mode, slides, at, pivot, depth }
+  // Ends the press in hand, however it ended.
+  function end() {
+    if (!press) return;
+    if (dom.hasPointerCapture(press.id)) dom.releasePointerCapture(press.id);
+    dom.style.cursor = "";
+    if (press.mode === "orbit") onPivot(null);
+    press = null;
+  }
   dom.addEventListener("pointerdown", (e) => {
-    if (press) return;
+    // A second finger is left alone. But a new first pointer means the old
+    // press is over, even if its release never reached us (it ended outside
+    // the window, or over something lying on top of the view). Without this
+    // one lost release would stop every later drag.
+    if (press && !e.isPrimary) return;
+    end();
     press = { x: e.clientX, y: e.clientY, id: e.pointerId, mode: null, slides: e.button !== 0 || e.shiftKey, at: under(e) };
+    try {
+      // From here every move and the release come to the view, wherever the pointer goes.
+      dom.setPointerCapture(e.pointerId);
+    } catch {
+      // A pointer that is already gone cannot be captured; the drag still works inside the view.
+    }
   });
   dom.addEventListener("pointermove", (e) => {
     if (!press || e.pointerId !== press.id) return;
+    // The mouse button came up somewhere we did not hear of it.
+    if (e.pointerType === "mouse" && e.buttons === 0) return end();
     if (!press.mode) {
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) <= DRAG_START) return;
       press.mode = press.slides ? "slide" : "orbit";
@@ -104,11 +125,6 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
       press.pivot = press.at.model ? press.at.point : target.clone();
       press.depth = depthOf(press.at.point);
       if (press.mode === "orbit") onPivot(press.pivot);
-      try {
-        dom.setPointerCapture(e.pointerId);
-      } catch {
-        // A pointer that is already gone cannot be captured; the drag still works inside the view.
-      }
       dom.style.cursor = "grabbing";
     }
     const dx = e.clientX - press.x, dy = e.clientY - press.y;
@@ -119,14 +135,12 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
     changed();
   });
   const release = (e) => {
-    if (!press || e.pointerId !== press.id) return;
-    if (press.mode && dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId);
-    dom.style.cursor = "";
-    if (press.mode === "orbit") onPivot(null);
-    press = null;
+    if (press && e.pointerId === press.id) end();
   };
   dom.addEventListener("pointerup", release);
   dom.addEventListener("pointercancel", release);
+  dom.addEventListener("lostpointercapture", release);
+  window.addEventListener("blur", end);
   dom.addEventListener("contextmenu", (e) => e.preventDefault());
 
   dom.addEventListener(
