@@ -1,12 +1,13 @@
 # Contributing to 3D Maker
 
-Thanks for helping! 3D Maker is a prompt-first 3D modeller: you describe what you want, your own
-Claude Code builds it on our signed-distance-field kernel, and you tweak it by clicking parts.
+Thanks for helping! 3D Maker is CAD you talk to: you describe a part or a machine, your own
+Claude Code draws it in 3D on our signed-distance-field kernel, and you change it by pointing at
+parts.
 
 ## How to contribute
 
-1. **Pick something.** Anything in the issue tracker, or a limitation from the
-   [README](README.md#limitations). For anything bigger than a small fix, open an issue first so
+1. **Pick something.** Anything in the issue tracker, an item from the
+   [roadmap](docs/roadmap.md), or a limitation from the [README](README.md#limitations). For anything bigger than a small fix, open an issue first so
    we can agree on the approach.
 2. **Fork** the repository and create a branch in your fork.
 3. **Set up and check.** You need Node 20 or newer and Google Chrome (the app tests run in

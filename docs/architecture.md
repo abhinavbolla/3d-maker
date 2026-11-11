@@ -25,8 +25,10 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
 4. A new script goes to the kernel workers ([src/app/kernel.js](../src/app/kernel.js)), which run
    it and mesh its parts in parallel. Only parts that changed are meshed again. A quick preview
    shows first; a finer mesh follows in the background, and screenshots wait for it.
-5. [src/app/viewport.js](../src/app/viewport.js) draws the parts with three.js, plays their
-   motion, and takes the screenshots Claude looks at.
+5. [src/app/viewport.js](../src/app/viewport.js) draws the parts with three.js in a studio (a
+   key light with shadows, a floor with a faint reflection, and materials), plays their motion,
+   and takes the screenshots Claude looks at. [src/app/navigate.js](../src/app/navigate.js)
+   moves the camera around the point under the pointer.
 
 ## The model
 

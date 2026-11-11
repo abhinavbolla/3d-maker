@@ -25,5 +25,11 @@ Notable changes to 3D Maker. The format follows
 - Plans for big models: Claude lists the sub-assemblies and their parts, then builds and checks
   them one step at a time, with progress shown above the prompt.
 - Export as STL (each part its own shell), STL as one solid, and 3MF with named, coloured parts.
+- A studio view: a key light that casts shadows, a floor with a soft shadow and a faint
+  reflection, and parts drawn as metal, paint, plastic, rubber or glass. Scripts can name a
+  part's material.
+- Free movement around the model: orbit around the point you grab, slide the view, and scroll
+  towards whatever the pointer is on, with no fixed centre. Buttons for standard views.
+- Export > Picture saves the view as a studio shot (PNG).
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
