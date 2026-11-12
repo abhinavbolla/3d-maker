@@ -14,6 +14,7 @@
     "app:build": "tauri build",
     "test": "node test/kernel.test.mjs && node test/bridge.test.mjs && node test/app.test.mjs",
     "test:e2e": "node test/e2e.test.mjs",
+    "licenses": "node test/licenses.mjs",
     "try": "node test/run-prompt.mjs"
   },
   "dependencies": {

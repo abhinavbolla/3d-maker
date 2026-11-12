@@ -34,7 +34,10 @@ parts.
    paste in code from other CAD kernels or modellers, open source or not. Ideas from papers and
    talks are welcome; write your own implementation.
 2. **Permissive dependencies only.** A new dependency needs a one-line reason in the PR and an
-   MIT, Apache-2.0, BSD or ISC license. Fewer is better: the kernel has none.
+   MIT, Apache-2.0, BSD or ISC license. Fewer is better: the kernel has none. CI checks every
+   dependency's license: `npm run licenses` for npm, and `cargo deny` with
+   [src-tauri/deny.toml](src-tauri/deny.toml) for the desktop app's Rust crates. The few
+   exceptions that our tools bring with them are named in those two files, each with its reason.
 3. **Measure geometry changes.** Changes to the kernel or mesher come with a test that checks the
    result by measuring it (volume, size, closed mesh), and the before and after numbers that
    matter (triangles, time, error) in the PR.
