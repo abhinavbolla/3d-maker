@@ -10,14 +10,18 @@
     <div id="viewport"></div>
 
     <header class="top">
-      <span id="title">3D Maker</span>
+      <div id="heading">
+        <span id="title">3D Maker</span>
+        <span id="facts"></span>
+      </div>
       <nav>
         <button data-action="new" title="New model">New</button>
         <button data-action="open" title="Open (⌘O)">Open</button>
         <button data-action="save" title="Save (⌘S)">Save</button>
         <div class="menu">
-          <button id="export-button" type="button" title="Export for 3D printing (⌘E exports an STL)" aria-haspopup="menu" aria-expanded="false">Export</button>
+          <button id="export-button" type="button" title="Export a picture or a file for other apps (⌘E exports an STL)" aria-haspopup="menu" aria-expanded="false">Export</button>
           <div id="export-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-export="png"><span>Picture</span><small>This view as a studio shot, PNG</small></button>
             <button type="button" role="menuitem" data-export="stl"><span>STL</span><small>Each part a closed shell</small></button>
             <button type="button" role="menuitem" data-export="solid"><span>STL, one solid</span><small>All parts joined, to print in one piece</small></button>
             <button type="button" role="menuitem" data-export="3mf"><span>3MF</span><small>Named, coloured parts</small></button>
@@ -35,9 +39,24 @@
       <p id="card-hint">Type below to change this part.</p>
     </section>
 
-    <button id="play" type="button" hidden>Pause</button>
+    <div id="views" hidden>
+      <button type="button" data-view="fit" title="Fit the model in the view, seen from a corner (F)">Fit</button>
+      <span class="rule" id="play-rule" hidden></span>
+      <button id="play" type="button" hidden>Pause</button>
+    </div>
+
+    <div id="viewcube" hidden></div>
 
     <div id="dock">
+      <div id="start" hidden>
+        <h1>What do you want to make?</h1>
+        <p>Describe it, and Claude draws it in 3D. Or start from one of these.</p>
+        <div id="ideas">
+          <button type="button">A desk lamp with a weighted base</button>
+          <button type="button">A helicopter whose rotors spin</button>
+          <button type="button">A planetary gearbox that turns</button>
+        </div>
+      </div>
       <div id="reply" hidden>
         <button id="reply-close" type="button" aria-label="Close" title="Close">×</button>
         <p id="reply-prompt"></p>

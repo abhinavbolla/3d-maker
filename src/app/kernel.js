@@ -135,7 +135,7 @@ export function createKernel() {
           mesh = await meshPart(p, detail);
           cache.set(key, mesh);
         }
-        return { name: p.name, color: p.color, motion: p.motion, follow: p.follow, frames: p.frames, hidden: p.hidden, node: p.node, box: p.box, hash: p.hash, mesh };
+        return { name: p.name, color: p.color, material: p.material, motion: p.motion, follow: p.follow, frames: p.frames, hidden: p.hidden, node: p.node, box: p.box, hash: p.hash, mesh };
       }),
     );
     // Keep this build's meshes and a few recent ones (slider back-and-forth).

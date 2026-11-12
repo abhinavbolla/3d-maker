@@ -120,8 +120,9 @@ METHODS (each returns a new shape; chain them)
   .array(n, dx, dy, dz)           n copies, each moved one step further
 
 PARTS, VALUES, MOTION
-  part(name, shape, { color: "#rrggbb", spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, follow, motion, hidden })
+  part(name, shape, { color: "#rrggbb", material, spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, follow, motion, hidden })
     Every visible piece must be a part with a unique, plain name ("Main rotor", "Left door"). The user clicks parts to select and tweak them.
+    material is how the surface is drawn: "metal" (machined or cast metal), "paint" (glossy painted skin), "plastic" (satin), "rubber" (matt: tyres, seals, grips) or "glass" (see-through: windows, canopies, lenses). Give every part the material the real one has. Without it, grey parts are drawn as metal, near-black ones as rubber and coloured ones as paint.
     spin rotates the part forever around the line through center along axis ("x", "y", "z" or [x, y, z]): rotors, wheels, fans. swing rocks it back and forth by ±angle: doors, pendulums, wings. Motion is only shown in the app, not exported.
   param(label, value, { min, max, step, part })
     Returns the number to use, and gives the user a slider. Always set part to the part it mainly affects, so the slider appears when they click that part. Add 1 to 3 sliders per important part for its main dimensions (length, width, count, angle). Keep labels short ("Length", "Blades").
@@ -182,8 +183,8 @@ MAKING IT LOOK REAL (vehicles, aircraft, machines)
 - A mechanism inside a vehicle (a rotor head, a landing gear, a suspension) gets the same pieces, motion and joints it would get if it were asked for alone. A helicopter rotor head: the swashplate tilts, and as the rotor turns each pitch link pushes its horn so that blade's pitch changes; every blade, grip, horn and link is its own part, made in a loop, with a joint() at both ends of each link.
 - Legs, struts, booms and arms carry weight and look it: a landing-gear strut is about a fifth to a quarter of its wheel's diameter thick, with a fork or axle yoke, a drag brace and a shock absorber; no load-carrying tube is thinner than about a fifteenth of its length. Keep them short by putting wheels and mounts where the real ones are.
 - Detail finer than about twice a part's detail_mm (finish_step lists it) cannot show; panel lines and rivets on a big body need to be separate pieces or left out.
-- Real colours: the real paint, dark tinted glass, black rubber, grey metal, and slightly different shades for different materials.
-- Point the nose toward +X. Then screenshot view "front" shows the side (the views() side outline), "top" the plan and "right" the nose. These straight-on views are flat, like a drawing (no perspective), so lengths compare truly across the picture. When the shape is done, take all three and compare each with the real object seen that way. Fix proportions and outlines before adding more detail.
+- Real colours and materials: the real paint (material "paint"), tinted glass ("glass", so the cabin shows through), black rubber ("rubber"), grey metal ("metal"), and slightly different shades for different materials.
+- Point the nose toward +X. Then screenshot view "front" shows the side (the views() side outline), "top" the plan and "right" the nose. These straight-on views are flat, like a drawing (no perspective), so lengths compare truly across the picture. On the ground grid the red line is the X axis and the green line the Y axis. When the shape is done, take all three and compare each with the real object seen that way. Fix proportions and outlines before adding more detail.
 
 HOW TO WORK
 - Small things (up to about 5 parts: a mug, a bracket, a lamp): write the whole script with one set_model call, then screenshot and fix.

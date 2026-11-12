@@ -7,9 +7,13 @@
   --accent: #2f6fde;
   --accent-text: #ffffff;
   --danger: #b4441f;
-  --viewport: #ecedef;
-  --grid: #dcdfe2;
-  --grid-major: #c7cbd0;
+  --viewport: #dde0e4;
+  --viewport-glow: #fbfbfc;
+  --grid: #dfe2e5;
+  --grid-major: #cbcfd4;
+  --axis-x: #d2554c;
+  --axis-y: #3f9a5b;
+  --axis-z: #3d78d8;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 16px rgb(0 0 0 / 0.06);
   color-scheme: light;
 }
@@ -22,9 +26,13 @@
     --hover: #2a2c30;
     --accent: #5b8def;
     --danger: #e0805e;
-    --viewport: #232427;
-    --grid: #2e3034;
-    --grid-major: #3b3e43;
+    --viewport: #18191b;
+    --viewport-glow: #3d3f44;
+    --grid: #3a3c41;
+    --grid-major: #4a4d53;
+    --axis-x: #e0685f;
+    --axis-y: #56b071;
+    --axis-z: #5b8def;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
     color-scheme: dark;
   }
@@ -86,8 +94,21 @@ button {
 .top > * {
   pointer-events: auto;
 }
+#heading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 #title {
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#facts {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .top nav {
   display: flex;
@@ -141,7 +162,7 @@ button {
 /* ---- part card ---- */
 #card {
   position: fixed;
-  top: 52px;
+  top: 60px;
   right: 16px;
   width: 260px;
   max-width: calc(100vw - 32px);
@@ -328,24 +349,149 @@ button {
   font-size: 13px;
 }
 
-#play {
+/* ---- view bar: where to look from, and play or pause ---- */
+#views {
   position: fixed;
-  left: 16px;
+  left: 12px;
   bottom: 20px;
-  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+#views button {
+  padding: 5px 9px;
   border-radius: 6px;
   color: var(--muted);
+  font-size: 13px;
 }
-#play:hover {
+#views button:hover {
   background: color-mix(in srgb, var(--surface) 70%, transparent);
   color: var(--text);
 }
-
-@media (max-width: 720px) {
-  #play {
+#views .rule {
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+@media (max-width: 1180px) {
+  #views {
     bottom: auto;
-    top: 48px;
+    top: 58px;
   }
+}
+
+/* ---- view cube: which way the model faces; a side, edge or corner looks from there ---- */
+#viewcube {
+  position: fixed;
+  right: 26px;
+  bottom: 28px;
+  width: 100px;
+  height: 100px;
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
+}
+#viewcube.turning {
+  cursor: grabbing;
+}
+#viewcube svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+#viewcube .x {
+  --axis: var(--axis-x);
+}
+#viewcube .y {
+  --axis: var(--axis-y);
+}
+#viewcube .z {
+  --axis: var(--axis-z);
+}
+#viewcube line {
+  stroke: var(--axis);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+#viewcube text {
+  fill: var(--axis);
+  font-size: 10px;
+  font-weight: 650;
+}
+#viewcube .face {
+  position: absolute;
+  left: 23px;
+  top: 23px;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  grid-template: 11px 1fr 11px / 11px 1fr 11px;
+  border: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  background: color-mix(in srgb, var(--surface) calc(62% + 38% * var(--facing, 1)), var(--viewport));
+}
+#viewcube button {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: inherit;
+}
+#viewcube button:hover,
+#viewcube button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+  outline: none;
+}
+#viewcube.turning button:hover {
+  background: none;
+  color: var(--muted);
+}
+@media (max-width: 900px) {
+  #viewcube {
+    bottom: auto;
+    top: 104px;
+    right: auto;
+    left: 22px;
+    transform: scale(0.84);
+    transform-origin: top left;
+  }
+}
+
+/* ---- empty window: an invitation, above the prompt box ---- */
+#start {
+  margin-bottom: 18px;
+  text-align: center;
+}
+#start h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+#start p {
+  margin: 6px 0 14px;
+  color: var(--muted);
+}
+#ideas {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+#ideas button {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  color: var(--text);
+  font-size: 13px;
+}
+#ideas button:hover {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 #reply-receipt {
   color: var(--muted);

@@ -25,5 +25,17 @@ Notable changes to 3D Maker. The format follows
 - Plans for big models: Claude lists the sub-assemblies and their parts, then builds and checks
   them one step at a time, with progress shown above the prompt.
 - Export as STL (each part its own shell), STL as one solid, and 3MF with named, coloured parts.
+- A studio view: a key light that casts shadows, a floor with a soft shadow and a faint
+  reflection, and parts drawn as metal, paint, plastic, rubber or glass. Scripts can name a
+  part's material.
+- Moving around the model the way other CAD programs do it: drag to turn the view around its
+  centre with the model kept upright, right-drag or shift-drag to slide it, and scroll or pinch
+  towards whatever the pointer is on. On a trackpad two fingers slide the view. Double-click a
+  point to make it the centre.
+- A view cube that turns with the model, with the X, Y and Z axes drawn from its corner. Click a
+  side, an edge or a corner to look from there; drag it to turn the view.
+- While you turn the view, a ring marks the centre it turns around, and the origin's axes and
+  its three planes show. The X and Y axes are drawn on the ground grid.
+- Export > Picture saves the view as a studio shot (PNG).
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.

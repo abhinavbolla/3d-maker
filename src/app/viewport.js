@@ -1,14 +1,19 @@
-// The 3D view: Z-up camera, soft studio light, a ground grid scaled to the
-// model, click to pick a part, and motion for parts that spin or swing.
+// The 3D view: the model in a studio (a key light that casts shadows, a floor
+// with a soft shadow and a faint reflection, metal, paint, rubber and glass),
+// a ground grid scaled to the model with the X and Y axes drawn on it, click
+// to pick a part, movement around the model, motion for parts that spin or
+// swing, and, while the view turns, the centre it turns around and the
+// origin's axes and planes.
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { Reflector } from "three/examples/jsm/objects/Reflector.js";
+import { createNavigation } from "./navigate.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 const DEG = Math.PI / 180;
 const VIEWS = {
   iso: [1, -1.25, 0.8],
+  low: [1, -1.5, 0.28],
   top: [0, 0, 1],
   bottom: [0, 0, -1],
   front: [0, -1, 0],
@@ -16,34 +21,234 @@ const VIEWS = {
   right: [1, 0, 0],
   left: [-1, 0, 0],
 };
+// Where the key light stands, as a direction from the model.
+const KEY = new THREE.Vector3(12, -18, 28).normalize();
+
+// The studio as the model's surfaces reflect it: a pale dome, darker below
+// the horizon so metal has something to contrast with, a big soft light where
+// the key light is, a strip to one side, and a rim light behind.
+function studio() {
+  const s = new THREE.Scene();
+  const dome = new THREE.SphereGeometry(40, 48, 24);
+  const at = dome.attributes.position;
+  const shade = new Float32Array(at.count * 3);
+  for (let i = 0; i < at.count; i++) shade.fill(at.getZ(i) < 0 ? 0.4 : 0.62 + 0.3 * (at.getZ(i) / 40), i * 3, i * 3 + 3);
+  dome.setAttribute("color", new THREE.BufferAttribute(shade, 3));
+  s.add(new THREE.Mesh(dome, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  const panel = (w, h, brightness, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color().setScalar(brightness), side: THREE.DoubleSide }));
+    m.position.set(x, y, z);
+    m.lookAt(0, 0, 0);
+    s.add(m);
+  };
+  panel(26, 18, 9, 12, -18, 28);
+  panel(7, 30, 4, -30, -6, 10);
+  panel(26, 7, 5, 4, 30, 14);
+  return s;
+}
+
+// The backdrop behind the model: brightest behind it, falling off to the edges.
+function backdrop(inner, outer) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 256;
+  const g = c.getContext("2d");
+  const fall = g.createRadialGradient(128, 146, 16, 128, 146, 200);
+  fall.addColorStop(0, inner);
+  fall.addColorStop(1, outer);
+  g.fillStyle = fall;
+  g.fillRect(0, 0, 256, 256);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// The floor's reflection: what a mirror would show, softened, kept faint, and
+// fading out away from the model. Empty parts of the mirror stay clear.
+const FLOOR = {
+  name: "FloorReflection",
+  uniforms: { color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, strength: { value: 0.42 }, centre: { value: new THREE.Vector2() }, radius: { value: 1 } },
+  vertexShader: /* glsl */ `
+    uniform mat4 textureMatrix;
+    varying vec4 vUv;
+    varying vec2 vAt;
+    void main() {
+      vUv = textureMatrix * vec4(position, 1.0);
+      vAt = (modelMatrix * vec4(position, 1.0)).xy;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float strength;
+    uniform vec2 centre;
+    uniform float radius;
+    varying vec4 vUv;
+    varying vec2 vAt;
+    void main() {
+      float b = 0.003 * vUv.w;
+      vec4 r = texture2DProj(tDiffuse, vUv) * 0.4;
+      r += texture2DProj(tDiffuse, vUv + vec4(b, 0.0, 0.0, 0.0)) * 0.15;
+      r += texture2DProj(tDiffuse, vUv - vec4(b, 0.0, 0.0, 0.0)) * 0.15;
+      r += texture2DProj(tDiffuse, vUv + vec4(0.0, b, 0.0, 0.0)) * 0.15;
+      r += texture2DProj(tDiffuse, vUv - vec4(0.0, b, 0.0, 0.0)) * 0.15;
+      float show = r.a * strength * (1.0 - smoothstep(0.35, 1.0, distance(vAt, centre) / radius));
+      gl_FragColor = vec4(r.a > 0.0 ? r.rgb / r.a : vec3(0.0), 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      gl_FragColor = vec4(gl_FragColor.rgb * show, show);
+    }`,
+};
+
+// How a part is drawn. A script can name its material; without one, grey
+// parts are drawn as metal, near-black ones as rubber and coloured ones as
+// paint, which suits most machines.
+const LOOKS = {
+  metal: { metalness: 0.92, roughness: 0.36, clearcoat: 0, transparent: false, opacity: 1 },
+  paint: { metalness: 0, roughness: 0.46, clearcoat: 0.55, transparent: false, opacity: 1 },
+  plastic: { metalness: 0, roughness: 0.52, clearcoat: 0, transparent: false, opacity: 1 },
+  rubber: { metalness: 0, roughness: 0.93, clearcoat: 0, transparent: false, opacity: 1 },
+  glass: { metalness: 0, roughness: 0.05, clearcoat: 0, transparent: true, opacity: 0.36 },
+};
+// In the floor's mirror a part fades out with its height above the floor, the
+// way a satin floor shows what stands on it and loses what is high above.
+// x: 1 while the mirror's picture is drawn, y: the floor's z, z: the height
+// at which a part has faded out.
+const mirrorFade = { value: new THREE.Vector3(0, 0, 1) };
+function fadeInMirror(material) {
+  material.customProgramCacheKey = () => "mirror-fade";
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.mirrorFade = mirrorFade;
+    shader.vertexShader = "varying float vHeight;\n" + shader.vertexShader.replace("#include <project_vertex>", "#include <project_vertex>\n  vHeight = (modelMatrix * vec4(transformed, 1.0)).z;");
+    shader.fragmentShader =
+      "uniform vec3 mirrorFade;\nvarying float vHeight;\n" +
+      shader.fragmentShader.replace("#include <dithering_fragment>", "#include <dithering_fragment>\n  if (mirrorFade.x > 0.5) {\n    float keep = 1.0 - smoothstep(0.0, mirrorFade.z, vHeight - mirrorFade.y);\n    gl_FragColor = vec4(gl_FragColor.rgb * keep, keep);\n  }");
+  };
+  return material;
+}
+const hsl = { h: 0, s: 0, l: 0 };
+function lookOf(part) {
+  if (LOOKS[part.material]) return part.material;
+  new THREE.Color(part.color).getHSL(hsl);
+  return hsl.s >= 0.16 ? "paint" : hsl.l < 0.16 ? "rubber" : "metal";
+}
+
 const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 
-export function createViewport(container, { onPick }) {
+// onView(camera): the camera has turned, for the view cube.
+export function createViewport(container, { onPick, onView = () => {} }) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.9;
-  const key = new THREE.DirectionalLight(0xffffff, 1.4);
-  key.position.set(0.6, -1, 1.6);
-  scene.add(key);
+  scene.environment = pmrem.fromScene(studio(), 0.03).texture;
+  scene.environmentIntensity = 0.8;
+  const key = new THREE.DirectionalLight(0xffffff, 2.1);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.radius = 4;
+  key.shadow.bias = -0.0003;
+  scene.add(key, key.target);
 
   const camera = new THREE.PerspectiveCamera(35, 1, 1, 1e6);
   camera.position.set(300, -380, 250);
-  const orbit = new OrbitControls(camera, renderer.domElement);
-  orbit.screenSpacePanning = true;
-  orbit.enableDamping = true;
-  orbit.dampingFactor = 0.18;
-  orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
 
   const grid = new THREE.Group();
   scene.add(grid);
   const content = new THREE.Group();
   scene.add(content);
+
+  // ---- floor: a soft shadow and a faint reflection under the model ----
+  const shadowFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.24, depthWrite: false }));
+  shadowFloor.receiveShadow = true;
+  shadowFloor.renderOrder = -2;
+  const mirror = new Reflector(new THREE.PlaneGeometry(1, 1), { shader: FLOOR, multisample: 4, clipBias: 0.001 });
+  Object.assign(mirror.material, { transparent: true, premultipliedAlpha: true, depthWrite: false });
+  mirror.renderOrder = -1;
+  scene.add(shadowFloor, mirror);
+
+  // ---- guides: shown while the view turns, and left out of every picture ----
+  // The turning point: a dot on the centre the view turns around, the upright
+  // axis through it, and a ring lying flat around it. The view swings round
+  // that axis, along that ring.
+  const pivotInk = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  const inked = (geometry, opacity) => new THREE.Mesh(geometry, Object.assign(pivotInk.clone(), { opacity, side: THREE.DoubleSide }));
+  const pivot = new THREE.Group();
+  pivot.add(inked(new THREE.CircleGeometry(1, 72), 0.09), inked(new THREE.TorusGeometry(1, 0.016, 8, 96), 0.8), inked(new THREE.CylinderGeometry(0.014, 0.014, 2.8, 8).rotateX(Math.PI / 2), 0.5), inked(new THREE.SphereGeometry(0.08, 16, 12), 1));
+  pivot.traverse((o) => (o.renderOrder = 10));
+  // The origin: the X, Y and Z axes from it and the three planes through it,
+  // each plane in the colour of the axis it faces along. Unlike the turning
+  // point they are part of the space, so the model hides what is behind it.
+  const origin = new THREE.Group();
+  const corners = [-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0];
+  const originInk = {}; // axis name -> its materials
+  for (const [axis, turn] of [["z", null], ["y", (g) => g.rotateX(-Math.PI / 2)], ["x", (g) => g.rotateY(Math.PI / 2)]]) {
+    const fill = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false, toneMapped: false });
+    const line = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6, toneMapped: false });
+    const sheet = new THREE.PlaneGeometry(2, 2);
+    const edge = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(corners, 3));
+    const along = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 1.3], 3));
+    turn?.(sheet);
+    turn?.(edge);
+    turn?.(along);
+    origin.add(new THREE.Mesh(sheet, fill), new THREE.LineLoop(edge, line), new THREE.Line(along, new THREE.LineBasicMaterial({ toneMapped: false })));
+    originInk[axis] = origin.children.slice(-3).map((o) => o.material);
+  }
+  const guides = new THREE.Group();
+  guides.add(pivot, origin);
+  guides.visible = false;
+  scene.add(guides);
+  const PIVOT_RING = 46; // the ring's radius on screen, px
+  function sizePivot() {
+    const depth = pivot.position.clone().sub(camera.position).dot(camera.getWorldDirection(new THREE.Vector3()));
+    pivot.scale.setScalar((PIVOT_RING * 2 * Math.max(depth, 1e-6) * Math.tan((camera.fov * DEG) / 2)) / renderer.domElement.clientHeight);
+  }
+
+  // The mirror's own picture holds just the model: no backdrop, grid or shadow.
+  const reflect = mirror.onBeforeRender;
+  mirror.onBeforeRender = function (...args) {
+    const was = [scene.background, renderer.getClearAlpha(), grid.visible, shadowFloor.visible, guides.visible];
+    scene.background = null;
+    renderer.setClearAlpha(0);
+    grid.visible = shadowFloor.visible = guides.visible = false;
+    mirrorFade.value.x = 1;
+    reflect.apply(this, args);
+    mirrorFade.value.x = 0;
+    [scene.background, , grid.visible, shadowFloor.visible, guides.visible] = was;
+    renderer.setClearAlpha(was[1]);
+  };
+
+  // Stands the lights and the floor around the model.
+  let stageSize = 400; // the model's overall size, mm
+  let floorZ = 0;
+  function setStage(box) {
+    const b = box ?? new THREE.Box3(new THREE.Vector3(-100, -100, 0), new THREE.Vector3(100, 100, 100));
+    const center = b.getCenter(new THREE.Vector3());
+    const radius = Math.max(b.getSize(new THREE.Vector3()).length() / 2, 5);
+    stageSize = radius * 2;
+    floorZ = Math.min(0, b.min.z);
+    key.target.position.copy(center);
+    key.position.copy(center).addScaledVector(KEY, radius * 3);
+    const reach = radius * 1.3;
+    Object.assign(key.shadow.camera, { left: -reach, right: reach, top: reach, bottom: -reach, near: radius, far: radius * 4.5 + (center.z - floorZ) * 2 });
+    key.shadow.camera.updateProjectionMatrix();
+    key.shadow.normalBias = radius / 500;
+    for (const f of [shadowFloor, mirror]) {
+      f.visible = Boolean(box);
+      f.position.set(center.x, center.y, floorZ);
+      f.scale.setScalar(radius * 16);
+    }
+    // The origin's planes reach a little past a model that stands on the origin.
+    origin.scale.setScalar(radius * 0.75);
+    // Clear of the ground grid, which lies in the same plane.
+    origin.position.z = radius * 2e-4;
+    mirrorFade.value.set(0, floorZ, radius * 0.3);
+    mirror.material.uniforms.centre.value.set(center.x, center.y);
+    mirror.material.uniforms.radius.value = radius * 2.6;
+  }
 
   let parts = new Map(); // name -> { object, mesh, part }
   let selected = null;
@@ -51,10 +256,19 @@ export function createViewport(container, { onPick }) {
   let fitted = false;
   let lastBox = null;
 
-  const colors = () => ({ bg: new THREE.Color(cssVar("--viewport", "#ecedef")), grid: new THREE.Color(cssVar("--grid", "#d6d9dd")), major: new THREE.Color(cssVar("--grid-major", "#c3c7cc")), accent: new THREE.Color(cssVar("--accent", "#2f6fde")) });
-  let theme = colors();
+  const colors = () => ({
+    bg: backdrop(cssVar("--viewport-glow", "#fbfbfc"), cssVar("--viewport", "#dfe1e5")),
+    grid: new THREE.Color(cssVar("--grid", "#d6d9dd")),
+    major: new THREE.Color(cssVar("--grid-major", "#c3c7cc")),
+    accent: new THREE.Color(cssVar("--accent", "#2f6fde")),
+    x: new THREE.Color(cssVar("--axis-x", "#d2554c")),
+    y: new THREE.Color(cssVar("--axis-y", "#3f9a5b")),
+    z: new THREE.Color(cssVar("--axis-z", "#3d78d8")),
+  });
+  let theme = null;
 
-  // ---- grid: 10 cells of a round size around the model ----
+  // ---- grid: 10 cells of a round size around the model, with the X axis
+  // (red) and the Y axis (green) drawn on it where they cross it ----
   function makeGrid(box) {
     grid.traverse((o) => o.geometry?.dispose());
     grid.clear();
@@ -66,18 +280,32 @@ export function createViewport(container, { onPick }) {
     const minor = [], major = [];
     for (let v = -half; v <= half + 1e-9; v += step) {
       const list = Math.abs(Math.round(v / step)) % 10 === 0 ? major : minor;
-      list.push(cx - half, cy + v, 0, cx + half, cy + v, 0, cx + v, cy - half, 0, cx + v, cy + half, 0);
+      // The grid lines the X and Y axes lie on are left out; the axes are drawn there.
+      if (Math.abs(cy + v) > step / 2) list.push(cx - half, cy + v, floorZ, cx + half, cy + v, floorZ);
+      if (Math.abs(cx + v) > step / 2) list.push(cx + v, cy - half, floorZ, cx + v, cy + half, floorZ);
     }
     for (const [pts, color] of [[minor, theme.grid], [major, theme.major]]) {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
       grid.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color })));
     }
+    const axes = [];
+    if (Math.abs(cy) <= half) axes.push([[cx - half, 0, floorZ, cx + half, 0, floorZ], theme.x]);
+    if (Math.abs(cx) <= half) axes.push([[0, cy - half, floorZ, 0, cy + half, floorZ], theme.y]);
+    for (const [pts, color] of axes) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      grid.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color })));
+    }
   }
 
+  const paper = backdrop("#ffffff", "#dcdfe3"); // the backdrop of saved pictures
   function applyTheme() {
+    theme?.bg.dispose();
     theme = colors();
     scene.background = theme.bg;
+    pivot.traverse((o) => o.material?.color.copy(theme.accent));
+    for (const axis of ["x", "y", "z"]) for (const material of originInk[axis]) material.color.copy(theme[axis]);
     makeGrid(lastBox);
     highlight();
   }
@@ -85,6 +313,7 @@ export function createViewport(container, { onPick }) {
 
   // ---- render loop: only runs while something moves ----
   let frame = 0;
+  const seen = new THREE.Quaternion(0, 0, 0, 0); // the camera's turn when the view cube last heard of it
   const timer = new THREE.Timer();
   let time = 0;
   let loopSeconds = 4;
@@ -95,16 +324,17 @@ export function createViewport(container, { onPick }) {
     const dt = timer.getDelta();
     if (moving()) time += Math.min(dt, 0.1);
     pose(time);
-    const damping = orbit.update();
+    if (guides.visible) sizePivot();
     renderer.render(scene, camera);
-    if (moving() || damping) render();
+    if (!seen.equals(camera.quaternion)) onView(camera);
+    seen.copy(camera.quaternion);
+    if (moving()) render();
   }
   function render() {
     if (!frame) {
       frame = requestAnimationFrame(tick);
     }
   }
-  orbit.addEventListener("change", render);
 
   // Poses come from the kernel, sampled over the loop (60 per second); in
   // between two samples, rotation is slerped and position interpolated.
@@ -141,6 +371,8 @@ export function createViewport(container, { onPick }) {
     renderer.setSize(w, h, false);
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
+    const px = renderer.getPixelRatio();
+    mirror.getRenderTarget().setSize(Math.round(w * px), Math.round(h * px));
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     render();
@@ -155,13 +387,23 @@ export function createViewport(container, { onPick }) {
     geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
     geo.setIndex(new THREE.BufferAttribute(indices, 1));
     geo.computeBoundingSphere();
-    const mat = new THREE.MeshStandardMaterial({ color: part.color, roughness: 0.5, metalness: 0.05 });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, fadeInMirror(new THREE.MeshPhysicalMaterial({ color: part.color, clearcoatRoughness: 0.3 })));
+    dress(mesh, part);
+    mesh.receiveShadow = true;
     mesh.userData.name = part.name;
     const object = new THREE.Group();
     object.matrixAutoUpdate = false;
     object.add(mesh);
     return { object, mesh };
+  }
+
+  function dress(mesh, part) {
+    const look = lookOf(part);
+    if (mesh.userData.look === look) return;
+    mesh.userData.look = look;
+    Object.assign(mesh.material, LOOKS[look], { needsUpdate: true });
+    mesh.castShadow = look !== "glass";
+    mesh.renderOrder = look === "glass" ? 1 : 0;
   }
 
   function setParts(list) {
@@ -171,6 +413,7 @@ export function createViewport(container, { onPick }) {
       const old = parts.get(part.name);
       if (old && old.part.mesh === part.mesh) {
         old.mesh.material.color.set(part.color);
+        dress(old.mesh, part);
         old.part = part;
         next.set(part.name, old);
         parts.delete(part.name);
@@ -189,6 +432,7 @@ export function createViewport(container, { onPick }) {
     const box = modelBox();
     if (!lastBox || !box || !box.equals(lastBox)) {
       lastBox = box;
+      setStage(box);
       makeGrid(box);
     }
     if (!parts.size) {
@@ -227,19 +471,33 @@ export function createViewport(container, { onPick }) {
 
   // ---- picking ----
   const ray = new THREE.Raycaster();
+  // The model's surface under a point of the window: { point, object } or null.
+  function surfaceAt(clientX, clientY) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    content.updateMatrixWorld(true);
+    ray.setFromCamera(new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
+    return ray.intersectObjects([...parts.values()].map((p) => p.mesh), false)[0] ?? null;
+  }
+  const nav = createNavigation(camera, renderer.domElement, {
+    surfaceAt: (x, y) => surfaceAt(x, y)?.point ?? null,
+    size: () => stageSize,
+    floor: () => floorZ,
+    onChange: () => render(),
+    onPivot(point) {
+      guides.visible = Boolean(point);
+      if (point) pivot.position.copy(point);
+      render();
+    },
+  });
   let down = null;
   renderer.domElement.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
   renderer.domElement.addEventListener("pointerup", (e) => {
     if (!down || e.button !== 0 || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
-    const rect = renderer.domElement.getBoundingClientRect();
-    content.updateMatrixWorld(true);
-    const meshes = [...parts.values()].map((p) => p.mesh);
     // Exact point first, then a small ring around it so thin parts (blades,
     // struts) are easy to hit.
     let hit = null;
     for (const [dx, dy] of [[0, 0], ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => [6 * Math.cos(i * 0.785), 6 * Math.sin(i * 0.785)])]) {
-      ray.setFromCamera(new THREE.Vector2(((e.clientX + dx - rect.left) / rect.width) * 2 - 1, -((e.clientY + dy - rect.top) / rect.height) * 2 + 1), camera);
-      hit = ray.intersectObjects(meshes, false)[0];
+      hit = surfaceAt(e.clientX + dx, e.clientY + dy);
       if (hit) break;
     }
     onPick(hit ? hit.object.userData.name : null);
@@ -306,12 +564,44 @@ export function createViewport(container, { onPick }) {
     return cam;
   }
 
-  function fit(view = "iso") {
-    const center = placeCamera(camera, view, modelBox());
-    orbit.target.copy(center);
-    orbit.update();
+  // Frames the whole model, or just the named parts, from a standard view.
+  function fit(view = "iso", names) {
+    nav.lookAt(placeCamera(camera, view, modelBox(names) ?? modelBox()));
     fitted = true;
-    render();
+  }
+
+  // Turns the view to look from a direction (a standard view's name, or
+  // [x, y, z]) at what it is looking at now, from as far away as it is now.
+  // Unlike fit, it keeps your place.
+  let turning = 0;
+  const stopTurning = () => cancelAnimationFrame(turning);
+  renderer.domElement.addEventListener("pointerdown", stopTurning);
+  renderer.domElement.addEventListener("wheel", stopTurning, { passive: true });
+  function lookFrom(view) {
+    const dir = new THREE.Vector3(...(VIEWS[view] ?? view));
+    if (!(dir.length() > 0)) return;
+    dir.normalize();
+    stopTurning();
+    const distance = camera.position.distanceTo(nav.target);
+    const end = camera.clone();
+    // Straight down or up, the front of the model is at the bottom of the window.
+    const upright = Math.hypot(dir.x, dir.y) > 1e-6;
+    end.up.set(0, upright ? 0 : Math.sign(dir.z), upright ? 1 : 0);
+    end.position.copy(nav.target).addScaledVector(dir, distance);
+    end.lookAt(nav.target);
+    const from = camera.quaternion.clone();
+    const started = performance.now();
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const step = () => {
+      const t = still ? 1 : Math.min((performance.now() - started) / 260, 1);
+      camera.quaternion.slerpQuaternions(from, end.quaternion, t * t * (3 - 2 * t));
+      // The camera looks down its own -z, so it stands at +z from the target.
+      camera.position.set(0, 0, distance).applyQuaternion(camera.quaternion).add(nav.target);
+      camera.up.copy(end.up);
+      nav.lookAt(nav.target);
+      if (t < 1) turning = requestAnimationFrame(step);
+    };
+    step();
   }
 
   // Frames the model the first time one appears, so new models are in view.
@@ -346,8 +636,13 @@ export function createViewport(container, { onPick }) {
     highlight();
     pose(at);
     content.updateMatrixWorld(true);
+    // These pictures are for measuring by eye, so the floor's shadow and
+    // reflection are left out of them.
+    const floor = [shadowFloor.visible, mirror.visible, guides.visible];
+    shadowFloor.visible = mirror.visible = guides.visible = false;
     renderer.setRenderTarget(target);
     renderer.render(scene, cam);
+    [shadowFloor.visible, mirror.visible, guides.visible] = floor;
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
     renderer.setRenderTarget(null);
@@ -366,12 +661,53 @@ export function createViewport(container, { onPick }) {
     return canvas.toDataURL("image/png").split(",")[1];
   }
 
+  // A studio picture of the view as it is now, as base64 PNG: on the light
+  // backdrop whatever the theme, without the grid or the selection tint.
+  function picture({ width = 3200 } = {}) {
+    const { clientWidth: w, clientHeight: h } = container;
+    const W = Math.min(Math.round(width), renderer.capabilities.maxTextureSize);
+    const H = Math.round((W * h) / w);
+    const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, shadow: key.shadow.mapSize.x, guides: guides.visible };
+    selected = null;
+    highlight();
+    grid.visible = guides.visible = false;
+    scene.background = paper;
+    key.shadow.mapSize.setScalar(4096);
+    key.shadow.map?.dispose();
+    key.shadow.map = null;
+    renderer.setPixelRatio(1);
+    renderer.setSize(W, H, false);
+    mirror.getRenderTarget().setSize(W, H);
+    pose(time);
+    renderer.render(scene, camera);
+    const png = renderer.domElement.toDataURL("image/png").split(",")[1];
+    key.shadow.mapSize.setScalar(was.shadow);
+    key.shadow.map?.dispose();
+    key.shadow.map = null;
+    grid.visible = was.grid;
+    guides.visible = was.guides;
+    scene.background = theme.bg;
+    renderer.setPixelRatio(was.ratio);
+    selected = was.selected;
+    highlight();
+    resize();
+    return { png, width: W, height: H };
+  }
+
+  // Where a point of the model is in the window, px.
+  function onScreen(point) {
+    const p = point.project(camera);
+    const rect = renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
+  }
+
   function setPlaying(on) {
     playing = on;
     timer.update();
     render();
   }
 
+  setStage(null);
   applyTheme();
   resize();
   return {
@@ -379,8 +715,18 @@ export function createViewport(container, { onPick }) {
     select,
     fit,
     fitIfNew,
+    lookFrom,
+    // Turns the view as a drag of dx, dy px would; turning(on) shows what it turns around.
+    turn: (dx, dy) => nav.turn(dx, dy),
+    turning: (on) => nav.turning(on),
     screenshot,
+    picture,
     setPlaying,
+    // The model's overall size [x, y, z] in mm, or null without a model.
+    size() {
+      const s = modelBox()?.getSize(new THREE.Vector3());
+      return s ? [s.x, s.y, s.z] : null;
+    },
     hasMotion: () => [...parts.values()].some((p) => p.part.frames),
     setLoop(seconds) {
       loopSeconds = seconds > 0 ? seconds : 4;
@@ -388,11 +734,11 @@ export function createViewport(container, { onPick }) {
     isPlaying: () => playing,
     screenPosition(name) {
       const box = modelBox(name);
-      if (!box) return null;
-      const p = box.getCenter(new THREE.Vector3()).project(camera);
-      const rect = renderer.domElement.getBoundingClientRect();
-      return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
+      return box ? onScreen(box.getCenter(new THREE.Vector3())) : null;
     },
+    // Where the turning point is drawn in the window, or null when the view
+    // is not being turned.
+    turningPoint: () => (guides.visible ? onScreen(pivot.position.clone()) : null),
     resetFit: () => (fitted = false),
   };
 }

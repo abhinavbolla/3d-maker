@@ -3,13 +3,37 @@
 [![CI](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Describe what you want to make, and Claude builds it as a 3D model you can 3D print.** Click any part to tweak it with a few sliders, or select it and describe the change.
+**CAD you talk to.** Describe a part or a whole machine, and Claude draws it in 3D, in real dimensions, with parts that move. Look around it, click a part to change it, and export a picture or a file for other apps.
 
-> **3D Maker is in early development.** It runs from a clone of this repository, and there is no installer yet. See [Limitations](#limitations).
+![A helicopter rotor head made in 3D Maker: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
 
-![A helicopter Claude made in 3D Maker](docs/helicopter.png)
+> **3D Maker is in early development.** It runs from a clone of this repository, and there is no installer yet. See [what works today](#what-works-today) and the [roadmap](docs/roadmap.md).
 
-It runs on the Claude Code you already have, on your own Claude plan. There is no API key and no AI bill.
+## Why 3D Maker
+
+CAD takes years to learn, and the tools that make good models are closed and expensive. 3D Maker is built around three ideas:
+
+- **You describe; Claude draws.** There are no tool palettes to learn. You type what you want, and you point at a part to change it. It runs on the [Claude Code](https://claude.com/claude-code) you already have, on your own Claude plan, with no API key and no AI bill.
+- **It is a model, not a picture.** Everything is in millimetres. Parts are separate, named solids. Mechanisms really work: a crank drives its piston, a swashplate pitches its blades, and the app checks that joints hold and parts don't collide through the whole motion.
+- **It is yours.** The code is MIT licensed, the geometry kernel is our own, and a model is a short, readable script you can keep, edit and share.
+
+## What works today
+
+| | Status |
+|---|---|
+| Models from a prompt, changed by prompt or by sliders on a part | ✅ Works |
+| Big models built from a plan, step by step, each step checked | ✅ Works |
+| Mechanisms that move, with joint and collision checks | ✅ Works |
+| Studio view: shadows, a reflecting floor, metal, paint, rubber and glass | ✅ Works |
+| Moving freely around the model | ✅ Works |
+| Pictures (PNG) | ✅ Works |
+| Mesh export: STL and 3MF | ✅ Works |
+| 2D drawings: views, sections and dimensions | Planned |
+| Export for other CAD apps (STEP) | Planned |
+| Videos of a model, directed by Claude | Planned |
+| Installers for macOS, Windows and Linux | Planned |
+
+The [roadmap](docs/roadmap.md) has the full plan and what stands between this and a professional CAD tool.
 
 ## Run it
 
@@ -23,23 +47,41 @@ npm start          # or the same app in your browser, at http://localhost:5173
 
 ## Using it
 
-- Type what you want in the box at the bottom and press Enter, for example "a desk lamp with a weighted base" or "a helicopter whose rotors spin". Claude writes the model, looks at it from a few angles, and fixes what looks wrong.
-- Big or mechanical things (a helicopter, a rotor head, an engine) are built with a plan: Claude lists the sub-assemblies and their parts, then builds and checks them one at a time. A line above the prompt shows progress, like "5 of 20 done · now: Stationary swashplate". The app only lets a step count as done once all its parts exist and are solid.
-- Under Claude's reply, a grey line says what this window saw happen: whether the model changed, how many changes and looks, and any step that failed. It is counted by the app, not taken from Claude's words.
+**Making things**
+
+- Type what you want in the box at the bottom and press Enter: "a desk lamp with a weighted base", "a helicopter whose rotors spin". Claude writes the model, looks at it from a few angles, and fixes what looks wrong.
+- Big or mechanical things (a helicopter, a rotor head, an engine) are built with a plan. Claude lists the sub-assemblies and their parts, then builds and checks them one at a time. A line above the prompt shows progress, like "5 of 20 done · now: Stationary swashplate". A step only counts as done once all its parts exist and are solid.
+- Under Claude's reply, a grey line says what this window saw happen: whether the model changed, how many changes and looks, and any step that failed. The app counts this itself; it is not taken from Claude's words.
 - Click a part to select it. Its sliders appear in the top-right corner, and the prompt box now talks about that part ("make this longer").
-- Claude can draw real outlines (arcs, curves, splines, rounded corners, airfoil sections) and turn them into solids by extruding, spinning (all the way or part way), sweeping them along a path (rails, bent tube, springs, seals) or lofting through several of them (wings, blades, hulls, bottles). A body can also be drawn as its side, top and front outlines, the way it is drawn on paper; the solid is what they share (fuselages, car bodies, cabs). Claude is told what makes a vehicle look real: proportions from real dimensions first, outlines before detail, and the features the eye knows it by, as separate pieces.
-- Shapes can be twisted, tapered and bent (a bar bent into a ring, a label wrapped round a mug), filled with lattices (gyroid, diamond, square grid or honeycomb infill, with a solid skin if wanted), and wrapped in a convex hull. Text is drawn in our own single-stroke font, in the style of technical drawing lettering, to raise or engrave.
-- Real hardware at ISO metric sizes: threaded rods, bolts (hex, socket and countersunk heads), nuts and washers, and holes that are clearance-drilled, tapped, counterbored or countersunk for them. A bolt made at the same spot as its hole fits it. Moulded parts can have draft on their sides.
-- The app checks how parts fit: which parts pass into each other, how deep and where, at rest and through the whole motion, so a rotor blade that strikes the tail during its turn is found. Claude sees this after each step of a plan and fixes it (cutting a hole where a shaft goes into a hub, for example). Parts pinned together at a joint may overlap around the pin, in moving and still models alike; each joint covers one pin, so overlap at the other copies of a part made of copies is still listed. Threads count as fitting when they mate.
-- Parts move in the view, and mechanisms work: a crank drives its rod and piston, a swashplate pitches rotor blades through their pitch links. Claude declares every joint (each pin, ball joint and rod end), and the app checks over the whole motion that no joint comes apart, so a mechanism that only looks right in one frame is caught. Pause stops the motion.
-- Drag to orbit, right-drag to pan, scroll to zoom, F to fit the view, Esc to deselect.
-- ⌘Z / ⇧⌘Z undo and redo every change, Claude's included. ⌘S saves, ⌘O opens, ⌘E exports an STL; the Export menu also has one-solid STL and 3MF. The model is also autosaved.
+- ⌘Z and ⇧⌘Z undo and redo every change, Claude's included. ⌘S saves and ⌘O opens. The model is also autosaved.
 
-Export writes every visible part at the same detail, meshed in parallel, so a 60-part rotor head exports in seconds:
+**Looking around**
 
-- **STL**: each part its own closed shell in one file, ready for a slicer.
-- **STL, one solid**: every part joined into one closed solid, to print in one piece (slower: one solid is meshed on one core).
-- **3MF**: one named, coloured object per part, for slicers and other CAD tools.
+- Drag to turn the view. It turns around the middle of the window, which starts as the middle of the model, and the model stays upright. While you turn, a ring marks that centre, and the origin's axes and its three planes show.
+- Right-drag or shift-drag to slide the view. On a trackpad, slide two fingers.
+- Scroll with a mouse wheel, or pinch on a trackpad, to move towards what the pointer is on. Over empty space you keep flying, so you can travel to any part of a big model and look at it up close.
+- Double-click a point to bring it to the middle; the view then turns around it. Fit (or F) frames the whole model from a corner, and Esc deselects.
+- The view cube at the bottom right turns with the model. Click a side, an edge or a corner to look from there without losing your place, or drag the cube to turn the view. Its red, green and blue lines are the X, Y and Z axes, and the red and green lines on the ground are the X and Y axes.
+- Moving parts play in the view; Pause stops them.
+
+**What Claude can draw**
+
+- Real outlines (arcs, curves, splines, rounded corners, airfoil sections), turned into solids by extruding, spinning, sweeping along a path (rails, bent tube, springs) or lofting through several of them (wings, blades, hulls, bottles).
+- Bodies from their side and top outlines, the way they are drawn on paper, with rounded cross-sections (fuselages, car bodies, cabs).
+- Shapes that are twisted, tapered and bent, lattice infill (gyroid, diamond, grid, honeycomb), convex hulls, and raised or engraved text in our own single-stroke font.
+- Real hardware at ISO metric sizes: threads, bolts, nuts, washers, and the clearance, tapped, counterbored or countersunk holes that fit them. Moulded parts can have draft.
+- Materials: metal, paint, plastic, rubber and glass.
+- Motion: parts that turn, slide, follow each other or are linked by rods. Claude declares every joint, and the app checks over the whole motion that no joint comes apart and no parts pass into each other.
+
+**Getting it out**
+
+The Export menu saves:
+
+- **Picture**: the view as a studio shot on a light backdrop, as a PNG.
+- **3MF**: one named, coloured object per part, for other 3D apps and slicers.
+- **STL**: each part its own closed shell, or all parts joined into one solid.
+
+Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
 
 ## How it works
 
@@ -96,13 +138,13 @@ node test/render-run.mjs runs/x/model.js runs/x "Part A,Part B"   # pictures and
 
 ## Limitations
 
-- No exact CAD surfaces: export is STL and 3MF meshes (no STEP), and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where nothing fails.
-- Very fine detail cut into a very large part (a 1 mm engraved logo on a 10 m fuselage) is limited by that part's mesh detail, and features smaller than a mesh cell (a 5 mm bevel on a 7 mm cell) come out saw-toothed. Thin edges and rods are much better than they were, but the very tip of a sharp trailing edge is still a few mm short. Small pieces added to a big part keep their own detail. The view uses lighter meshes than the export.
-- No dragging parts around in the view; changes are sliders or prompts.
-- Collisions in motion are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.
-- Threads are real helical solids, but on a big model they are finer than the mesh and look like smooth rods.
-- Text has one font, and only the characters listed in the reference (no accents yet). Lattices with very thick walls are limited to walls 30% of a cell.
-- Packaging: the app runs from this folder. It finds the MCP server and Node here, so there is no installer, no signing and no real icon yet.
+- **No exact CAD surfaces yet.** Export is meshes (STL, 3MF), not STEP, and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](docs/roadmap.md) says what we plan to do about it.
+- **No 2D drawings yet.**
+- **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods.
+- **Changes are prompts and sliders.** You can't drag parts around in the view.
+- **Collisions in motion** are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.
+- **Text** has one font and no accents yet.
+- **Packaging.** The app runs from this folder, so there is no installer, signing or real icon yet.
 - Running your own `claude -p` from an app is fine for your own use. Check Anthropic's terms before giving the app to others.
 
 ## Contributing

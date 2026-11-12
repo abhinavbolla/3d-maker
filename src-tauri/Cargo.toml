@@ -1,7 +1,7 @@
 [package]
 name = "three-d-maker"
 version = "0.1.0"
-description = "Describe what you want to make, and Claude builds it as a 3D model you can 3D print."
+description = "CAD you talk to: describe a part or a machine, and Claude draws it in 3D."
 license = "MIT"
 authors = ["Abhinav Bolla"]
 edition = "2024"

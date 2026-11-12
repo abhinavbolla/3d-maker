@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "license": "MIT",
-  "description": "Describe what you want to make, and Claude builds it as a 3D model you can 3D print.",
+  "description": "CAD you talk to: describe a part or a machine, and Claude draws it in 3D.",
   "type": "module",
   "scripts": {
     "dev": "vite",
