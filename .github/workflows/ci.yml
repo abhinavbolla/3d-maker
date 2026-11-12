@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -44,6 +46,8 @@ jobs:
         working-directory: src-tauri
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -71,3 +75,50 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+  # Every dependency comes from its registry and carries a license we accept.
+  licenses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: npm licenses
+        run: npm run licenses
+
+      - name: Rust licenses, bans and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check bans licenses sources
+
+  # Known vulnerabilities in what we depend on. New ones appear without any
+  # change here, so this reports but doesn't block a PR.
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: npm advisories
+        run: npm audit --audit-level=high
+
+      - name: Rust advisories
+        if: ${{ !cancelled() }}
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check advisories
