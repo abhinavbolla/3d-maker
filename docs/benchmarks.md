@@ -1,6 +1,23 @@
 # Benchmark results
 
-How to run these: see "Benchmarks" in the [README](../README.md). Each section is one run, newest first, so later changes can be compared against it.
+Each section below is one run, newest first, so later changes can be compared against it.
+
+## How to run them
+
+Both benchmarks use your real Claude Code and a fair amount of your Claude plan. Results go to `runs/bench/` (not in git), and a stopped run picks up where it left off.
+
+```bash
+node test/bench/objects.mjs --parallel 2      # our 8 complex, moving objects, scored by a judge
+node test/bench/cadprompt.mjs --per 5         # 20 of CADPrompt's 200 single parts, scored against their real meshes
+node test/render-run.mjs runs/x/model.js runs/x "Part A,Part B"   # pictures and fit check of a saved script, no Claude
+```
+
+- **Objects** ([test/bench/objects.json](../test/bench/objects.json)): a helicopter, drone, robot arm, race car, watch, yacht, office chair and engine. A fresh Claude that sees only the prompt and the pictures, not the builder's reply, scores recognisability, proportions, form, detail and mechanism from 1 to 10. It looks three times and the scores are averaged, because one look varies by about ±1. Next to the scores are what the app measures: parts, overlaps, a closed STL and time.
+- **CADPrompt** (Alrashedy et al., ICLR 2025): the most-cited text-to-CAD benchmark. It has 200 descriptions of single mechanical parts, each with a ground-truth mesh. The dataset is not in this repo because it states no licence. Fetch it with `git clone https://github.com/Kamel773/CAD_Code_Generation runs/bench/cadprompt-src`.
+  - **Prompt wording:** its prompts ask for "Python code using CADQuery", so that request is dropped and the description kept.
+  - **Scoring:** [test/bench/mesh-score.mjs](../test/bench/mesh-score.mjs) follows the paper. Both meshes are scaled into the unit cube, sampled to 1,000 points and aligned with ICP. A failed model scores √3 point-cloud distance and 0 IoGT.
+  - **Two scores:** "as built" starts the alignment from the model's own orientation, as the paper does. "Any turn" also tries the other right-angle turns.
+  - **Caveats:** the paper ships no scoring code, so this is our reading of it. The paper's best is 0.127 point-cloud distance and 0.944 IoGT (GPT-4 with CADCodeVerify, all 200 parts); a 20-part subset is not directly comparable.
 
 ## Rounded bodies and flat views, 10 November 2026 (commit d78c876)
 
