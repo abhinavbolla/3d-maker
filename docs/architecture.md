@@ -39,6 +39,12 @@ joints. [src/kernel/script.js](../src/kernel/script.js) runs it and returns plai
 shape tree for each part. Because the result is data, parts can be hashed, cached, sent to other
 workers and meshed in parallel. A slider change re-runs the script, so nothing downstream breaks.
 
+The modelling language is small: `sphere`, `capsule`, `revolve`, `union(..., smooth)`,
+`.symmetric("y")`, `.radial(4)`, `part(...)`, `param(...)`. Motion is part of the script too: a
+part can `follow` another or move by any function of time (`turn`, `slide`, `link` for rigid
+rods, `where` to track a point on another part), and `joint` declares connections the app checks.
+The full reference is what Claude reads: [mcp/reference.mjs](../mcp/reference.mjs).
+
 ## The kernel
 
 Everything in [src/kernel](../src/kernel) is our own code with no dependencies.
@@ -55,14 +61,27 @@ Everything in [src/kernel](../src/kernel) is our own code with no dependencies.
 | [threemf.js](../src/kernel/threemf.js) | 3MF export, including its own zip writer. |
 | [worker.js](../src/kernel/worker.js) | The worker that runs scripts and meshes parts. |
 
-Detail is shared out by surface area, so a big part gets as much detail as a small one. Export
-meshes every visible part at the same detail on all cores.
+More on the mesher and the fit checks:
+
+- **Detail** is shared out by surface area, so a big part gets as much detail as a small one.
+  The fine pass uses the real surface of the preview meshes, so a rotor spread over 16 m does not
+  starve the fuselage.
+- **Thin edges.** A flat part whose edges taper thinner than a cell (a rotor blade, a wing, a
+  keel) is meshed stretched up to 8x through its thickness and squeezed back. Its trailing edge
+  comes out straight instead of bitten, without filling its broad faces with cells.
+- **Shading.** In the view, vertices are split along sharp edges, so each face is shaded flat to
+  its edge instead of smearing into the next.
+- **Fit checks** need no meshes. A box of space is settled as soon as the distances at its centre
+  show it is wholly inside both parts or outside one.
+- **Export** meshes every visible part at the same detail on all cores.
+
+## Windows and the bridge
+
+Each window has its own id. A Claude run started from a window drives only that window, even
+with several windows or browser tabs open. The bridge listens on localhost and only accepts the
+app itself, checked by WebSocket origin. [SECURITY.md](../SECURITY.md) has the details.
 
 ## Tests
 
-| Command | What it covers |
-|---|---|
-| `npm test` | The kernel (volumes and sizes checked against exact answers), window routing over the bridge, and the app's commands in headless Chrome. No Claude needed; CI runs it. |
-| `npm run test:e2e` | The real prompt box with your real Claude Code, checked by measuring the result. |
-| `cargo test` in `src-tauri` | The desktop app's Rust side. `-- --include-ignored` also runs your Claude Code. |
-| [Benchmarks](benchmarks.md) | Eight complex moving objects scored by a judge, and CADPrompt scored against its ground-truth meshes. |
+[testing.md](testing.md) lists every test and what it covers, and [benchmarks.md](benchmarks.md)
+has the benchmark results.
