@@ -8,10 +8,12 @@ npm run licenses                          # every npm package carries an accepte
 node test/check-stl.mjs model.stl         # checks an STL is well formed and closed
 node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, every part closed
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
+node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
+node test/kernel.test.mjs drawing         # only the kernel tests with "drawing" in their name
 cd src-tauri && cargo test                # the desktop app's Rust side
 ```
 
-`npm test` checks the kernel's volumes and sizes against exact answers, window routing over the bridge, and the app's commands in headless Chrome.
+`npm test` checks the kernel's volumes and sizes against exact answers, drawings by measuring their views and sections, window routing over the bridge, and the app's commands in headless Chrome.
 
 ## With your Claude Code
 
