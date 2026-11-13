@@ -1,5 +1,5 @@
 // The app's commands in a real app window (headless Chrome), without Claude:
-// plans, step checks, appending code, ghosted screenshots, the run receipt.
+// plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
 import { startHarness, checks } from "./harness.mjs";
 import { writeFileSync, rmSync } from "node:fs";
@@ -118,6 +118,35 @@ try {
   const m3 = await call("export_3mf");
   const r3 = m3.result ? check3MF(Buffer.from(m3.result.base64, "base64")) : { problems: [m3.error], objects: [] };
   check(!r3.problems.length && r3.objects.map((o) => `${o.name} ${o.color}`).join(", ") === "Base #4F7CACFF, Peg #D9A441FF", `3MF has both parts, named, coloured and closed (${r3.objects.map((o) => `${o.name} ${o.color} ${o.triangles}`).join(", ") || r3.problems})`);
+
+  // The same model as a drawing: a well-formed SVG sheet with three views,
+  // a section through both parts, and the overall sizes (40 x 40, and 27
+  // high from under the base to the top of the peg).
+  const dr = await call("export_drawing");
+  const sheet = await w(`(() => {
+    const svg = new TextDecoder().decode(Uint8Array.from(atob(${JSON.stringify(dr.result?.base64 ?? "")}), (c) => c.charCodeAt(0)));
+    const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+    const lines = (sel) => [...doc.querySelectorAll(sel)].map((p) => p.getAttribute("d") ?? "").join("").split("M").length - 1;
+    return {
+      error: doc.querySelector("parsererror")?.textContent ?? null,
+      root: doc.documentElement.nodeName,
+      size: doc.documentElement.getAttribute("width") + " x " + doc.documentElement.getAttribute("height"),
+      views: ["front", "top", "left"].map((v) => lines("#view-" + v + " path")),
+      parts: [...doc.querySelectorAll("#view-front path")].map((p) => p.getAttribute("data-part")).join(", "),
+      cut: [...doc.querySelectorAll("#section-A .cut")].map((g) => g.getAttribute("data-part")).join(", "),
+      hatch: lines("#section-A .hatch"),
+      sizes: ["width", "depth", "height"].map((k) => doc.querySelector('[data-dimension="' + k + '"]')?.textContent).join(" x "),
+      title: doc.querySelector("#title-block #scale")?.textContent,
+      menu: document.querySelector('#export-menu [data-export="svg"] span')?.textContent,
+    };
+  })()`);
+  check(dr.result && !sheet.error && sheet.root === "svg" && sheet.size === "420mm x 297mm", `export gives a well-formed A3 drawing (${dr.error ?? sheet.error ?? sheet.size})`);
+  check(sheet.views.every((n) => n > 0) && sheet.parts === "Base, Peg", `the drawing has front, top and side views of both parts (${JSON.stringify(sheet.views)} lines, ${sheet.parts})`);
+  check(sheet.cut === "Base, Peg" && sheet.hatch > 5 && dr.result?.section.axis === "x" && Math.abs(dr.result.section.cut_area_mm2 - (40 * 10 + 10 * 20)) < 1, `and a hatched section through both (${sheet.cut}, ${dr.result?.section.cut_area_mm2} mm2)`);
+  check(sheet.sizes === "40 x 40 x 27" && sheet.title === dr.result?.scale && sheet.menu === "Drawing", `with the overall sizes and the scale, and the Export menu offers it (${sheet.sizes}, ${sheet.title})`);
+  const across = await call("export_drawing", { axis: "z", offset: 15 });
+  check(across.result?.section.axis === "z" && across.result.section.parts_cut.join() === "Peg" && Math.abs(across.result.section.cut_area_mm2 - Math.PI * 25) < 0.1, `a section can be put anywhere (${JSON.stringify(across.result?.section ?? across.error)})`);
+  check(/misses the model/.test((await call("export_drawing", { axis: "z", offset: 60 })).error ?? ""), "a section that misses the model is refused");
 
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.

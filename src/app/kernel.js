@@ -3,6 +3,7 @@
 import { worldBox, boxesMeet } from "../kernel/fit.js";
 import { toSTL } from "../kernel/mesh.js";
 import { to3MF } from "../kernel/threemf.js";
+import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today } from "../kernel/drawing.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
 const RUN_TIMEOUT_MS = 30000;
@@ -222,6 +223,28 @@ export function createKernel() {
     return { bytes: await to3MF(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0) };
   }
 
+  // A drawing sheet as SVG: front, top and side views, a section and the
+  // overall sizes. The parts are meshed as for any export; then each view
+  // and the section go to a worker of their own.
+  // section: { axis, offset }, both optional.
+  async function exportDrawing(parts, title, { section } = {}) {
+    const shown = visible(parts);
+    const meshes = await exportMeshes(parts);
+    const bounds = modelBounds(meshes);
+    const plane = sectionPlane(bounds, section);
+    const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
+    const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the drawing took too long.");
+    const [front, top, side, cut] = await Promise.all([draw({ view: "front" }), draw({ view: "top" }), draw({ view: sideViewOf("first") }), draw({ section: plane })]);
+    const { svg, scale } = sheetSVG({ title, date: today(), bounds, views: { front, top, side }, section: cut });
+    const count = (v) => v.reduce((s, p) => s + p.lines.length, 0);
+    return {
+      bytes: new TextEncoder().encode(svg),
+      scale,
+      section: { axis: cut.axis, offset_mm: Math.round(cut.offset * 100) / 100, cut_area_mm2: Math.round(cut.area * 10) / 10, parts_cut: cut.parts.map((p) => p.name) },
+      lines: count(front.parts) + count(top.parts) + count(side.parts) + count(cut.beyond),
+    };
+  }
+
   // Which parts pass into each other, at rest and over the motion loop. With
   // names, only pairs that include one of them; with exactly two names, also
   // how close those two come. Pairs are shared out over the workers.
@@ -264,5 +287,5 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, checkFit };
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportDrawing, checkFit };
 }

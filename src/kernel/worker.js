@@ -5,6 +5,7 @@ import { compile } from "./sdf.js";
 import { meshSDF, meshBounds, meshArea, displayMesh } from "./mesh.js";
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
+import { viewOutline, sectionView } from "./drawing.js";
 
 self.onmessage = ({ data: job }) => {
   try {
@@ -38,6 +39,11 @@ self.onmessage = ({ data: job }) => {
       }
       const { positions, indices } = m;
       self.postMessage({ id: job.id, ok: true, result: { positions, indices, cellSize: m.cellSize } }, [positions.buffer, indices.buffer]);
+    } else if (job.type === "drawing") {
+      // One view of a drawing, or its section: the parts' export meshes, with
+      // their distance functions compiled here.
+      const parts = job.parts.map((p) => ({ ...p, ...compile(p.node) }));
+      self.postMessage({ id: job.id, ok: true, result: job.section ? sectionView(parts, job.section) : viewOutline(parts, job.view) });
     }
   } catch (err) {
     self.postMessage({ id: job.id, ok: false, error: String(err?.message ?? err) });
