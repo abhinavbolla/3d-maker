@@ -1,6 +1,6 @@
 // Kernel tests: exact volumes for simple shapes, closed meshes for thousands
 // of random shapes, the example scripts, and script error messages.
-// Usage: node test/kernel.test.mjs
+// Usage: node test/kernel.test.mjs [word]   (with a word, only tests whose name has it)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compile, threadRoot } from "../src/kernel/sdf.js";
@@ -10,6 +10,7 @@ import { runScript } from "../src/kernel/script.js";
 import { to3MF } from "../src/kernel/threemf.js";
 import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
+import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
 
 const mesh = (node, budget = 40000) => {
@@ -43,7 +44,9 @@ function closedByPosition(m) {
 // Tests run one after another, in order; a test may be async.
 let passed = 0;
 let queue = Promise.resolve();
+const only = process.argv[2];
 const test = (name, fn) => {
+  if (only && !name.includes(only)) return;
   queue = queue.then(async () => {
     const t = performance.now();
     await fn();
@@ -881,6 +884,147 @@ test("the documented round 3 example runs and every part is closed", () => {
     (rmin = Math.min(rmin, rr)), (rmax = Math.max(rmax, rr));
   }
   assert.ok(rmin > 39.9 && rmax < 41.2, `label from radius ${rmin} to ${rmax}`);
+});
+
+// ---- 2D drawings ----
+
+// A part as the drawing code takes it: its mesh and its distance function.
+const drawn = (name, node, budget = 30000) => {
+  const c = compile(node);
+  const m = meshSDF(c.f, c.box, { budget });
+  return { name, ...c, positions: m.positions, indices: m.indices };
+};
+// Every point of a view's lines: [[u, v], ...].
+const linePoints = (view, name) => (view.parts.find((p) => p.name === name)?.lines ?? []).flatMap((L) => Array.from({ length: L.length / 2 }, (_, i) => [L[i * 2], L[i * 2 + 1]]));
+const extent = (pts) => [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+// How far a point is from the outline of a w x h rectangle about the origin.
+const offRect = ([x, y], w, h) => Math.max(Math.abs(x) - w / 2, Math.abs(y) - h / 2) > 0 ? Math.hypot(Math.max(Math.abs(x) - w / 2, 0), Math.max(Math.abs(y) - h / 2, 0)) : Math.min(w / 2 - Math.abs(x), h / 2 - Math.abs(y));
+
+test("drawing: views of a block with a hole are the right size, and hidden edges are left out", () => {
+  // 100 x 60 x 40 with a 20 mm hole down through it.
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const front = linePoints(viewOutline(block, "front"), "Block");
+  const size = (b) => [b[2] - b[0], b[3] - b[1]];
+  const [fw, fh] = size(extent(front));
+  assert.ok(Math.abs(fw - 100) < 0.1 && Math.abs(fh - 40) < 0.1, `front view is ${fw.toFixed(2)} x ${fh.toFixed(2)}`);
+  // From the front the hole is hidden: every line is on the 100 x 40 outline.
+  const stray = Math.max(...front.map((p) => offRect(p, 100, 40)));
+  assert.ok(stray < 0.1, `a front view line is ${stray.toFixed(2)} mm inside the outline`);
+  const [sw, sh] = size(extent(linePoints(viewOutline(block, "left"), "Block")));
+  assert.ok(Math.abs(sw - 60) < 0.1 && Math.abs(sh - 40) < 0.1, `side view is ${sw.toFixed(2)} x ${sh.toFixed(2)}`);
+  // From the top: the 100 x 60 outline and the hole's circle, nothing else.
+  const top = linePoints(viewOutline(block, "top"), "Block");
+  const [tw, th] = size(extent(top));
+  assert.ok(Math.abs(tw - 100) < 0.1 && Math.abs(th - 60) < 0.1, `top view is ${tw.toFixed(2)} x ${th.toFixed(2)}`);
+  const circle = top.filter((p) => Math.hypot(...p) < 15);
+  const radii = circle.map((p) => Math.hypot(...p));
+  assert.ok(circle.length > 30 && Math.min(...radii) > 9.9 && Math.max(...radii) < 10.15, `the hole is drawn from radius ${Math.min(...radii).toFixed(2)} to ${Math.max(...radii).toFixed(2)}`);
+  const turn = new Set(circle.map((p) => Math.floor((Math.atan2(p[1], p[0]) / Math.PI + 1) * 12)));
+  assert.equal(turn.size, 24, "the hole's circle goes all the way round");
+  assert.ok(Math.max(...top.filter((p) => Math.hypot(...p) >= 15).map((p) => offRect(p, 100, 60))) < 0.1);
+  // A round surface has no edges of its own: a sphere is one outline, even meshed coarsely.
+  const ball = linePoints(viewOutline([drawn("Ball", { t: "sphere", r: 30 }, 1500)], "front"), "Ball");
+  assert.ok(ball.length > 20 && ball.every((p) => Math.hypot(...p) > 29.5), `a sphere has lines inside its outline (${Math.min(...ball.map((p) => Math.hypot(...p))).toFixed(1)} mm from its centre)`);
+});
+
+test("drawing: a part behind another is hidden where it is covered", () => {
+  // A 40 mm cube in front; behind it a bar that reaches out on both sides,
+  // and a small block wholly covered.
+  const parts = [
+    drawn("Cube", { t: "box", s: [40, 40, 40] }),
+    drawn("Bar", { t: "move", v: [0, 60, 0], c: { t: "box", s: [100, 10, 20] } }),
+    drawn("Small", { t: "move", v: [5, 40, 3], c: { t: "box", s: [12, 12, 12] } }),
+  ];
+  const front = viewOutline(parts, "front");
+  const bar = linePoints(front, "Bar");
+  assert.ok(bar.length > 4 && Math.min(...bar.map((p) => Math.abs(p[0]))) > 19.9, `the bar shows behind the cube (${Math.min(...bar.map((p) => Math.abs(p[0]))).toFixed(2)} mm from the middle)`);
+  const b = extent(bar);
+  assert.ok(Math.abs(b[0] + 50) < 0.1 && Math.abs(b[2] - 50) < 0.1 && Math.abs(b[3] - 10) < 0.1, "the bar's ends are drawn in full");
+  assert.equal(linePoints(front, "Small").length, 0, "a covered part has no lines");
+  // From the back the bar is in front: it covers the small block, and the
+  // cube shows above and below it. From above nothing covers anything.
+  const back = viewOutline(parts, "back");
+  assert.equal(linePoints(back, "Small").length, 0);
+  const cube = linePoints(back, "Cube");
+  assert.ok(cube.length > 4 && Math.min(...cube.map((p) => Math.abs(p[1]))) > 9.9 && Math.abs(extent(cube)[3] - 20) < 0.1, "the cube shows above and below the bar");
+  const top = viewOutline(parts, "top");
+  assert.ok(Math.abs(extent(linePoints(top, "Small"))[2] - 11) < 0.1 && Math.abs(extent(linePoints(top, "Bar"))[3] - 65) < 0.1);
+});
+
+test("drawing: sections have the exact area, and sharp corners", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  // By default: across the longest axis (X) at its middle, through the hole.
+  const plane = sectionPlane(modelBounds(block));
+  assert.equal(plane.axis, "x");
+  assert.ok(Math.abs(plane.offset) < 0.05);
+  const cases = [
+    [block, plane, 60 * 40 - 20 * 40],
+    [block, { axis: "x", offset: 30 }, 60 * 40],
+    [block, { axis: "z", offset: 5 }, 100 * 60 - Math.PI * 100],
+    [block, { axis: "y", offset: 8 }, 100 * 40 - 2 * Math.sqrt(100 - 64) * 40],
+    [[drawn("Tube", { t: "shell", th: 2, c: { t: "cylinder", r: 25, h: 80 } })], { axis: "z", offset: 0 }, Math.PI * (625 - 529)],
+    [[drawn("Ball", { t: "sphere", r: 30 })], { axis: "y", offset: 18 }, Math.PI * (900 - 324)],
+  ];
+  for (const [parts, at, exact] of cases) {
+    const cut = sectionCut(parts, at);
+    const err = Math.abs(cut.area / exact - 1);
+    assert.ok(err < 0.01, `${parts[0].name} cut at ${at.axis} = ${at.offset}: ${cut.area.toFixed(1)} mm2, exact ${exact.toFixed(1)} (${(err * 100).toFixed(2)}% off)`);
+    // Far closer than 1% in fact: the outline comes from the function, not the mesh.
+    assert.ok(err < 0.0005, `${parts[0].name} cut is ${(err * 100).toFixed(3)}% off`);
+  }
+  // The section through the hole is two 20 x 40 rectangles, each four exact corners.
+  const loops = sectionCut(block, plane).parts[0].loops;
+  assert.deepEqual(loops.map((l) => l.length / 2), [4, 4]);
+  for (const l of loops) for (let i = 0; i < l.length; i += 2) assert.ok(Math.abs(Math.abs(Math.abs(l[i]) - 20) - 10) < 1e-6 && Math.abs(Math.abs(l[i + 1]) - 20) < 1e-6, `corner at ${l[i]}, ${l[i + 1]}`);
+  // What is seen beyond the cut: the far half of the hole's wall, between the cut faces.
+  const beyond = sectionView(block, plane).beyond.flatMap((p) => p.lines.flatMap((L) => Array.from(L)));
+  assert.ok(beyond.length > 0 && beyond.every((v, i) => (i % 2 ? Math.abs(v) < 20.1 : Math.abs(v) < 30.1)));
+  assert.throws(() => sectionPlane(modelBounds(block), { axis: "x", offset: 80 }), /misses the model, which runs from -50 to 50 mm along x/);
+  assert.throws(() => sectionPlane(modelBounds(block), { axis: "w" }), /"x", "y" or "z"/);
+});
+
+test("drawing: the sheet has three views, a section, the overall sizes and a title block", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const d = drawingSVG(block, { title: "Block & hole", date: "2026-01-31" });
+  assert.equal(d.scale, "1:1");
+  assert.ok(Math.abs(d.section.area - 1600) < 1);
+  const label = (kind) => d.svg.match(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`))?.[1];
+  assert.deepEqual([label("width"), label("depth"), label("height")], ["100", "60", "40"]);
+  for (const id of ["view-front", "view-top", "view-left", "section-A", "cutting-line", "dimensions", "title-block", "border"]) assert.ok(d.svg.includes(`id="${id}"`), `the sheet has no ${id}`);
+  assert.match(d.svg, /width="420mm" height="297mm" viewBox="0 0 420 297"/);
+  assert.match(d.svg, /<text id="title"[^>]*>Block &amp; hole<\/text>/);
+  assert.match(d.svg, /<text id="scale"[^>]*>1:1<\/text>/);
+  assert.match(d.svg, /<text id="date"[^>]*>2026-01-31<\/text>/);
+  assert.match(d.svg, />mm<\/text>/);
+  assert.match(d.svg, />First-angle projection<\/text>/);
+  assert.match(d.svg, /class="hatch"[^>]* d="M/);
+  // On paper at 1:1 the front view is 100 x 40 mm, and nothing is drawn off the sheet.
+  const front = d.svg.match(/<g id="view-front"[\s\S]*?<\/g>/)[0];
+  const xy = [...front.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  const b = extent(xy);
+  assert.ok(Math.abs(b[2] - b[0] - 100) < 0.05 && Math.abs(b[3] - b[1] - 40) < 0.05, `front view on paper is ${(b[2] - b[0]).toFixed(2)} x ${(b[3] - b[1]).toFixed(2)} mm`);
+  const all = [...d.svg.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  assert.ok(all.every(([x, y]) => x >= 20 && x <= 410 && y >= 10 && y <= 287), "a line leaves the sheet's border");
+  // The scale steps through the standard ones as the model grows, and the
+  // third angle puts the view from the right in.
+  const big = (k) => [drawn("Big", { t: "box", s: [100 * k, 60 * k, 40 * k] }, 4000)];
+  assert.deepEqual([0.2, 2, 4, 9, 30, 60].map((k) => drawingSVG(big(k)).scale), ["5:1", "1:2", "1:5", "1:10", "1:20", "1:50"]);
+  assert.match(drawingSVG(big(1), { projection: "third" }).svg, /id="view-right"[\s\S]*Third-angle projection/);
+});
+
+test("drawing: Claude's rotor head draws, with its mast, hub and gearbox cut by the section", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
+  const parts = r.parts.map((p) => {
+    const m = meshPart(p.node, { budget: 3000 });
+    return { name: p.name, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 } });
+  assert.equal(d.scale, "1:50");
+  const cut = sectionCut(parts, { axis: "y", offset: 0 });
+  const names = cut.parts.map((p) => p.name);
+  for (const n of ["Gearbox top", "Rotor mast", "Hub", "Blade 1", "Blade 3"]) assert.ok(names.includes(n), `${n} is not cut`);
+  assert.ok(!names.includes("Blade 2") && !names.includes("Blade 4"), "a blade that lies along Y, off the plane, is cut");
+  assert.ok((d.svg.match(/class="cut"/g) ?? []).length === names.length);
 });
 
 test("the app's Claude is allowed every tool the server offers", () => {
