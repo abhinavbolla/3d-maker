@@ -12,6 +12,7 @@ const FILTERS = {
   stl: { name: "STL mesh", extensions: ["stl"] },
   "3mf": { name: "3MF model", extensions: ["3mf"] },
   png: { name: "PNG picture", extensions: ["png"] },
+  svg: { name: "SVG drawing", extensions: ["svg"] },
 };
 
 // Returns the saved path (or file name in a browser), or null if cancelled.

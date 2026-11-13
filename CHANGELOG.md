@@ -37,5 +37,11 @@ Notable changes to 3D Maker. The format follows
 - While you turn the view, a ring marks the centre it turns around, and the origin's axes and
   its three planes show. The X and Y axes are drawn on the ground grid.
 - Export > Picture saves the view as a studio shot (PNG).
+- 2D drawings. Export > Drawing saves an A3 sheet as SVG: the front, top and side views in
+  first-angle projection with hidden edges left out, a section A–A with its cut faces hatched
+  and its cutting line marked on a view, the overall width, depth and height in millimetres, and
+  a title block with the model's title, a standard scale and the date. The section is cut from
+  the exact shapes, not from the mesh. Claude can export one with the new `export_drawing` tool
+  and say where the section goes.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.

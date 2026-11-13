@@ -59,6 +59,7 @@ Everything in [src/kernel](../src/kernel) is our own code with no dependencies.
 | [hull.js](../src/kernel/hull.js) | 3D convex hulls, built one point at a time. |
 | [font.js](../src/kernel/font.js) | A single-stroke font in the style of technical drawing lettering. |
 | [threemf.js](../src/kernel/threemf.js) | 3MF export, including its own zip writer. |
+| [drawing.js](../src/kernel/drawing.js) | 2D drawings: line views with hidden edges removed, sections, overall dimensions, and the drawing sheet as SVG. |
 | [worker.js](../src/kernel/worker.js) | The worker that runs scripts and meshes parts. |
 
 More on the mesher and the fit checks:
@@ -74,6 +75,7 @@ More on the mesher and the fit checks:
 - **Fit checks** need no meshes. A box of space is settled as soon as the distances at its centre
   show it is wholly inside both parts or outside one.
 - **Export** meshes every visible part at the same detail on all cores.
+- **Drawings** come from two sources. A view is drawn from the export meshes: sharp edges and outlines are kept, and the distance function decides which mesh edges are real creases (a coarse mesh of a round surface has edges too). Hidden edges go by depth: every triangle is drawn into a depth picture 3200 pixels across, and each edge is tested against it just inside the face it borders. A section is not drawn from the mesh at all: each part's distance function is sampled on the cutting plane, coarse to fine, and contoured there, with corners put back where two sides meet. So a cut face is exact, where other kernels have to intersect surfaces. The three views and the section each run on their own worker.
 
 ## Windows and the bridge
 

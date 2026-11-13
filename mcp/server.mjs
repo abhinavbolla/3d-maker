@@ -189,7 +189,8 @@ async function save(r, path, ext) {
   if (!extname(out)) out += `.${ext}`;
   await mkdir(dirname(out), { recursive: true });
   await writeFile(out, Buffer.from(r.base64, "base64"));
-  return json({ path: out, triangles: r.triangles, bytes: r.bytes });
+  const { name, base64, ...facts } = r;
+  return json({ path: out, ...facts });
 }
 
 tool(
@@ -207,6 +208,17 @@ tool(
   "Export all visible parts as a 3MF file: one named, coloured object per part, for slicers and other CAD tools. path defaults to ~/Downloads/<title>.3mf. Only do this when the user asks.",
   { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
   async ({ path }) => save(await call("export_3mf"), path, "3mf"),
+);
+
+tool(
+  "export_drawing",
+  "Export a 2D drawing of all visible parts as an SVG: an A3 sheet with the front, top and side views (first-angle projection, hidden edges left out), a section A-A with its cut faces hatched, the overall width, depth and height in mm, and a title block with the model's title, the scale and the date. The section plane stands square across axis at offset mm along it; by default it cuts across the model's longest axis at its middle. Returns the path, the scale chosen (such as 1:5) and which parts the section cuts. Parts are drawn as the script places them, not posed by their motion. path defaults to ~/Downloads/<title>.svg. Only do this when the user asks.",
+  {
+    path: z.string().optional().describe("Absolute path, or relative to the home folder."),
+    axis: z.enum(["x", "y", "z"]).optional().describe("The axis the section plane stands square across; default the model's longest."),
+    offset: z.number().optional().describe("Where along that axis the plane cuts, in mm; default the middle of the model."),
+  },
+  async ({ path, axis, offset }) => save(await call("export_drawing", { axis, offset }), path, "svg"),
 );
 
 await listen();

@@ -325,7 +325,7 @@ const actions = {
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
   // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
-  // or "png" (a studio picture of the view).
+  // "svg" (a drawing sheet) or "png" (a studio picture of the view).
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
     if (kind === "png") {
@@ -333,11 +333,11 @@ const actions = {
       const where = await saveBytes(Uint8Array.from(atob(png), (c) => c.charCodeAt(0)), `${fileName()}.png`, "png");
       return say(where ? `Saved ${where.split("/").pop()}` : "");
     }
-    say(kind === "solid" ? "Joining the parts into one solid" : "Exporting", 0);
+    say(kind === "solid" ? "Joining the parts into one solid" : kind === "svg" ? "Making the drawing" : "Exporting", 0);
     try {
       const { parts, title } = store.state.result;
-      const r = kind === "3mf" ? await kernel.export3MF(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
-      const ext = kind === "3mf" ? "3mf" : "stl";
+      const r = kind === "svg" ? await kernel.exportDrawing(parts, title) : kind === "3mf" ? await kernel.export3MF(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
+      const ext = kind === "svg" || kind === "3mf" ? kind : "stl";
       const where = await saveBytes(r.bytes, `${fileName()}.${ext}`, ext);
       say(where ? `Exported ${where.split("/").pop()}` : "");
     } catch (err) {
@@ -347,7 +347,7 @@ const actions = {
 };
 document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("click", () => actions[b.dataset.action]().catch((err) => say(err.message, 8000))));
 
-// Export menu: a picture, STL, STL as one solid, or 3MF.
+// Export menu: a picture, STL, STL as one solid, 3MF, or a drawing.
 const exportMenu = $("export-menu");
 const showExportMenu = (open) => {
   exportMenu.hidden = !open;

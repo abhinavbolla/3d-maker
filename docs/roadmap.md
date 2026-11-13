@@ -12,7 +12,7 @@ This page says where it stands against that goal and what comes next. The order 
 | Mechanisms | Motion, joints checked over the whole loop, collision checks. |
 | Looking at the model | Studio view with shadows, a reflecting floor and materials. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
 | Pictures | PNG studio shots of any view. |
-| 2D drawings | None. |
+| 2D drawings | One A3 sheet as SVG: front, top and side views with hidden edges left out, a hatched section, the overall sizes and a title block. |
 | Files for other apps | Meshes only: STL and 3MF. |
 | Exact surfaces | None. Surfaces are fine meshes of distance fields. |
 | Direct editing | Sliders and prompts. No dragging, measuring or sectioning. |
@@ -34,17 +34,21 @@ A studio shot of a mechanism from a professional tool gets its look from four th
 
 A model is not finished for a workshop until it has drawings. Distance fields make some of this easier than it is for other kernels: a section through a part is an exact outline, with no surface-to-surface intersection to compute.
 
-1. **Views.** Front, top, side and isometric views as clean line drawings, with hidden edges dashed or left out.
-2. **Sections.** Cut the model with a plane and hatch the cut faces.
-3. **Dimensions.** Overall sizes, hole positions and diameters, taken from the model and from the values in its script.
-4. **Sheets.** A drawing sheet with a title block, scale and several views, exported as PDF, SVG and DXF.
-5. **Drawings by prompt.** "Make a drawing of the bracket with a section through the holes."
+Done so far: an A3 sheet as SVG with the front, top and side views (sharp edges and outlines, hidden edges left out), one section cut straight from the distance functions with its faces hatched per part, the overall width, depth and height, and a title block with a standard scale. Claude can export it and say where the section goes.
+
+What is left:
+
+1. **Views.** An isometric view. Hidden edges dashed, as a choice. The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Centre lines of holes and turned parts. Views drawn from the distance functions instead of the mesh, so curves are exact here too.
+2. **Sections.** Planes at any angle, stepped and half sections, several sections on a sheet, and detail views.
+3. **Dimensions.** Hole positions and diameters, radii and angles, taken from the model and from the values in its script.
+4. **Sheets.** PDF and DXF. Other sheet sizes, several sheets, a parts list with balloons, and a choice of third-angle projection (the kernel can already lay a sheet out that way).
+5. **Drawings by prompt.** "Make a drawing of the bracket with a section through the holes": Claude choosing the views, the sections and what to dimension, and looking at the sheet it made.
 
 ## Files for other apps
 
 1. **glTF.** Parts, colours, materials and motion in one file, for Blender, game engines and the web.
 2. **OBJ and PLY.** The simple mesh formats that everything reads.
-3. **SVG and DXF** of outlines and sections, for laser cutters and 2D CAD.
+3. **SVG and DXF** of single outlines and sections at 1:1, for laser cutters and 2D CAD. (The drawing sheet is already an SVG.)
 4. **STEP.** This is the hard one, and the main thing that separates 3D Maker from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. The plan is to write exact surfaces straight from the script where the shape allows it, because the script already says "this is an extrusion of that outline" or "this is a cylinder with a hole". Prisms, turned parts, plates with holes and their cuts and joins come first. Shapes with no exact form (smooth blends, lattices, twisted bodies) would go out as fitted surfaces or fine meshes inside the STEP file. This will take a long time, and it is the largest open question on this page.
 5. **Import.** Open an STL or a STEP file as a reference to build around.
 

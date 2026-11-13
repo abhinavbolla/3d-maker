@@ -49,7 +49,8 @@ export function createCommands({ store, viewport, kernel }) {
   const exported = (r) => {
     let bin = "";
     for (let i = 0; i < r.bytes.length; i += 0x8000) bin += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000));
-    return { name: store.state.result?.title || "model", base64: btoa(bin), triangles: r.triangles, bytes: r.bytes.length };
+    const { bytes, ...facts } = r;
+    return { name: store.state.result?.title || "model", base64: btoa(bin), ...facts, bytes: bytes.length };
   };
   const partsByName = () => new Map((store.state.result?.parts ?? []).map((p) => [p.name, p]));
   // Pictures for Claude show the fine detail: wait for the background pass
@@ -155,5 +156,6 @@ export function createCommands({ store, viewport, kernel }) {
     screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async ({ solid = false } = {}) => exported(await kernel.exportSTL(store.state.result?.parts ?? [], { solid: Boolean(solid) })),
     export_3mf: async () => exported(await kernel.export3MF(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
+    export_drawing: async ({ axis, offset } = {}) => exported(await kernel.exportDrawing(store.state.result?.parts ?? [], store.state.result?.title ?? "", { section: { axis, offset } })),
   };
 }
