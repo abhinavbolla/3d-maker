@@ -149,7 +149,7 @@ export const GL_COUNTER = `(() => {
     wrap("bindFramebuffer", function (t, fb) { if (t !== this.READ_FRAMEBUFFER) drawFb = fb; });
     wrap("bindRenderbuffer", (t, r) => (rb = r));
     wrap("renderbufferStorageMultisample", (t, s) => rbSamples.set(rb, s));
-    wrap("framebufferRenderbuffer", (t, att, rt, r) => { if (t !== 0x8ca8) fbSamples.set(drawFb, rbSamples.get(r) ?? 1); });
+    wrap("framebufferRenderbuffer", function (t, att, rt, r) { if (t !== this.READ_FRAMEBUFFER) fbSamples.set(drawFb, rbSamples.get(r) ?? 1); });
     wrap("viewport", (x, y, w, h) => ((vw = w), (vh = h)));
     wrap("clear", function (bits) {
       if (!(bits & (this.COLOR_BUFFER_BIT | this.DEPTH_BUFFER_BIT))) return;
@@ -170,17 +170,17 @@ export const GL_COUNTER = `(() => {
 })();`;
 
 // A preload script that takes animation frames off the screen's clock: they
-// run only when window.__frames.step(n) runs n of them, 1/60 s apart. Put it
-// before GL_COUNTER. Frames are slow in software GL, so this is how a test
-// sees what a second of a 60 Hz screen would draw.
+// run only when window.__frames.step(n, hz) runs n of them, 1/hz s apart. Put
+// it before GL_COUNTER. Frames are slow in software GL, so this is how a test
+// sees what a second of a 60 or 120 Hz screen would draw.
 export const STEPPED_FRAMES = `(() => {
   let queue = [], now = performance.now(), id = 0;
   window.requestAnimationFrame = (cb) => (queue.push({ cb, id: ++id }), id);
   window.cancelAnimationFrame = (n) => (queue = queue.filter((q) => q.id !== n));
   window.__frames = {
-    step(n = 1) {
+    step(n = 1, hz = 60) {
       for (let i = 0; i < n; i++) {
-        now += 1000 / 60;
+        now += 1000 / hz;
         const run = queue;
         queue = [];
         for (const q of run) q.cb(now);
