@@ -38,7 +38,7 @@ Done so far: an A3 sheet as SVG to ISO 5457 (frame, grid reference border, centr
 
 What is left:
 
-1. **Views.** Hidden edges dashed, as a choice. The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Centre lines of holes and turned parts. Views drawn from the distance functions instead of the mesh, so curves are exact here too.
+1. **Views.** Detail views at a larger scale, for crowded parts of an assembly (at 1:50 the rotor head's hub fills in, however thin its lines). Hidden edges dashed, as a choice. The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Centre lines of holes and turned parts. Views drawn from the distance functions instead of the mesh, so curves are exact here too.
 2. **Sections.** Planes at any angle, stepped and half sections, several sections on a sheet, and detail views.
 3. **Dimensions.** Hole positions and diameters, radii and angles, taken from the model and from the values in its script.
 4. **Sheets.** PDF and DXF. Other sheet sizes, several sheets, and a parts list with balloons.

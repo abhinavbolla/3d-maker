@@ -45,7 +45,7 @@ Every visible part is meshed at the same detail on all cores, so a 60-part rotor
 
 The sheet shows the model from the front, from above and from the side, with hidden edges left out, and where there is room an isometric view at the top right. Next to the views is section A–A: the model cut by a plane, with the cut faces hatched, each part its own way, and what lies beyond the cut drawn behind them. The cutting line and the way the section looks are marked on one of the views.
 
-The views are laid out in first-angle projection (ISO: the top view under the front view, the view from the left on its right) or third-angle projection (the top view above it, the view from the right on its right). Which one follows your system's region: third angle in the US and Canada, first angle elsewhere. Say "third angle" or "first angle" to change it.
+The views are laid out in first-angle projection (ISO: the top view under the front view, the view from the left on its right) or third-angle projection (the top view above it, the view from the right on its right). Which one follows the region your system's language names: third angle in the US, Canada and Japan, first angle elsewhere, and first angle (ISO's) when no region is named. Say "third angle" or "first angle" to change it.
 
 The overall width, depth and height are dimensioned in millimetres. The scale is the largest standard one that fits the sheet: 1:1, 1:2, 1:5, 1:10, 1:20, 1:50 and so on, or 2:1, 5:1 and up for small parts. Outlines are 0.5 mm wide and dimensions and hatching 0.25 mm, or thinner where a crowded assembly would run together at that weight.
 
@@ -53,15 +53,23 @@ The sheet follows ISO 5457 (frame, grid reference border, centring marks), and i
 
 | Field | Where it comes from |
 | --- | --- |
-| Title | The model's title. A title too long for its cell continues in the supplementary title. |
-| Identification number | Made up once for the model (such as 3DM-4K7Q2X) and saved with it, until you give your own of up to 16 characters. |
+| Title | The model's title. A title too long for its cell is split near its 30th character, and the rest goes in the supplementary title. |
+| Identification number | Made up once for the model (such as 3DM-4K7Q2X) and saved with it, until you give your own. |
 | Date of issue | Today. |
 | Document type | Part drawing, or Assembly drawing for more than one part. |
 | Scale, projection, units, sheet | From the sheet itself. |
 | Created by, legal owner | Blank until you say. The app does not know your name or employer and does not guess. |
-| Approved by, revision, general tolerances | Blank until you say. The tolerances note only appears when you give one. |
+| Approved by | Blank until you say, and blank again once the model changes: an approval is for the shape that was approved. |
+| Revision, general tolerances | Blank until you say; the app never changes a revision by itself. The tolerances note only appears when you give one. |
 
-To fill in or change any of it, say so in the prompt box, for example: "export a drawing, drawn by Ana Ruiz, owner Example Works Ltd, drawing number BRK-0042, revision A, tolerances ISO 2768-m". The app remembers what you said. Your name, the owner and the projection are kept for you in this app and are not written into model files. The number, revision, supplementary title, approver and tolerances belong to the model and are saved with it. Ask for a field to be left empty to clear it. After each drawing the app says in one line what went on the sheet and what is still blank.
+To fill in or change any of it, tell Claude, for example: "export a drawing, drawn by Ana Ruiz, owner Example Works Ltd, drawing number BRK-0042, revision A, tolerances ISO 2768-m". Each field holds what ISO 7200 recommends: 20 characters for created by and approved by, 16 for the number, 2 for the revision, 50 for the supplementary title; 40 for the legal owner and 30 for the tolerances, which it leaves open. A longer value is refused with a message saying so, never cut short on the sheet. Ask for a field to be left empty to clear it; an empty number gets a new one made up.
+
+The app remembers what you said, once the drawing is made:
+
+- **Kept for you, in this app only:** your name (created by), the legal owner, and first or third angle. They are never written into a model file.
+- **Kept with the model, and saved in its file:** the number, revision, supplementary title, general tolerances and the approver's name. A model file you share carries these, the approver's name included. New starts a model without them; Open brings in the file's own.
+
+After each drawing the app says in one line what went on the sheet: what you said, what was remembered, what is blank, and how to change it.
 
 From the Export menu the section cuts across the model's longest side, at its middle. Ask Claude for a different one: "export a drawing with the section across z, 40 mm up".
 
