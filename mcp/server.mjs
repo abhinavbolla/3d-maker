@@ -212,19 +212,19 @@ tool(
 
 tool(
   "export_drawing",
-  "Export a 2D drawing of all visible parts as an SVG: an A3 sheet (ISO 5457) with the front, top and side views (hidden edges left out), an isometric view where there is room, a section A-A with its cut faces hatched, the overall width, depth and height in mm, and an ISO 7200 title block. The title is the model's title() (change that to change it). The app fills in the date of issue, the scale, the document type and a drawing number made once per model. The fields below are what the user tells you; pass only what they said in this conversation, never a name or company you guessed, and leave the rest out: the app remembers each value (who draws, the owner and the projection for the user; the rest for this model) and uses it on later drawings. \"\" clears a remembered value. Fields not given stay blank on the sheet. The section plane stands square across axis at offset mm along it; by default it cuts across the model's longest axis at its middle. Parts are drawn as the script places them, not posed by their motion. path defaults to ~/Downloads/<title>.svg. Only do this when the user asks. Returns the path, the scale, the section, sheet (every title block field as filled) and line: one sentence on what went on the sheet and how to change it. Reply with the path and that line, nothing more.",
+  "Export a 2D drawing of all visible parts as an SVG: an A3 sheet (ISO 5457) with the front, top and side views (hidden edges left out), an isometric view where there is room, a section A-A with its cut faces hatched, the overall width, depth and height in mm, and an ISO 7200 title block. The title is the model's title() (change that to change it). The app fills in the date of issue, the scale, the document type and a drawing number made once per model. The fields below are what the user tells you: pass only what they said in this conversation, never a name or company you guessed, and leave the rest out. The app remembers each value it is given (who draws, the owner and the projection for this user; the number, revision, supplementary title, tolerances and approval with the model, saved in its file) and uses it on later drawings. \"\" forgets a remembered value; for number, the app then makes a new one. An approval holds only while the model is unchanged: after any change to it, approved_by is cleared and has to be given again. A value longer than its limit is refused with a message; nothing is cut short. The section plane stands square across axis at offset mm along it; by default it cuts across the model's longest axis at its middle. Parts are drawn as the script places them, not posed by their motion. path defaults to ~/Downloads/<title>.svg. Only do this when the user asks. Returns the path, the scale, isometric_view (whether there was room for it), the section, sheet (each title block field: names that were remembered rather than given now show only as filled in) and line: one sentence on what went on the sheet and how to change it. Reply with the path and that line, nothing more.",
   {
     path: z.string().optional().describe("Absolute path, or relative to the home folder."),
     axis: z.enum(["x", "y", "z"]).optional().describe("The axis the section plane stands square across; default the model's longest."),
     offset: z.number().optional().describe("Where along that axis the plane cuts, in mm; default the middle of the model."),
-    drawn_by: z.string().optional().describe('Created by: the person who drew it, as the user wrote it ("drawn by …", "my name is …").'),
-    owner: z.string().optional().describe("Legal owner: the company or person who owns the drawing."),
-    approved_by: z.string().optional().describe("Approved by: only if the user says who approved it."),
-    number: z.string().max(16).optional().describe("Identification (drawing) number, at most 16 characters. Replaces the one the app made."),
-    revision: z.string().max(4).optional().describe("Revision index, such as A, B, C (I and O are not used)."),
-    subtitle: z.string().optional().describe("Supplementary title: a second line under the title."),
-    tolerances: z.string().optional().describe('General tolerances note, such as "ISO 2768-m". Shown only when given.'),
-    projection: z.enum(["first", "third", ""]).optional().describe('"first" (ISO, Europe and most of the world) or "third" angle (US, Canada). Default from the user\'s region.'),
+    drawn_by: z.string().optional().describe('Created by, at most 20 characters: the person who drew it, as the user wrote it ("drawn by …", "my name is …").'),
+    owner: z.string().optional().describe("Legal owner, at most 40 characters: the company or person who owns the drawing."),
+    approved_by: z.string().optional().describe("Approved by, at most 20 characters: only if the user says who approved it."),
+    number: z.string().optional().describe('Identification (drawing) number, at most 16 characters. Replaces the one the app made; "" goes back to a new one made by the app.'),
+    revision: z.string().optional().describe("Revision index, at most 2 characters: A, B, C ... (I and O are not used)."),
+    subtitle: z.string().optional().describe("Supplementary title, at most 50 characters: a line under the title."),
+    tolerances: z.string().optional().describe('General tolerances note, at most 30 characters, such as "ISO 2768-m". Shown only when given.'),
+    projection: z.enum(["first", "third", ""]).optional().describe('"first" (ISO, Europe and most of the world) or "third" angle (US, Canada, Japan). Default: from the region the user\'s system names, else first.'),
   },
   async ({ path, ...args }) => save(await call("export_drawing", args), path, "svg"),
 );

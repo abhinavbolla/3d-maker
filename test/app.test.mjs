@@ -139,7 +139,6 @@ try {
       title: doc.querySelector("#title-block #scale")?.textContent,
       side: doc.querySelector("#view-left") ? "left" : "right",
       fields: Object.fromEntries(["created-by", "approved-by", "owner", "number", "revision", "date", "document-type", "title", "projection"].map((id) => [id, doc.querySelector("#title-block #" + id)?.textContent ?? ""])),
-      region: new Intl.Locale(navigator.language).maximize().region,
       menu: document.querySelector('#export-menu [data-export="svg"] span')?.textContent,
     };
   })()`);
@@ -154,41 +153,121 @@ try {
   check(/misses the model/.test((await call("export_drawing", { axis: "z", offset: 60 })).error ?? ""), "a section that misses the model is refused");
 
   // The title block with nothing said: honest and complete. A number is
-  // made up once for the model and kept; nobody's name is filled in; the
-  // projection follows the system's region; the date of issue is today.
+  // made up once for the document; nobody's name is filled in; the date of
+  // issue is today.
   const f0 = sheet.fields;
   const today = await w('(() => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); })()');
-  const regional = sheet.region === "US" || sheet.region === "CA" ? "third" : "first";
   check(/^3DM-[0-9A-HJKMNP-TV-Z]{6}$/.test(f0.number) && f0.date === today && f0["document-type"] === "Assembly drawing", `the title block has a made-up number, today's date and the document type (${JSON.stringify(f0)})`);
   check(!f0["created-by"] && !f0["approved-by"] && !f0.owner && !f0.revision, `and no name, owner, approver or revision that nobody gave (${JSON.stringify(f0)})`);
-  check(sheet.side === (regional === "third" ? "right" : "left") && f0.projection.toLowerCase() === `${regional} angle` && /from your region/.test(dr.result?.sheet.projection), `the projection follows the region, ${sheet.region} (${f0.projection}, side view from the ${sheet.side})`);
-  check(/Created by, Legal owner and Approved by are left blank: say "drawn by …, owner …, approved by …"/.test(dr.result?.line ?? ""), `the reply line says what is blank and how to fill it (${dr.result?.line})`);
+  check(/Created by, legal owner, approved by and revision left blank\. To fill in or change a field, tell Claude, e\.g\. "drawn by …, owner …"\.$/.test(dr.result?.line ?? ""), `the line says what is blank and how to fill it (${dr.result?.line})`);
+  check(dr.result?.isometric_view === true, "and says the isometric view was drawn");
   check(across.result?.sheet.identification_number === f0.number, "the number stays the same on the next drawing");
 
+  // First or third angle from the region the system's language names; with
+  // none named, ISO's first angle.
+  const angle = async (lang) => {
+    await w(`Object.defineProperty(navigator, "language", { configurable: true, get: () => ${JSON.stringify(lang)} }); true`);
+    const r = await call("export_drawing");
+    return `${(await readSheet(r)).side} ${r.result?.sheet.projection}`;
+  };
+  const angles = { "en-US": await angle("en-US"), "en-GB": await angle("en-GB"), "ja-JP": await angle("ja-JP"), "fr-CA": await angle("fr-CA"), en: await angle("en"), de: await angle("de") };
+  check(angles["en-US"] === "right third angle (from your region, US)" && angles["ja-JP"].startsWith("right third") && angles["fr-CA"].startsWith("right third") && angles["en-GB"] === "left first angle (from your region, GB)", `third angle in the US, Canada and Japan, first in Britain (${JSON.stringify(angles)})`);
+  check(angles.en === "left first angle (ISO's default: your system names no region)" && angles.de.startsWith("left first angle (ISO"), `a language with no region gets first angle, not the US's third (${angles.en})`);
+
   // Said in a prompt: Claude passes it on, the sheet shows it, and the app
-  // remembers it, names for the user and numbers for the model.
+  // remembers it, names for the user and the rest for the document.
   const said = await call("export_drawing", { drawn_by: "Ana Ruiz", owner: "Example Works Ltd", number: "BRK-0042", revision: "A", projection: "third", tolerances: "ISO 2768-m" });
   const named = await readSheet(said);
   check(named.fields["created-by"] === "Ana Ruiz" && named.fields.owner === "Example Works Ltd" && named.fields.number === "BRK-0042" && named.fields.revision === "A" && named.side === "right" && !named.fields["approved-by"], `what the user said goes on the sheet (${JSON.stringify(named.fields)})`);
-  await call("edit_model", { old_text: "box(40, 40, 10)", new_text: "box(44, 40, 10)" });
-  await w('document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }))');
-  await new Promise((r) => setTimeout(r, 1500));
-  const later = await call("export_drawing");
-  const kept = await readSheet(later);
-  check(kept.fields["created-by"] === "Ana Ruiz" && kept.fields.number === "BRK-0042" && kept.fields.revision === "A" && kept.side === "right" && later.result?.sheet.general_tolerances === "ISO 2768-m", `and is remembered on the next drawing, through an edit and an undo (${JSON.stringify(kept.fields)})`);
+  check(/Created by, legal owner, revision and general tolerances as you said\. Approved by left blank\./.test(said.result?.line ?? ""), `and the line says so (${said.result?.line})`);
+  const again = await call("export_drawing");
+  const kept = await readSheet(again);
+  check(kept.fields["created-by"] === "Ana Ruiz" && kept.fields.owner === "Example Works Ltd" && kept.fields.number === "BRK-0042", "the next drawing has them too");
+  check(!JSON.stringify(again.result?.sheet).includes("Ana Ruiz") && !again.result?.line.includes("Ana Ruiz") && again.result?.sheet.created_by === "(filled in, as remembered)" && /Created by, legal owner, revision and general tolerances as remembered\./.test(again.result?.line), `a remembered name is on the sheet but not sent back to Claude (${again.result?.line})`);
   const stored = await w('({ user: localStorage.getItem("3d-maker:drawing"), doc: localStorage.getItem("3d-maker:autosave") })');
-  check(/Ana Ruiz/.test(stored.user) && /BRK-0042/.test(stored.doc) && !/Ana Ruiz|Example Works/.test(stored.doc), "names are kept for the user, not written into the model, which keeps its number");
-  check(/at most 16 characters/.test((await call("export_drawing", { number: "BRK-0042-0001-0002" })).error ?? ""), "a drawing number over 16 characters is refused");
-  const cleared = await readSheet(await call("export_drawing", { drawn_by: "", projection: "" }));
-  check(!cleared.fields["created-by"] && cleared.side === (regional === "third" ? "right" : "left"), `"" clears a remembered value (${JSON.stringify(cleared.fields)})`);
-  await call("export_drawing", { owner: "", number: "", revision: "", tolerances: "" });
+  check(/Ana Ruiz/.test(stored.user) && /BRK-0042/.test(stored.doc) && !/Ana Ruiz|Example Works/.test(stored.doc), "names are kept for the user, not in the model, which keeps its number");
+
+  // Limits (ISO 7200's lengths): a value at the limit fits whole, one over is refused.
+  const atLimit = await call("export_drawing", { number: "WWWWWWWWWWWWWWWW", revision: "WW", drawn_by: "W".repeat(20) });
+  const full = await readSheet(atLimit);
+  check(full.fields.number === "W".repeat(16) && full.fields.revision === "WW" && full.fields["created-by"] === "W".repeat(20), `values at their limits are on the sheet whole (${JSON.stringify(full.fields)})`);
+  const over = await Promise.all([{ number: "W".repeat(17) }, { revision: "ABC" }, { drawn_by: "W".repeat(21) }, { owner: "W".repeat(41) }].map((a) => call("export_drawing", a)));
+  check(/at most 16 characters/.test(over[0].error) && /Revision holds at most 2/.test(over[1].error) && /Created by holds at most 20/.test(over[2].error) && /Legal owner holds at most 40/.test(over[3].error), `longer ones are refused, saying the limit (${over.map((o) => o.error).join(" | ")})`);
+  await call("export_drawing", { number: "BRK-0042", revision: "A", drawn_by: "Ana Ruiz" });
+
+  // A failed export remembers nothing it was told.
+  const failed = await call("export_drawing", { drawn_by: "Zed Quist", number: "FAIL-1", axis: "z", offset: 9999 });
+  const after = await readSheet(await call("export_drawing"));
+  check(/misses the model/.test(failed.error ?? "") && after.fields["created-by"] === "Ana Ruiz" && after.fields.number === "BRK-0042", `a failed export remembers nothing (${JSON.stringify(after.fields)})`);
+
+  // An approval holds for the shape it was given for.
+  const approved = await readSheet(await call("export_drawing", { approved_by: "J. Smith" }));
+  const stillApproved = await call("export_drawing");
+  await call("edit_model", { old_text: "box(40, 40, 10)", new_text: "box(44, 40, 10)" });
+  const changed = await call("export_drawing");
+  const changedSheet = await readSheet(changed);
+  check(approved.fields["approved-by"] === "J. Smith" && (await readSheet(stillApproved)).fields["approved-by"] === "J. Smith", "an approval is on the sheet while the model is unchanged");
+  check(!changedSheet.fields["approved-by"] && changed.result?.approval_cleared && /The approval was cleared: the model has changed since it was given\./.test(changed.result.line) && changedSheet.fields.revision === "A", `and cleared once it changes, leaving the revision (${changed.result?.line})`);
+
+  // The number belongs to the document: kept through Claude rewriting the
+  // script, a new one for New, and each document's own back through undo.
+  await call("set_model", { script: 'part("Base", box(40, 40, 10), { color: "#4f7cac" });\npart("Peg", cylinder(6, 20).at(0, 0, 12));' });
+  const rewritten = (await call("export_drawing")).result?.sheet.identification_number;
+  const undo = () => w('document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); new Promise((r) => setTimeout(r, 1500))');
+  const redo = () => w('document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, shiftKey: true, bubbles: true })); new Promise((r) => setTimeout(r, 1500))');
+  const numberNow = async () => (await call("export_drawing")).result?.sheet.identification_number;
+  await w('document.querySelector(\'[data-action="new"]\').click(); new Promise((r) => setTimeout(r, 1000))');
+  await call("set_model", { script: 'part("Other", box(30, 30, 30));' });
+  const fresh = await numberNow();
+  await undo();
+  await undo();
+  const back = await numberNow();
+  check(rewritten === "BRK-0042" && /^3DM-/.test(fresh) && back === "BRK-0042", `the number stays through set_model, New starts afresh, and undo brings the old number back (${rewritten}, ${fresh}, ${back})`);
+  // Open a file with a number of its own, then undo and redo across it.
+  const file = JSON.stringify({ version: 2, script: 'part("Opened", box(25, 25, 25));', values: {}, drawing: { number: "FILE-0001", revision: "B" } });
+  await w(`(() => {
+    const click = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function () {
+      if (this.type !== "file") return click.call(this);
+      HTMLInputElement.prototype.click = click;
+      const dt = new DataTransfer();
+      dt.items.add(new File([${JSON.stringify(file)}], "other.json"));
+      this.files = dt.files;
+      this.dispatchEvent(new Event("change"));
+    };
+    document.querySelector('[data-action="open"]').click();
+    return new Promise((r) => setTimeout(r, 1500));
+  })()`);
+  const opened = await numberNow();
+  await undo();
+  const before = await numberNow();
+  await redo();
+  const reopened = await numberNow();
+  check(opened === "FILE-0001" && before === "BRK-0042" && reopened === "FILE-0001", `an opened file keeps its own number, and undo gives the previous model its own (${opened}, ${before}, ${reopened})`);
+
+  // Making a number does not upset a build or a fine pass under way.
+  await w('document.querySelector(\'[data-action="new"]\').click(); new Promise((r) => setTimeout(r, 1000))');
+  const racePlate = 'part("Plate", box(400, 400, 10));\nfor (let i = 0; i < 31; i++) part("Bolt " + i, cylinder(3, 8).at(-150 + i * 10, 0, 9));';
+  const raceDetail = async () => (await w("window.__3dmaker.summary()")).parts.find((p) => p.name === "Plate")?.detail_mm;
+  await call("set_model", { script: racePlate });
+  const raceCoarse = await raceDetail();
+  await call("export_drawing");
+  await call("screenshot", { view: "top", width: 300, height: 300 });
+  const raceFine = await raceDetail();
+  const inFlight = await w(`Promise.all([window.__3dmaker.call("set_model", { script: ${JSON.stringify(racePlate.replace("400, 400", "410, 400"))} }), window.__3dmaker.call("export_drawing", {})]).then(([, d]) => d.sheet.identification_number)`);
+  const settled = await numberNow();
+  check(raceFine < raceCoarse, `the fine pass still lands after an export makes a number (${raceCoarse} mm, then ${raceFine} mm)`);
+  check(inFlight === settled, `a change on its way does not lose the number made meanwhile (${inFlight}, then ${settled})`);
+
+  await call("export_drawing", { drawn_by: "", owner: "", projection: "" });
   // Export > Drawing, without Claude, says the same in the status line.
   const status = await w(`(async () => {
+    document.getElementById("status").textContent = "";
     document.querySelector('#export-menu [data-export="svg"]').click();
     for (let i = 0; i < 300 && !/Exported/.test(document.getElementById("status").textContent); i++) await new Promise((r) => setTimeout(r, 100));
     return document.getElementById("status").textContent;
   })()`);
-  check(/^Exported \S+\.svg\. Drawing 3DM-\w{6}, \w+ angle, [\d:]+\. Created by, Legal owner and Approved by are left blank/.test(status), `Export > Drawing says what went on the sheet (${status})`);
+  check(/^Exported \S+\.svg\. Drawing 3DM-\w{6}, \w+ angle( \(from your region\))?, [\d:]+\. Created by, legal owner, approved by and revision left blank\. To fill in or change a field, tell Claude/.test(status), `Export > Drawing says what went on the sheet (${status})`);
 
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.

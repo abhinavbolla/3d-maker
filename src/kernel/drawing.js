@@ -745,50 +745,58 @@ export const textWidth = (s, size) => {
   return (w * size) / 1000;
 };
 
-// Text at `size` if it fits `width`, else smaller down to `least`, else cut
-// short with an ellipsis at that size.
-function fitLine(s, width, size, least = 2.5) {
-  s = String(s ?? "");
+// Text fitted to a cell `width` wide, never cut short: on one line at
+// `size`, or smaller down to `one`; where `lines` is 2, then on two lines
+// from `most` down to `least`, broken at the space that makes the longer
+// line shortest, or between letters if no space will do. Returns
+// { rows, size }, or null if it does not fit.
+function fitText(s, width, size, { least = 2.5, lines = 1, one = least, most = size } = {}) {
   const w1 = textWidth(s, 1);
-  if (w1 * size <= width) return { s, size };
-  if (w1 * least <= width) return { s, size: floor((width / w1) * 20) / 20 };
-  let cut = s;
-  while (cut.length > 1 && textWidth(`${cut}…`, least) > width) cut = cut.slice(0, -1);
-  return { s: `${cut.trimEnd()}…`, size: least };
-}
-
-// The title in its cell, 67.6 mm wide and room for two lines: one line of
-// letters 4 to 5 mm high, or two lines, smaller if need be, broken where the
-// longer line comes out shortest. { rows, size, whole: false if cut short }.
-const TITLE_ROOM = 70 - 2.4;
-function titleRows(t) {
-  const w1 = textWidth(t, 1);
-  if (w1 * 4 <= TITLE_ROOM) return { rows: [t], size: min(5, floor((TITLE_ROOM / w1) * 20) / 20), whole: true };
-  const words = t.split(/\s+/);
+  const shrink = (w) => min(size, floor((width / w) * 20) / 20);
+  if (w1 * one <= width) return { rows: [s], size: shrink(w1) };
+  if (lines < 2) return w1 * least <= width ? { rows: [s], size: shrink(w1) } : null;
+  const words = s.split(" ");
   let best = null;
   for (let i = 1; i < words.length; i++) {
     const pair = [words.slice(0, i).join(" "), words.slice(i).join(" ")];
     const w = max(textWidth(pair[0], 1), textWidth(pair[1], 1));
     if (!best || w < best.w) best = { pair, w };
   }
-  if (best && best.w * 2.5 <= TITLE_ROOM) return { rows: best.pair, size: min(5, floor((TITLE_ROOM / best.w) * 20) / 20), whole: true };
-  if (best) return { rows: best.pair.map((p) => fitLine(p, TITLE_ROOM, 2.5).s), size: 2.5, whole: false };
-  const one = fitLine(t, TITLE_ROOM, 5);
-  return { rows: [one.s], size: one.size, whole: one.s === t };
+  if (best && best.w * least <= width) return { rows: best.pair, size: min(most, shrink(best.w)) };
+  const chars = [...s];
+  let k = chars.length;
+  while (k > 1 && textWidth(chars.slice(0, k).join(""), least) > width) k--;
+  const pair = [chars.slice(0, k).join(""), chars.slice(k).join("")];
+  return textWidth(pair[1], least) <= width ? { rows: pair, size: least } : null;
 }
+
+// How many characters each field the user fills in may have: ISO 7200's
+// recommended lengths (Tables 1 to 3: creator and approval person 20,
+// identification number 16, revision index 2, supplementary title 2 x 25).
+// It gives none for the legal owner, which gets two lines of 20 here, nor
+// for general tolerances, which are not one of its fields. Text of these
+// lengths fits its cell with letters at least 2.5 mm high even if every
+// letter is as wide as the widest (a W, a dash, a CJK character), so
+// nothing on a sheet is ever cut short.
+export const LIMITS = { createdBy: 20, approvedBy: 20, owner: 40, number: 16, revision: 2, subtitle: 50, tolerances: 30 };
+
+// The title cell: 67.6 mm wide, with room for two lines.
+const TITLE_ROOM = 70 - 2.4;
+const titleFit = (t) => fitText(t, TITLE_ROOM, 5, { least: 3.5, lines: 2, one: 4 });
 
 // ISO 7200 recommends a short title (25 to 30 characters) with the rest in
 // the supplementary title. A title that fits its cell with letters at least
 // 3.5 mm high is kept whole; a longer one is split at a space before the
-// 30th character. A supplementary title the user gave is never replaced.
+// 30th character (or at the 30th, if there is none), and the rest goes
+// before any supplementary title the user gave.
 export function splitTitle(title, subtitle) {
   title = String(title ?? "").trim();
   subtitle = String(subtitle ?? "").trim();
-  const fit = titleRows(title);
-  if (subtitle || (fit.whole && fit.size >= 3.5)) return { title, subtitle };
+  if (titleFit(title)) return { title, subtitle };
   const at = title.lastIndexOf(" ", 30);
-  if (at < 12) return { title, subtitle };
-  return { title: title.slice(0, at).replace(/[\s,;:–-]+$/, ""), subtitle: title.slice(at + 1) };
+  const head = at >= 12 ? title.slice(0, at).replace(/[\s,;:–-]+$/, "") : title.slice(0, 30);
+  const rest = title.slice(at >= 12 ? at + 1 : 30).trim();
+  return { title: head, subtitle: subtitle ? `${rest} – ${subtitle}` : rest };
 }
 
 export const documentType = (parts) => (parts > 1 ? "Assembly drawing" : "Part drawing");
@@ -876,6 +884,56 @@ function isoPlace(at, size, scale) {
   return null;
 }
 
+// The box a view of the parts fills: [umin, vmin, umax, vmax], the same as
+// viewOutline's box, but only projecting the corners of the mesh, so it is
+// cheap.
+export function outlineBox(parts, view) {
+  const { u, v } = viewOf(view);
+  const out = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const { positions: P } of parts)
+    for (let i = 0; i < P.length; i += 3) {
+      const pu = u[0] * P[i] + u[1] * P[i + 1] + u[2] * P[i + 2], pv = v[0] * P[i] + v[1] * P[i + 1] + v[2] * P[i + 2];
+      if (pu < out[0]) out[0] = pu;
+      if (pu > out[2]) out[2] = pu;
+      if (pv < out[1]) out[1] = pv;
+      if (pv > out[3]) out[3] = pv;
+    }
+  return out;
+}
+
+// Where everything goes, worked out from boxes alone, so the caller knows
+// whether to draw the isometric view before drawing any view.
+//   bounds: the model's box. axis: the section's axis. isoBox: the
+//   isometric view's box (outlineBox), or null for none.
+// Returns { scale, at: { front, top, side, section: { x, y, w, h } }, boxes,
+// iso: { s, x, y, w, h } or null }.
+export function planSheet({ bounds, axis, projection = "first", isoBox = null }) {
+  const names = { front: "front", top: "top", side: sideViewOf(projection), section: SECTION_VIEWS[axis] };
+  const boxes = Object.fromEntries(Object.entries(names).map(([k, name]) => [k, viewBox(bounds, name)]));
+  const sizes = Object.fromEntries(Object.entries(boxes).map(([k, b]) => [k, [b[2] - b[0], b[3] - b[1]]]));
+  let options = [], scale = 0;
+  for (const s of SCALES) {
+    options = layouts(sizes, s, projection, "corner");
+    if (!options.length) options = layouts(sizes, s, projection, "end");
+    if (options.length) {
+      scale = s;
+      break;
+    }
+  }
+  if (!options.length) throw new Error("The model is too large for a drawing sheet.");
+  // The isometric view is sized by its own outline, not the model's box,
+  // which it would show much bigger than the model looks.
+  let at = options[0], iso = null;
+  if (isoBox) {
+    const size = [isoBox[2] - isoBox[0], isoBox[3] - isoBox[1]];
+    for (const o of options) {
+      const p = isoPlace(o, size, scale);
+      if (p && (!iso || p.s > iso.s * (1 + 1e-9))) (iso = p), (at = o);
+    }
+  }
+  return { scale, at, boxes, names, iso };
+}
+
 // ISO 128-20 leaves the line group to the drawing's kind, size and scale:
 // wide lines that suit a part at 1:1 run together in a crowded assembly at
 // 1:50. So the lines are measured on paper, in 4 mm squares, and the group
@@ -884,7 +942,7 @@ function isoPlace(at, size, scale) {
 // make about 1/s; a gap of at least twice a line's width keeps them apart,
 // so the 0.5 group stops at about 0.7 and the 0.35 group at 1.
 // Returns [wide, narrow] widths in mm.
-export const LINE_GROUPS = [
+const LINE_GROUPS = [
   [0.5, 0.25],
   [0.35, 0.18],
   [0.25, 0.13],
@@ -981,7 +1039,7 @@ function dimension(kind, a, b, edge, off, label) {
 // for 3.5 mm lettering): a cone 7 mm long from 3.5 to 7 mm across, seen
 // from the side and from its small end. First angle has the end view on
 // the right. x: its left edge, y: its axis. It is 17.5 mm wide.
-export const SYMBOL = { small: 3.5, large: 7, length: 7, gap: 3.5, line: 0.35 };
+const SYMBOL = { small: 3.5, large: 7, length: 7, gap: 3.5, line: 0.35 };
 function projectionSymbol(x, y, first) {
   const { small, large, length, gap, line } = SYMBOL;
   const fx = first ? x : x + large + gap, cx = first ? x + length + gap + large / 2 : x + large / 2;
@@ -1041,14 +1099,17 @@ function titleBlock(f, scale, first) {
   const top = B - 3 * row, strip = top - row;
   const out = [`<g id="title-block" stroke-width="${THIN}">\n`];
   const lines = [];
-  // A cell: its label small at the top left, its value below, fitted to the cell.
-  const cell = (id, x, y, w, label, value, size = 3.5) => {
+  // A cell: its label small at the top left, its value below, fitted to the
+  // cell, on two lines where `two` allows. Text that cannot fit is an error
+  // (see LIMITS): a sheet never shows a value cut short.
+  const cell = (id, x, y, w, label, value, { size = 3.5, two = false } = {}) => {
     lines.push(`M${c2(x)} ${c2(y)}H${c2(x + w)}`, `M${c2(x)} ${c2(y)}V${c2(y + row)}`);
     out.push(text(x + 1.2, y + 2.4, 1.8, label, `class="label" ${INK}`));
-    if (value) {
-      const v = fitLine(value, w - 2.4, size);
-      out.push(text(x + 1.2, y + row - 1.6, v.size, v.s, `id="${id}" ${INK}`));
-    }
+    if (!value) return;
+    const fit = fitText(value, w - 2.4, size, two ? { lines: 2, one: 3, most: 2.6 } : {});
+    if (!fit) throw new Error(`${label} "${value}" is too long for its cell on the sheet.`);
+    if (fit.rows.length === 1) out.push(text(x + 1.2, y + row - 1.6, fit.size, fit.rows[0], `id="${id}" ${INK}`));
+    else fit.rows.forEach((r, i) => out.push(text(x + 1.2, y + 5.4 + 2.8 * i, fit.size, r, `id="${i ? `${id}-2` : id}" ${INK}`)));
   };
 
   // The strip above the block: projection, scale, units, and general
@@ -1072,20 +1133,22 @@ function titleBlock(f, scale, first) {
   cell("created-by", a, top, 55, "Created by", f.createdBy);
   cell("approved-by", a, top + row, 55, "Approved by", f.approvedBy);
   cell("document-type", a, top + 2 * row, 55, "Document type", f.type);
-  // The title, on one line or two (see titleRows).
+  // The title, on one line or two (see splitTitle).
   {
     lines.push(`M${b} ${c2(top)}V${c2(top + 2 * row)}`);
     out.push(text(b + 1.2, top + 2.4, 1.8, "Title", `class="label" ${INK}`));
-    const { rows, size } = titleRows(f.title);
+    const fit = titleFit(f.title);
+    if (!fit) throw new Error(`The title "${f.title}" is too long for its cell on the sheet.`);
+    const { rows, size } = fit;
     const ys = rows.length === 1 ? [top + 2 * row - 4.2] : [top + 2 * row - 8.2 - (size - 3.5) * 0.4, top + 2 * row - 2.2];
     rows.forEach((r, i) => out.push(text(b + 1.2, ys[i], size, r, `id="${i ? "title-2" : "title"}" ${INK}`)));
   }
-  cell("subtitle", b, top + 2 * row, 70, "Supplementary title", f.subtitle);
-  cell("owner", c, top, 55, "Legal owner", f.owner);
-  cell("number", c, top + row, 55, "Identification number", f.number, 5);
+  cell("subtitle", b, top + 2 * row, 70, "Supplementary title", f.subtitle, { two: true });
+  cell("owner", c, top, 55, "Legal owner", f.owner, { two: true });
+  cell("number", c, top + row, 55, "Identification number", f.number, { size: 5 });
   cell("revision", c, top + 2 * row, 12, "Rev.", f.revision);
   cell("date", c + 12, top + 2 * row, 25, "Date of issue", f.date);
-  cell("sheet", c + 37, top + 2 * row, 18, "Sheet", f.sheet || "1/1");
+  cell("sheet", c + 37, top + 2 * row, 18, "Sheet", "1/1");
   out.push(`<path d="${lines.join("")}"/>`);
   out.push(`<rect x="${X}" y="${c2(top)}" width="${TITLE.w}" height="${3 * row}" stroke-width="${FRAME}"/>`);
   out.push("\n</g>\n");
@@ -1099,46 +1162,22 @@ function titleBlock(f, scale, first) {
 //   info: the title block's fields, all strings, any may be empty: title,
 //   subtitle (supplementary title), number (identification number), revision,
 //   date (of issue), createdBy, approvedBy, owner (legal owner), type
-//   (document type), tolerances (general tolerances), sheet ("1/1").
+//   (document type), tolerances (general tolerances). See LIMITS.
 //   bounds: the model's box. views: { front, top, side, iso? } from
-//   viewOutline (side is "left" in first angle, "right" in third).
-//   section: from sectionView.
-// Returns { svg, scale, iso } where scale is e.g. "1:5" and iso is the
-// isometric view's scale, or null if it was left out.
+//   viewOutline (side is "left" in first angle, "right" in third); iso only
+//   where planSheet found room for it. section: from sectionView.
+// Returns { svg, scale, iso } where scale is e.g. "1:5" and iso says whether
+// the isometric view was drawn.
 export function sheetSVG({ info = {}, bounds, views, section, projection = "first" }) {
   const first = projection !== "third";
-  const sideName = first ? "left" : "right";
-  const names = { front: "front", top: "top", side: sideName, section: section.view };
-  const boxes = Object.fromEntries(Object.entries(names).map(([k, name]) => [k, viewBox(bounds, name)]));
-  const sizes = Object.fromEntries(Object.entries(boxes).map(([k, b]) => [k, [b[2] - b[0], b[3] - b[1]]]));
-  let options = [], scale = 0;
-  for (const s of SCALES) {
-    options = layouts(sizes, s, projection, "corner");
-    if (!options.length) options = layouts(sizes, s, projection, "end");
-    if (options.length) {
-      scale = s;
-      break;
-    }
-  }
-  if (!options.length) throw new Error("The model is too large for a drawing sheet.");
-  // The isometric view is sized by its own outline, not the model's box,
-  // which it would show much bigger than the model looks.
-  let at = options[0], iso = null;
   const isoView = views.iso?.parts.length ? views.iso : null;
-  if (isoView) {
-    const size = [isoView.box[2] - isoView.box[0], isoView.box[3] - isoView.box[1]];
-    for (const o of options) {
-      const p = isoPlace(o, size, scale);
-      if (p && (!iso || p.s > iso.s * (1 + 1e-9))) (iso = p), (at = o);
-    }
-  }
+  const { scale, at, boxes, names, iso } = planSheet({ bounds, axis: section.axis, projection, isoBox: isoView?.box });
   // Model millimetres in a view to paper millimetres (paper's y runs down).
   const map = (k) => ({ tx: (pu) => at[k].x + (pu - boxes[k][0]) * scale, ty: (pv) => at[k].y + (boxes[k][3] - pv) * scale });
   // Wide lines for outlines and cut faces, narrow ones (half as wide) for
   // hatching, dimensions and the cutting line.
   const [wide, narrow] = lineGroup(["front", "top", "side"].flatMap((k) => views[k].parts.map((p) => ({ lines: p.lines, ...map(k) }))));
 
-  const partNames = new Set([...["front", "top", "side"].flatMap((k) => views[k].parts.map((p) => p.name)), ...section.parts.map((p) => p.name)]);
   const { title, subtitle } = splitTitle(info.title || "Untitled", info.subtitle);
   const f = {
     title,
@@ -1149,9 +1188,8 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
     createdBy: info.createdBy ?? "",
     approvedBy: info.approvedBy ?? "",
     owner: info.owner ?? "",
-    type: info.type || documentType(partNames.size),
+    type: info.type ?? "",
     tolerances: info.tolerances ?? "",
-    sheet: info.sheet || "1/1",
   };
 
   const out = [];
@@ -1174,10 +1212,10 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   if (iso) {
     const b = isoView.box;
     const tx = (pu) => iso.x + (pu - b[0]) * iso.s, ty = (pv) => iso.y + (b[3] - pv) * iso.s;
-    out.push(`<g id="view-iso" class="view" data-view="iso" data-scale="${scaleText(iso.s)}" stroke-width="${wide}">\n`);
+    // No scale is given: an isometric view foreshortens every axis, so
+    // nothing on it is measured (it is a picture of the part).
+    out.push(`<g id="view-iso" class="view" data-view="iso" stroke-width="${wide}">\n`);
     for (const p of isoView.parts) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
-    // A view drawn at a scale of its own says so (ISO 5455).
-    if (iso.s !== scale) out.push(text(iso.x + iso.w / 2, iso.y + iso.h + 7, 3.5, `Scale ${scaleText(iso.s)}`, `text-anchor="middle" ${INK}`));
     out.push("</g>\n");
   }
 
@@ -1198,8 +1236,15 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
       out.push(`<path class="hatch" stroke-width="${narrow}" d="${hatch(loops, i % 2 ? -45 : 45, spacing)}"/>`);
       out.push(`<path class="cut-outline" stroke-width="${wide}" d="${loops.map((L) => `${pathOf([L], (q) => q, (q) => q)}Z`).join("")}"/></g>\n`);
     });
+    // The name goes just above what the section draws, which can be well
+    // inside the model's box (a cut through a bracket's thin web).
     const s = at.section;
-    out.push(text(s.x + s.w / 2, s.y - 6, 5, "A–A", `text-anchor="middle" ${INK}`), "\n</g>\n");
+    let lo = Infinity, hi = -Infinity, up = Infinity;
+    const take = (x, y) => ((lo = min(lo, x)), (hi = max(hi, x)), (up = min(up, y)));
+    for (const p of section.parts) for (const L of p.loops) for (let n = 0; n < L.length; n += 2) take(tx(L[n]), ty(L[n + 1]));
+    for (const p of section.beyond ?? []) for (const L of p.lines) for (let n = 0; n < L.length; n += 2) take(tx(L[n]), ty(L[n + 1]));
+    if (!(hi >= lo)) (lo = s.x), (hi = s.x + s.w), (up = s.y);
+    out.push(text((lo + hi) / 2, up - 4, 5, "A–A", `id="section-name" text-anchor="middle" ${INK}`), "\n</g>\n");
   }
 
   // The cutting line, on the view that sees the plane edge on, with arrows
@@ -1246,7 +1291,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   // Credit where it belongs: in the filing margin, outside the frame.
   out.push(text(10, SHEET.bottom, 1.8, "Made with 3D Maker", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
   out.push("</g>\n</svg>\n");
-  return { svg: out.join(""), scale: scaleText(scale), iso: iso ? scaleText(iso.s) : null };
+  return { svg: out.join(""), scale: scaleText(scale), iso: Boolean(iso) };
 }
 
 // Today's date as it goes in the title block: 2026-01-31.
@@ -1262,14 +1307,14 @@ export const sideViewOf = (projection) => (projection === "third" ? "right" : "l
 // The whole drawing in one go, on this thread (the app shares the views out
 // over its workers instead): { svg, scale, iso, section: { axis, offset, area } }.
 // title and date go in the title block, with the rest of info (see sheetSVG).
-// section: { axis, offset }, both optional (see sectionPlane). iso: false
-// leaves the isometric view out.
-export function drawingSVG(parts, { title, date = today(), info = {}, section, projection = "first", iso = true, resolution, crease } = {}) {
+// section: { axis, offset }, both optional (see sectionPlane).
+export function drawingSVG(parts, { title, date = today(), info = {}, section, projection = "first", resolution, crease } = {}) {
   const bounds = modelBounds(parts);
   const plane = sectionPlane(bounds, section);
   const opts = { resolution, crease };
   const views = { front: viewOutline(parts, "front", opts), top: viewOutline(parts, "top", opts), side: viewOutline(parts, sideViewOf(projection), opts) };
-  if (iso) views.iso = viewOutline(parts, "iso", opts);
+  // The isometric view is drawn only where the sheet has room for it.
+  if (planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(parts, "iso") }).iso) views.iso = viewOutline(parts, "iso", opts);
   const cut = sectionView(parts, plane, opts);
   const sheet = sheetSVG({ info: { title, date, type: documentType(parts.length), ...info }, bounds, views, section: cut, projection });
   return { ...sheet, section: { axis: cut.axis, offset: cut.offset, area: cut.area } };

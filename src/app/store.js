@@ -4,14 +4,21 @@ import { autosave } from "./autosave.js";
 
 // plan: null, or { steps: [{ name, parts: [part names], done }] } while
 // Claude builds a big model step by step.
-// drawing: null, or what this model's drawings keep (see sheet.js).
-export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null, plan: null, drawing: null });
+// drawing: what this document's drawings keep (its number, revision and so
+// on; see sheet.js). It belongs to the document, not to one version of its
+// script: every version in the undo history, and every edit made from them,
+// holds the same object, which setDrawing changes in place. So a number
+// made after an edit is still there after undo, a commit already on its way
+// keeps it, and New or Open starts a document with a record of its own.
+export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null, plan: null, drawing: {} });
 const HISTORY_LIMIT = 200;
+// A document from outside (a file, the autosave) gets a record of its own.
+const own = (doc) => ({ ...doc, drawing: { ...(doc.drawing ?? {}) } });
 
 export function createStore(kernel, initial) {
   const listeners = new Set();
   const state = {
-    doc: initial ?? emptyDoc(),
+    doc: own(initial ?? emptyDoc()),
     past: [],
     future: [],
     result: null, // last good build
@@ -102,19 +109,17 @@ export function createStore(kernel, initial) {
     });
   }
 
-  // A drawing's number and revision belong to the model, not to one version
-  // of its script, so undo and redo keep the current ones.
   const undo = () => {
     if (!state.past.length) return;
     const prev = state.past.pop();
     state.future.push(state.doc);
-    return commit({ ...prev, drawing: state.doc.drawing ?? null }, { history: false }).catch(() => {});
+    return commit(prev, { history: false }).catch(() => {});
   };
   const redo = () => {
     if (!state.future.length) return;
     const next = state.future.pop();
     state.past.push(state.doc);
-    return commit({ ...next, drawing: state.doc.drawing ?? null }, { history: false }).catch(() => {});
+    return commit(next, { history: false }).catch(() => {});
   };
 
   function setValue(key, value, { final = false } = {}) {
@@ -139,11 +144,13 @@ export function createStore(kernel, initial) {
     emit();
   }
 
-  // Like the plan, not part of the model's shape, so not in undo history.
-  function setDrawing(drawing) {
-    state.doc = { ...state.doc, drawing };
+  // Replaces what a document's record holds (see emptyDoc), in place: the
+  // document itself is not replaced, so a build or fine pass under way still
+  // knows it as the current one.
+  function setDrawing(record, next) {
+    for (const k of Object.keys(record)) delete record[k];
+    Object.assign(record, next);
     autosave(state.doc);
-    emit();
   }
 
   return {
@@ -161,7 +168,7 @@ export function createStore(kernel, initial) {
     reload: () => commit(state.doc, { history: false }),
     load: (doc, fileName) => {
       state.fileName = fileName ?? null;
-      return commit(doc);
+      return commit(own(doc));
     },
     emit,
   };

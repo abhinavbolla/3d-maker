@@ -10,7 +10,7 @@ import { runScript } from "../src/kernel/script.js";
 import { to3MF } from "../src/kernel/threemf.js";
 import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
-import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, splitTitle, textWidth } from "../src/kernel/drawing.js";
+import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, splitTitle, textWidth, LIMITS } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
 
 const mesh = (node, budget = 40000) => {
@@ -1007,7 +1007,7 @@ test("drawing: the sheet has three views, a section, the overall sizes and a tit
   // The scale steps through the standard ones as the model grows, and the
   // third angle puts the view from the right in.
   const big = (k) => [drawn("Big", { t: "box", s: [100 * k, 60 * k, 40 * k] }, 4000)];
-  assert.deepEqual([0.2, 2, 4, 9, 30, 60].map((k) => drawingSVG(big(k), { iso: false }).scale), ["5:1", "1:2", "1:5", "1:10", "1:20", "1:50"]);
+  assert.deepEqual([0.2, 2, 4, 9, 30, 60].map((k) => drawingSVG(big(k)).scale), ["5:1", "1:2", "1:5", "1:10", "1:20", "1:50"]);
   const third = drawingSVG(big(1), { projection: "third" }).svg;
   assert.match(third, /id="view-right"/);
   assert.match(third, /id="projection"[^>]*>Third angle</);
@@ -1056,43 +1056,64 @@ test("drawing: the title block has every field ISO 7200 asks for, and fills only
   const cx = (svg) => +svg.match(/<circle cx="([\d.]+)"/)[1];
   const coneX = (svg) => +svg.match(/<g id="projection-symbol"[^>]*><path d="M([\d.]+)/)[1];
   assert.ok(cx(d) > coneX(d));
-  const t3 = drawingSVG(block, { projection: "third", iso: false }).svg;
+  const t3 = drawingSVG(block, { projection: "third" }).svg;
   assert.ok(cx(t3) < coneX(t3));
 
-  // Everything filled, and long: every value stays inside its cell.
-  const long = drawingSVG(block, {
-    title: "Bearing block with through hole for the main drive shaft, left hand, second pattern for the export market",
-    date: "2026-01-31",
-    info: { createdBy: "Maximiliana Oyelaran-Featherstonehaugh", approvedBy: "J. Okonkwo-Brightwater", owner: "Northwind Precision Engineering Holdings Ltd", number: "NWP-2026-0004711", revision: "C", tolerances: "ISO 2768-mK", type: "Assembly drawing" },
-  }).svg;
-  const right = { "created-by": 285, "approved-by": 285, "document-type": 285, title: 355, "title-2": 355, subtitle: 355, owner: 410, number: 410, revision: 367, date: 392, sheet: 410 };
-  for (const [id, edge] of Object.entries(right)) {
-    const t = sheetText(long, id);
-    if (!t && id === "title-2") continue;
-    assert.ok(t, `no ${id}`);
-    assert.ok(t.x + textWidth(t.s, t.size) <= edge - 1, `${id} "${t.s}" at ${t.size} mm runs to ${(t.x + textWidth(t.s, t.size)).toFixed(1)}, past ${edge}`);
-    assert.ok(t.size >= 2.5, `${id} is lettered ${t.size} mm high`);
+  // Every field at its limit, in the widest letters there are: each value
+  // is on the sheet whole, inside its cell, at 2.5 mm or more.
+  const right = { "created-by": 285, "approved-by": 285, "document-type": 285, title: 355, "title-2": 355, subtitle: 355, "subtitle-2": 355, owner: 410, "owner-2": 410, number: 410, revision: 367, date: 392, sheet: 410, tolerances: 410 };
+  const ids = { createdBy: ["created-by"], approvedBy: ["approved-by"], owner: ["owner", "owner-2"], number: ["number"], revision: ["revision"], subtitle: ["subtitle", "subtitle-2"], tolerances: ["tolerances"] };
+  for (const letter of ["W", "—", "図", "m"]) {
+    const info = Object.fromEntries(Object.entries(LIMITS).map(([k, n]) => [k, letter.repeat(n)]));
+    // A title of 30 of them (ISO 7200's figure, which splitTitle keeps to).
+    const svg = drawingSVG(block, { title: letter.repeat(30), date: "2026-01-31", info: { ...info, type: "Assembly drawing" } }).svg;
+    for (const [id, edge] of Object.entries(right)) {
+      const t = sheetText(svg, id);
+      if (!t && /-2$/.test(id)) continue;
+      assert.ok(t, `no ${id} with ${letter}`);
+      assert.ok(t.x + textWidth(t.s, t.size) <= edge - 1, `${id} "${t.s}" at ${t.size} mm runs to ${(t.x + textWidth(t.s, t.size)).toFixed(1)}, past ${edge}`);
+      assert.ok(t.size >= 2.5, `${id} is lettered ${t.size} mm high`);
+    }
+    // Whole: the rows of each field put together give the value back.
+    for (const [k, [id, id2]] of Object.entries(ids)) assert.equal((sheetText(svg, id)?.s ?? "") + (id2 ? sheetText(svg, id2)?.s ?? "" : "").replace(/^ /, ""), info[k], `${k} in ${letter} is not whole`);
+    assert.equal((sheetText(svg, "title")?.s ?? "") + (sheetText(svg, "title-2")?.s ?? ""), letter.repeat(30));
   }
-  assert.equal(sheetText(long, "number").s, "NWP-2026-0004711");
-  assert.equal(sheetText(long, "tolerances").s, "ISO 2768-mK");
-  assert.match(long, /<dc:creator>Maximiliana Oyelaran-Featherstonehaugh<\/dc:creator>/);
-  // Too long for two lines in the title cell: the rest goes to the supplementary title.
-  assert.ok(sheetText(long, "subtitle").s.length > 0);
+  // One more than a cell can hold is refused, not cut short.
+  assert.throws(() => drawingSVG(block, { title: "Block", info: { createdBy: "—".repeat(22) } }), /Created by "—+" is too long for its cell/);
+  const named = drawingSVG(block, { title: "Block", info: { createdBy: "Ana Ruiz", owner: "Example Works Ltd" } }).svg;
+  assert.match(named, /<dc:creator>Ana Ruiz<\/dc:creator>/);
+});
+
+test("drawing: the section's name sits over what it cuts, and the isometric view has no scale", () => {
+  // A plate with a block standing on one end: the cut across the middle
+  // goes through the plate only, so the section is 50 mm lower than the box.
+  const bracket = [drawn("Bracket", { t: "union", c: [{ t: "box", s: [100, 60, 10] }, { t: "move", v: [-40, 0, 30], c: { t: "box", s: [20, 60, 50] } }] })];
+  const d = drawingSVG(bracket, { title: "Bracket" }).svg;
+  const name = d.match(/<text x="[\d.]+" y="([\d.]+)"[^>]*id="section-name"/);
+  const cut = [...d.match(/class="cut-outline"[^>]* d="([^"]+)"/)[1].matchAll(/[ML][\d.]+ ([\d.]+)/g)].map((m) => +m[1]);
+  const gap = Math.min(...cut) - +name[1];
+  assert.ok(gap > 2 && gap < 6, `A–A stands ${gap.toFixed(1)} mm above the cut face`);
+  // Drawn, and no scale given on it: nothing is measured on a pictorial view.
+  const iso = d.match(/<g id="view-iso"[\s\S]*?<\/g>/)?.[0];
+  assert.ok(iso && !/Scale|data-scale/.test(iso));
 });
 
 test("drawing: long titles are split the way ISO 7200 suggests", () => {
   assert.deepEqual(splitTitle("Bearing block", ""), { title: "Bearing block", subtitle: "" });
   // Fits the cell on one or two lines: kept whole.
   assert.deepEqual(splitTitle("Black Hawk-style main rotor head"), { title: "Black Hawk-style main rotor head", subtitle: "" });
-  const s = splitTitle("Bearing block with through hole for the main drive shaft, left hand, second pattern for the export market");
+  const long = "Bearing block with through hole for the main drive shaft, left hand, second pattern for the export market";
+  const s = splitTitle(long);
   assert.ok(s.title.length <= 30, JSON.stringify(s));
-  assert.equal(`${s.title} ${s.subtitle}`, "Bearing block with through hole for the main drive shaft, left hand, second pattern for the export market");
-  // A supplementary title of the user's own is kept, and the title too.
-  assert.deepEqual(splitTitle("Bearing block with through hole for the main drive shaft, left hand, second pattern for the export market", "Prototype"), { title: "Bearing block with through hole for the main drive shaft, left hand, second pattern for the export market", subtitle: "Prototype" });
+  assert.equal(`${s.title} ${s.subtitle}`, long);
+  // The rest goes before a supplementary title of the user's own.
+  const t = splitTitle(long, "Prototype");
+  assert.equal(t.title, s.title);
+  assert.equal(t.subtitle, `${s.subtitle} – Prototype`);
 });
 
 test("drawing: the frame has ISO 5457's grid and centring marks", () => {
-  const d = drawingSVG([drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)], { iso: false }).svg;
+  const d = drawingSVG([drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)]).svg;
   const grid = d.match(/<g id="grid"[\s\S]*?<\/g>/)[0];
   const marks = [...grid.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*>([^<]*)</g)].map((m) => ({ x: +m[1], y: +m[2], s: m[3] }));
   const top = marks.filter((m) => m.y < 10).sort((a, b) => a.x - b.x).map((m) => m.s).join("");
