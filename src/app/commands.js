@@ -1,4 +1,6 @@
 // What Claude can do in the app, called through the MCP bridge.
+import { makeDrawing } from "./sheet.js";
+
 const r1 = (v) => Math.round(v * 10) / 10;
 
 export function summarize(state) {
@@ -156,6 +158,6 @@ export function createCommands({ store, viewport, kernel }) {
     screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async ({ solid = false } = {}) => exported(await kernel.exportSTL(store.state.result?.parts ?? [], { solid: Boolean(solid) })),
     export_3mf: async () => exported(await kernel.export3MF(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
-    export_drawing: async ({ axis, offset } = {}) => exported(await kernel.exportDrawing(store.state.result?.parts ?? [], store.state.result?.title ?? "", { section: { axis, offset } })),
+    export_drawing: async (args = {}) => exported(await makeDrawing({ store, kernel }, args)),
   };
 }

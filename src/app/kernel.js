@@ -3,7 +3,7 @@
 import { worldBox, boxesMeet } from "../kernel/fit.js";
 import { toSTL } from "../kernel/mesh.js";
 import { to3MF } from "../kernel/threemf.js";
-import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today } from "../kernel/drawing.js";
+import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType } from "../kernel/drawing.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
 const RUN_TIMEOUT_MS = 30000;
@@ -223,19 +223,20 @@ export function createKernel() {
     return { bytes: await to3MF(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0) };
   }
 
-  // A drawing sheet as SVG: front, top and side views, a section and the
-  // overall sizes. The parts are meshed as for any export; then each view
-  // and the section go to a worker of their own.
-  // section: { axis, offset }, both optional.
-  async function exportDrawing(parts, title, { section } = {}) {
+  // A drawing sheet as SVG: front, top and side views, an isometric view, a
+  // section and the overall sizes. The parts are meshed as for any export;
+  // then each view and the section go to a worker of their own.
+  // info: the title block's fields (see sheetSVG in kernel/drawing.js).
+  // projection: "first" or "third". section: { axis, offset }, both optional.
+  async function exportDrawing(parts, { info = {}, projection = "first", section } = {}) {
     const shown = visible(parts);
     const meshes = await exportMeshes(parts);
     const bounds = modelBounds(meshes);
     const plane = sectionPlane(bounds, section);
     const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
     const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the drawing took too long.");
-    const [front, top, side, cut] = await Promise.all([draw({ view: "front" }), draw({ view: "top" }), draw({ view: sideViewOf("first") }), draw({ section: plane })]);
-    const { svg, scale } = sheetSVG({ title, date: today(), bounds, views: { front, top, side }, section: cut });
+    const [front, top, side, iso, cut] = await Promise.all([draw({ view: "front" }), draw({ view: "top" }), draw({ view: sideViewOf(projection) }), draw({ view: "iso" }), draw({ section: plane })]);
+    const { svg, scale } = sheetSVG({ info: { date: today(), type: documentType(shown.length), ...info }, bounds, views: { front, top, side, iso }, section: cut, projection });
     const count = (v) => v.reduce((s, p) => s + p.lines.length, 0);
     return {
       bytes: new TextEncoder().encode(svg),

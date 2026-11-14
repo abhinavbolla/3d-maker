@@ -122,31 +122,73 @@ try {
   // The same model as a drawing: a well-formed SVG sheet with three views,
   // a section through both parts, and the overall sizes (40 x 40, and 27
   // high from under the base to the top of the peg).
-  const dr = await call("export_drawing");
-  const sheet = await w(`(() => {
-    const svg = new TextDecoder().decode(Uint8Array.from(atob(${JSON.stringify(dr.result?.base64 ?? "")}), (c) => c.charCodeAt(0)));
+  const readSheet = (r) =>
+    w(`(() => {
+    const svg = new TextDecoder().decode(Uint8Array.from(atob(${JSON.stringify(r.result?.base64 ?? "")}), (c) => c.charCodeAt(0)));
     const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
     const lines = (sel) => [...doc.querySelectorAll(sel)].map((p) => p.getAttribute("d") ?? "").join("").split("M").length - 1;
     return {
       error: doc.querySelector("parsererror")?.textContent ?? null,
       root: doc.documentElement.nodeName,
       size: doc.documentElement.getAttribute("width") + " x " + doc.documentElement.getAttribute("height"),
-      views: ["front", "top", "left"].map((v) => lines("#view-" + v + " path")),
+      views: ["front", "top", doc.querySelector("#view-left") ? "left" : "right", "iso"].map((v) => lines("#view-" + v + " path")),
       parts: [...doc.querySelectorAll("#view-front path")].map((p) => p.getAttribute("data-part")).join(", "),
       cut: [...doc.querySelectorAll("#section-A .cut")].map((g) => g.getAttribute("data-part")).join(", "),
       hatch: lines("#section-A .hatch"),
       sizes: ["width", "depth", "height"].map((k) => doc.querySelector('[data-dimension="' + k + '"]')?.textContent).join(" x "),
       title: doc.querySelector("#title-block #scale")?.textContent,
+      side: doc.querySelector("#view-left") ? "left" : "right",
+      fields: Object.fromEntries(["created-by", "approved-by", "owner", "number", "revision", "date", "document-type", "title", "projection"].map((id) => [id, doc.querySelector("#title-block #" + id)?.textContent ?? ""])),
+      region: new Intl.Locale(navigator.language).maximize().region,
       menu: document.querySelector('#export-menu [data-export="svg"] span')?.textContent,
     };
   })()`);
+  const dr = await call("export_drawing");
+  const sheet = await readSheet(dr);
   check(dr.result && !sheet.error && sheet.root === "svg" && sheet.size === "420mm x 297mm", `export gives a well-formed A3 drawing (${dr.error ?? sheet.error ?? sheet.size})`);
-  check(sheet.views.every((n) => n > 0) && sheet.parts === "Base, Peg", `the drawing has front, top and side views of both parts (${JSON.stringify(sheet.views)} lines, ${sheet.parts})`);
+  check(sheet.views.every((n) => n > 0) && sheet.parts === "Base, Peg", `the drawing has front, top, side and isometric views of both parts (${JSON.stringify(sheet.views)} lines, ${sheet.parts})`);
   check(sheet.cut === "Base, Peg" && sheet.hatch > 5 && dr.result?.section.axis === "x" && Math.abs(dr.result.section.cut_area_mm2 - (40 * 10 + 10 * 20)) < 1, `and a hatched section through both (${sheet.cut}, ${dr.result?.section.cut_area_mm2} mm2)`);
   check(sheet.sizes === "40 x 40 x 27" && sheet.title === dr.result?.scale && sheet.menu === "Drawing", `with the overall sizes and the scale, and the Export menu offers it (${sheet.sizes}, ${sheet.title})`);
   const across = await call("export_drawing", { axis: "z", offset: 15 });
   check(across.result?.section.axis === "z" && across.result.section.parts_cut.join() === "Peg" && Math.abs(across.result.section.cut_area_mm2 - Math.PI * 25) < 0.1, `a section can be put anywhere (${JSON.stringify(across.result?.section ?? across.error)})`);
   check(/misses the model/.test((await call("export_drawing", { axis: "z", offset: 60 })).error ?? ""), "a section that misses the model is refused");
+
+  // The title block with nothing said: honest and complete. A number is
+  // made up once for the model and kept; nobody's name is filled in; the
+  // projection follows the system's region; the date of issue is today.
+  const f0 = sheet.fields;
+  const today = await w('(() => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); })()');
+  const regional = sheet.region === "US" || sheet.region === "CA" ? "third" : "first";
+  check(/^3DM-[0-9A-HJKMNP-TV-Z]{6}$/.test(f0.number) && f0.date === today && f0["document-type"] === "Assembly drawing", `the title block has a made-up number, today's date and the document type (${JSON.stringify(f0)})`);
+  check(!f0["created-by"] && !f0["approved-by"] && !f0.owner && !f0.revision, `and no name, owner, approver or revision that nobody gave (${JSON.stringify(f0)})`);
+  check(sheet.side === (regional === "third" ? "right" : "left") && f0.projection.toLowerCase() === `${regional} angle` && /from your region/.test(dr.result?.sheet.projection), `the projection follows the region, ${sheet.region} (${f0.projection}, side view from the ${sheet.side})`);
+  check(/Created by, Legal owner and Approved by are left blank: say "drawn by …, owner …, approved by …"/.test(dr.result?.line ?? ""), `the reply line says what is blank and how to fill it (${dr.result?.line})`);
+  check(across.result?.sheet.identification_number === f0.number, "the number stays the same on the next drawing");
+
+  // Said in a prompt: Claude passes it on, the sheet shows it, and the app
+  // remembers it, names for the user and numbers for the model.
+  const said = await call("export_drawing", { drawn_by: "Ana Ruiz", owner: "Example Works Ltd", number: "BRK-0042", revision: "A", projection: "third", tolerances: "ISO 2768-m" });
+  const named = await readSheet(said);
+  check(named.fields["created-by"] === "Ana Ruiz" && named.fields.owner === "Example Works Ltd" && named.fields.number === "BRK-0042" && named.fields.revision === "A" && named.side === "right" && !named.fields["approved-by"], `what the user said goes on the sheet (${JSON.stringify(named.fields)})`);
+  await call("edit_model", { old_text: "box(40, 40, 10)", new_text: "box(44, 40, 10)" });
+  await w('document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }))');
+  await new Promise((r) => setTimeout(r, 1500));
+  const later = await call("export_drawing");
+  const kept = await readSheet(later);
+  check(kept.fields["created-by"] === "Ana Ruiz" && kept.fields.number === "BRK-0042" && kept.fields.revision === "A" && kept.side === "right" && later.result?.sheet.general_tolerances === "ISO 2768-m", `and is remembered on the next drawing, through an edit and an undo (${JSON.stringify(kept.fields)})`);
+  const stored = await w('({ user: localStorage.getItem("3d-maker:drawing"), doc: localStorage.getItem("3d-maker:autosave") })');
+  check(/Ana Ruiz/.test(stored.user) && /BRK-0042/.test(stored.doc) && !/Ana Ruiz|Example Works/.test(stored.doc), "names are kept for the user, not written into the model, which keeps its number");
+  check(/at most 16 characters/.test((await call("export_drawing", { number: "BRK-0042-0001-0002" })).error ?? ""), "a drawing number over 16 characters is refused");
+  const cleared = await readSheet(await call("export_drawing", { drawn_by: "", projection: "" }));
+  check(!cleared.fields["created-by"] && cleared.side === (regional === "third" ? "right" : "left"), `"" clears a remembered value (${JSON.stringify(cleared.fields)})`);
+  await call("export_drawing", { owner: "", number: "", revision: "", tolerances: "" });
+  // Export > Drawing, without Claude, says the same in the status line.
+  const status = await w(`(async () => {
+    document.querySelector('#export-menu [data-export="svg"]').click();
+    for (let i = 0; i < 300 && !/Exported/.test(document.getElementById("status").textContent); i++) await new Promise((r) => setTimeout(r, 100));
+    return document.getElementById("status").textContent;
+  })()`);
+  check(/^Exported \S+\.svg\. Drawing 3DM-\w{6}, \w+ angle, [\d:]+\. Created by, Legal owner and Approved by are left blank/.test(status), `Export > Drawing says what went on the sheet (${status})`);
 
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.

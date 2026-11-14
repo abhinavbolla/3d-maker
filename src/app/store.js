@@ -4,7 +4,8 @@ import { autosave } from "./autosave.js";
 
 // plan: null, or { steps: [{ name, parts: [part names], done }] } while
 // Claude builds a big model step by step.
-export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null, plan: null });
+// drawing: null, or what this model's drawings keep (see sheet.js).
+export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null, plan: null, drawing: null });
 const HISTORY_LIMIT = 200;
 
 export function createStore(kernel, initial) {
@@ -101,17 +102,19 @@ export function createStore(kernel, initial) {
     });
   }
 
+  // A drawing's number and revision belong to the model, not to one version
+  // of its script, so undo and redo keep the current ones.
   const undo = () => {
     if (!state.past.length) return;
     const prev = state.past.pop();
     state.future.push(state.doc);
-    return commit(prev, { history: false }).catch(() => {});
+    return commit({ ...prev, drawing: state.doc.drawing ?? null }, { history: false }).catch(() => {});
   };
   const redo = () => {
     if (!state.future.length) return;
     const next = state.future.pop();
     state.past.push(state.doc);
-    return commit(next, { history: false }).catch(() => {});
+    return commit({ ...next, drawing: state.doc.drawing ?? null }, { history: false }).catch(() => {});
   };
 
   function setValue(key, value, { final = false } = {}) {
@@ -136,6 +139,13 @@ export function createStore(kernel, initial) {
     emit();
   }
 
+  // Like the plan, not part of the model's shape, so not in undo history.
+  function setDrawing(drawing) {
+    state.doc = { ...state.doc, drawing };
+    autosave(state.doc);
+    emit();
+  }
+
   return {
     state,
     subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
@@ -147,6 +157,7 @@ export function createStore(kernel, initial) {
     select,
     setSession,
     setPlan,
+    setDrawing,
     reload: () => commit(state.doc, { history: false }),
     load: (doc, fileName) => {
       state.fileName = fileName ?? null;
