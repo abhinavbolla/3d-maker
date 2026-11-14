@@ -780,23 +780,48 @@ function fitText(s, width, size, { least = 2.5, lines = 1, one = least, most = s
 // nothing on a sheet is ever cut short.
 export const LIMITS = { createdBy: 20, approvedBy: 20, owner: 40, number: 16, revision: 2, subtitle: 50, tolerances: 30 };
 
-// The title cell: 67.6 mm wide, with room for two lines.
+// The title cell, 67.6 mm wide with room for two lines, and the
+// supplementary title's, 67.6 mm wide in one 9 mm row.
 const TITLE_ROOM = 70 - 2.4;
-const titleFit = (t) => fitText(t, TITLE_ROOM, 5, { least: 3.5, lines: 2, one: 4 });
+const titleFit = (t, least) => fitText(t, TITLE_ROOM, 5, { least, lines: 2, one: 4 });
+const SUBTITLE = { lines: 2, one: 3, most: 2.6 };
+const subtitleFit = (t) => fitText(t, TITLE_ROOM, 3.5, SUBTITLE);
 
-// ISO 7200 recommends a short title (25 to 30 characters) with the rest in
-// the supplementary title. A title that fits its cell with letters at least
-// 3.5 mm high is kept whole; a longer one is split at a space before the
-// 30th character (or at the 30th, if there is none), and the rest goes
-// before any supplementary title the user gave.
-export function splitTitle(title, subtitle) {
-  title = String(title ?? "").trim();
+// Cuts text at a word, with "…", to the most that `fits` takes.
+function shorten(s, fits) {
+  const words = s.split(" ");
+  for (let k = words.length - 1; k > 0; k--) {
+    const t = `${words.slice(0, k).join(" ").replace(/[\s,;:–-]+$/, "")}…`;
+    if (fits(t)) return t;
+  }
+  const chars = [...s];
+  for (let k = chars.length - 1; k > 0; k--) if (fits(`${chars.slice(0, k).join("")}…`)) return `${chars.slice(0, k).join("")}…`;
+  return "…";
+}
+
+// The model's title and the supplementary title as they go on the sheet.
+// The title comes from the script, not from the user filling in the block,
+// so it never stops a drawing: it is made to fit, and cut short with "…"
+// only if it cannot. ISO 7200 recommends a short title (25 to 30
+// characters) with the rest in the supplementary title, so:
+// - With a supplementary title the user gave, theirs stays, and the title
+//   has its own cell, in letters down to 2.5 mm.
+// - Without one, a title that fits its cell in letters 3.5 mm or more stays
+//   whole; a longer one is split at a space before the 30th character (or
+//   at the 30th), and the rest goes in the supplementary title.
+// Returns { title, subtitle, shortened }.
+export function titleLines(title, subtitle) {
+  title = String(title ?? "").trim() || "Untitled";
   subtitle = String(subtitle ?? "").trim();
-  if (titleFit(title)) return { title, subtitle };
+  if (subtitle) {
+    const fits = (t) => titleFit(t, 2.5);
+    return fits(title) ? { title, subtitle, shortened: false } : { title: shorten(title, fits), subtitle, shortened: true };
+  }
+  if (titleFit(title, 3.5)) return { title, subtitle, shortened: false };
   const at = title.lastIndexOf(" ", 30);
   const head = at >= 12 ? title.slice(0, at).replace(/[\s,;:–-]+$/, "") : title.slice(0, 30);
   const rest = title.slice(at >= 12 ? at + 1 : 30).trim();
-  return { title: head, subtitle: subtitle ? `${rest} – ${subtitle}` : rest };
+  return subtitleFit(rest) ? { title: head, subtitle: rest, shortened: false } : { title: head, subtitle: shorten(rest, subtitleFit), shortened: true };
 }
 
 export const documentType = (parts) => (parts > 1 ? "Assembly drawing" : "Part drawing");
@@ -1106,7 +1131,7 @@ function titleBlock(f, scale, first) {
     lines.push(`M${c2(x)} ${c2(y)}H${c2(x + w)}`, `M${c2(x)} ${c2(y)}V${c2(y + row)}`);
     out.push(text(x + 1.2, y + 2.4, 1.8, label, `class="label" ${INK}`));
     if (!value) return;
-    const fit = fitText(value, w - 2.4, size, two ? { lines: 2, one: 3, most: 2.6 } : {});
+    const fit = fitText(value, w - 2.4, size, two ? SUBTITLE : {});
     if (!fit) throw new Error(`${label} "${value}" is too long for its cell on the sheet.`);
     if (fit.rows.length === 1) out.push(text(x + 1.2, y + row - 1.6, fit.size, fit.rows[0], `id="${id}" ${INK}`));
     else fit.rows.forEach((r, i) => out.push(text(x + 1.2, y + 5.4 + 2.8 * i, fit.size, r, `id="${i ? `${id}-2` : id}" ${INK}`)));
@@ -1133,11 +1158,11 @@ function titleBlock(f, scale, first) {
   cell("created-by", a, top, 55, "Created by", f.createdBy);
   cell("approved-by", a, top + row, 55, "Approved by", f.approvedBy);
   cell("document-type", a, top + 2 * row, 55, "Document type", f.type);
-  // The title, on one line or two (see splitTitle).
+  // The title, on one line or two (see titleLines).
   {
     lines.push(`M${b} ${c2(top)}V${c2(top + 2 * row)}`);
     out.push(text(b + 1.2, top + 2.4, 1.8, "Title", `class="label" ${INK}`));
-    const fit = titleFit(f.title);
+    const fit = titleFit(f.title, 2.5);
     if (!fit) throw new Error(`The title "${f.title}" is too long for its cell on the sheet.`);
     const { rows, size } = fit;
     const ys = rows.length === 1 ? [top + 2 * row - 4.2] : [top + 2 * row - 8.2 - (size - 3.5) * 0.4, top + 2 * row - 2.2];
@@ -1166,8 +1191,8 @@ function titleBlock(f, scale, first) {
 //   bounds: the model's box. views: { front, top, side, iso? } from
 //   viewOutline (side is "left" in first angle, "right" in third); iso only
 //   where planSheet found room for it. section: from sectionView.
-// Returns { svg, scale, iso } where scale is e.g. "1:5" and iso says whether
-// the isometric view was drawn.
+// Returns { svg, scale, iso, titles } where scale is e.g. "1:5", iso says
+// whether the isometric view was drawn, and titles is what titleLines made.
 export function sheetSVG({ info = {}, bounds, views, section, projection = "first" }) {
   const first = projection !== "third";
   const isoView = views.iso?.parts.length ? views.iso : null;
@@ -1178,7 +1203,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   // hatching, dimensions and the cutting line.
   const [wide, narrow] = lineGroup(["front", "top", "side"].flatMap((k) => views[k].parts.map((p) => ({ lines: p.lines, ...map(k) }))));
 
-  const { title, subtitle } = splitTitle(info.title || "Untitled", info.subtitle);
+  const { title, subtitle, shortened } = titleLines(info.title, info.subtitle);
   const f = {
     title,
     subtitle,
@@ -1291,7 +1316,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   // Credit where it belongs: in the filing margin, outside the frame.
   out.push(text(10, SHEET.bottom, 1.8, "Made with 3D Maker", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
   out.push("</g>\n</svg>\n");
-  return { svg: out.join(""), scale: scaleText(scale), iso: Boolean(iso) };
+  return { svg: out.join(""), scale: scaleText(scale), iso: Boolean(iso), titles: { title, subtitle, shortened } };
 }
 
 // Today's date as it goes in the title block: 2026-01-31.

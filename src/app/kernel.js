@@ -246,6 +246,7 @@ export function createKernel() {
       bytes: new TextEncoder().encode(svg),
       scale,
       isometric_view: sheet.iso,
+      titles: sheet.titles,
       section: { axis: cut.axis, offset_mm: Math.round(cut.offset * 100) / 100, cut_area_mm2: Math.round(cut.area * 10) / 10, parts_cut: cut.parts.map((p) => p.name) },
       lines: count(front.parts) + count(top.parts) + count(side.parts) + count(cut.beyond),
     };

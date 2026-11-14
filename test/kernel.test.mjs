@@ -10,7 +10,7 @@ import { runScript } from "../src/kernel/script.js";
 import { to3MF } from "../src/kernel/threemf.js";
 import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
-import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, splitTitle, textWidth, LIMITS } from "../src/kernel/drawing.js";
+import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, titleLines, textWidth, LIMITS } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
 
 const mesh = (node, budget = 40000) => {
@@ -1065,7 +1065,7 @@ test("drawing: the title block has every field ISO 7200 asks for, and fills only
   const ids = { createdBy: ["created-by"], approvedBy: ["approved-by"], owner: ["owner", "owner-2"], number: ["number"], revision: ["revision"], subtitle: ["subtitle", "subtitle-2"], tolerances: ["tolerances"] };
   for (const letter of ["W", "—", "図", "m"]) {
     const info = Object.fromEntries(Object.entries(LIMITS).map(([k, n]) => [k, letter.repeat(n)]));
-    // A title of 30 of them (ISO 7200's figure, which splitTitle keeps to).
+    // A title of 30 of them (ISO 7200's figure, which titleLines keeps to).
     const svg = drawingSVG(block, { title: letter.repeat(30), date: "2026-01-31", info: { ...info, type: "Assembly drawing" } }).svg;
     for (const [id, edge] of Object.entries(right)) {
       const t = sheetText(svg, id);
@@ -1098,18 +1098,33 @@ test("drawing: the section's name sits over what it cuts, and the isometric view
   assert.ok(iso && !/Scale|data-scale/.test(iso));
 });
 
-test("drawing: long titles are split the way ISO 7200 suggests", () => {
-  assert.deepEqual(splitTitle("Bearing block", ""), { title: "Bearing block", subtitle: "" });
+test("drawing: a long title is split the way ISO 7200 suggests, and never stops a drawing", () => {
+  assert.deepEqual(titleLines("Bearing block", ""), { title: "Bearing block", subtitle: "", shortened: false });
+  assert.deepEqual(titleLines(""), { title: "Untitled", subtitle: "", shortened: false });
   // Fits the cell on one or two lines: kept whole.
-  assert.deepEqual(splitTitle("Black Hawk-style main rotor head"), { title: "Black Hawk-style main rotor head", subtitle: "" });
-  const long = "Bearing block with through hole for the main drive shaft, left hand, second pattern for the export market";
-  const s = splitTitle(long);
-  assert.ok(s.title.length <= 30, JSON.stringify(s));
+  assert.deepEqual(titleLines("Black Hawk-style main rotor head"), { title: "Black Hawk-style main rotor head", subtitle: "", shortened: false });
+  // 96 characters: the first words in the title, the rest in the supplementary title.
+  const long = "Main gearbox input pinion housing with integral oil jets and chip detector port, left hand side.";
+  assert.equal(long.length, 96);
+  const s = titleLines(long);
+  assert.ok(s.title.length <= 30 && !s.shortened, JSON.stringify(s));
   assert.equal(`${s.title} ${s.subtitle}`, long);
-  // The rest goes before a supplementary title of the user's own.
-  const t = splitTitle(long, "Prototype");
-  assert.equal(t.title, s.title);
-  assert.equal(t.subtitle, `${s.subtitle} – Prototype`);
+  // A supplementary title of the user's own stays, and the title has its cell to itself.
+  assert.deepEqual(titleLines(long, "Prototype"), { title: long, subtitle: "Prototype", shortened: false });
+  // Too long even for that: cut at a word, with "…".
+  const huge = `${long} `.repeat(4).trim();
+  const h = titleLines(huge), g = titleLines(huge, "Prototype");
+  assert.ok(h.shortened && h.subtitle.endsWith("…") && huge.startsWith(`${h.title} ${h.subtitle.slice(0, -1)}`), JSON.stringify(h));
+  assert.ok(g.shortened && g.title.endsWith("…") && g.subtitle === "Prototype" && huge.startsWith(g.title.slice(0, -1)), JSON.stringify(g));
+  // And the sheets are made, with every line inside its cell.
+  const block = [drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)];
+  for (const [title, subtitle] of [[long, ""], [long, "Prototype"], [huge, ""], [huge, "Prototype"]]) {
+    const svg = drawingSVG(block, { title, info: { subtitle } }).svg;
+    for (const id of ["title", "title-2", "subtitle", "subtitle-2"]) {
+      const t = sheetText(svg, id);
+      if (t) assert.ok(t.x + textWidth(t.s, t.size) <= 354 && t.size >= 2.5, `${id} "${t.s}" at ${t.size} mm`);
+    }
+  }
 });
 
 test("drawing: the frame has ISO 5457's grid and centring marks", () => {

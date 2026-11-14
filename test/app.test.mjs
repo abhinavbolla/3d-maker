@@ -159,19 +159,19 @@ try {
   const today = await w('(() => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); })()');
   check(/^3DM-[0-9A-HJKMNP-TV-Z]{6}$/.test(f0.number) && f0.date === today && f0["document-type"] === "Assembly drawing", `the title block has a made-up number, today's date and the document type (${JSON.stringify(f0)})`);
   check(!f0["created-by"] && !f0["approved-by"] && !f0.owner && !f0.revision, `and no name, owner, approver or revision that nobody gave (${JSON.stringify(f0)})`);
-  check(/Created by, legal owner, approved by and revision left blank\. To fill in or change a field, tell Claude, e\.g\. "drawn by …, owner …"\.$/.test(dr.result?.line ?? ""), `the line says what is blank and how to fill it (${dr.result?.line})`);
+  check(/Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude, e\.g\. "drawn by …, owner …"\.$/.test(dr.result?.line ?? ""), `the line says what is blank and how to fill it (${dr.result?.line})`);
   check(dr.result?.isometric_view === true, "and says the isometric view was drawn");
   check(across.result?.sheet.identification_number === f0.number, "the number stays the same on the next drawing");
 
   // First or third angle from the region the system's language names; with
   // none named, ISO's first angle.
   const angle = async (lang) => {
-    await w(`Object.defineProperty(navigator, "language", { configurable: true, get: () => ${JSON.stringify(lang)} }); true`);
+    await w(`Object.defineProperty(navigator, "language", { configurable: true, get: () => ${JSON.stringify(lang)} }); Object.defineProperty(navigator, "languages", { configurable: true, get: () => [${JSON.stringify(lang)}] }); true`);
     const r = await call("export_drawing");
     return `${(await readSheet(r)).side} ${r.result?.sheet.projection}`;
   };
-  const angles = { "en-US": await angle("en-US"), "en-GB": await angle("en-GB"), "ja-JP": await angle("ja-JP"), "fr-CA": await angle("fr-CA"), en: await angle("en"), de: await angle("de") };
-  check(angles["en-US"] === "right third angle (from your region, US)" && angles["ja-JP"].startsWith("right third") && angles["fr-CA"].startsWith("right third") && angles["en-GB"] === "left first angle (from your region, GB)", `third angle in the US, Canada and Japan, first in Britain (${JSON.stringify(angles)})`);
+  const angles = { "en-US": await angle("en-US"), "en-GB": await angle("en-GB"), "ja-JP": await angle("ja-JP"), "fr-CA": await angle("fr-CA"), ja: await angle("ja"), en: await angle("en"), de: await angle("de") };
+  check(angles["en-US"] === "right third angle (from your region, US)" && angles["ja-JP"].startsWith("right third") && angles.ja === "right third angle (from your region, JP)" && angles["fr-CA"].startsWith("right third") && angles["en-GB"] === "left first angle (from your region, GB)", `third angle in the US, Canada and Japan (plain "ja" too), first in Britain (${JSON.stringify(angles)})`);
   check(angles.en === "left first angle (ISO's default: your system names no region)" && angles.de.startsWith("left first angle (ISO"), `a language with no region gets first angle, not the US's third (${angles.en})`);
 
   // Said in a prompt: Claude passes it on, the sheet shows it, and the app
@@ -179,7 +179,7 @@ try {
   const said = await call("export_drawing", { drawn_by: "Ana Ruiz", owner: "Example Works Ltd", number: "BRK-0042", revision: "A", projection: "third", tolerances: "ISO 2768-m" });
   const named = await readSheet(said);
   check(named.fields["created-by"] === "Ana Ruiz" && named.fields.owner === "Example Works Ltd" && named.fields.number === "BRK-0042" && named.fields.revision === "A" && named.side === "right" && !named.fields["approved-by"], `what the user said goes on the sheet (${JSON.stringify(named.fields)})`);
-  check(/Created by, legal owner, revision and general tolerances as you said\. Approved by left blank\./.test(said.result?.line ?? ""), `and the line says so (${said.result?.line})`);
+  check(/Created by, legal owner, revision and general tolerances as given\. Approved by left blank\./.test(said.result?.line ?? ""), `and the line says so (${said.result?.line})`);
   const again = await call("export_drawing");
   const kept = await readSheet(again);
   check(kept.fields["created-by"] === "Ana Ruiz" && kept.fields.owner === "Example Works Ltd" && kept.fields.number === "BRK-0042", "the next drawing has them too");
@@ -200,14 +200,30 @@ try {
   const after = await readSheet(await call("export_drawing"));
   check(/misses the model/.test(failed.error ?? "") && after.fields["created-by"] === "Ana Ruiz" && after.fields.number === "BRK-0042", `a failed export remembers nothing (${JSON.stringify(after.fields)})`);
 
-  // An approval holds for the shape it was given for.
-  const approved = await readSheet(await call("export_drawing", { approved_by: "J. Smith" }));
-  const stillApproved = await call("export_drawing");
-  await call("edit_model", { old_text: "box(40, 40, 10)", new_text: "box(44, 40, 10)" });
-  const changed = await call("export_drawing");
-  const changedSheet = await readSheet(changed);
-  check(approved.fields["approved-by"] === "J. Smith" && (await readSheet(stillApproved)).fields["approved-by"] === "J. Smith", "an approval is on the sheet while the model is unchanged");
-  check(!changedSheet.fields["approved-by"] && changed.result?.approval_cleared && /The approval was cleared: the model has changed since it was given\./.test(changed.result.line) && changedSheet.fields.revision === "A", `and cleared once it changes, leaving the revision (${changed.result?.line})`);
+  // An approval goes on the sheet it is given with, and no other: it is
+  // never remembered, so no one's name is saved in the model.
+  const approvedCall = await call("export_drawing", { approved_by: "J. Smith" });
+  const approved = await readSheet(approvedCall);
+  const next = await call("export_drawing");
+  const nextSheet = await readSheet(next);
+  const savedDoc = await w('new Promise((r) => setTimeout(r, 500)).then(() => localStorage.getItem("3d-maker:autosave"))');
+  check(approved.fields["approved-by"] === "J. Smith" && /Approved by as given\./.test(approvedCall.result?.line ?? ""), `an approval goes on the sheet it is given with (${approvedCall.result?.line})`);
+  check(!nextSheet.fields["approved-by"] && /Approved by left blank\./.test(next.result?.line ?? "") && nextSheet.fields.revision === "A", `and the next sheet has an empty line to sign (${next.result?.line})`);
+  check(!/J\. Smith|Ana Ruiz|Example Works/.test(savedDoc) && /BRK-0042/.test(savedDoc), "no one's name is saved in the model");
+
+  // A long title() never stops a drawing: it continues in the supplementary
+  // title, gives way to one the user gave, and is cut with "…" only when
+  // even that cannot hold it.
+  const longTitle = "Main gearbox input pinion housing with integral oil jets and chip detector port, left hand side.";
+  await call("edit_model", { old_text: 'part("Base"', new_text: `title(${JSON.stringify(longTitle)});\npart("Base"` });
+  const long1 = await call("export_drawing");
+  const long2 = await call("export_drawing", { subtitle: "Prototype B, for the rig test" });
+  await call("edit_model", { old_text: `title(${JSON.stringify(longTitle)});`, new_text: `title(${JSON.stringify(`${longTitle} `.repeat(4).trim())});` });
+  const long3 = await call("export_drawing", { subtitle: "" });
+  check(longTitle.length === 96 && long1.result && `${long1.result.sheet.title} ${long1.result.sheet.supplementary_title}` === longTitle && !/shortened/.test(long1.result.line), `a 96-character title is drawn whole, split into the supplementary title (${JSON.stringify(long1.result?.sheet.title ?? long1.error)})`);
+  check(long2.result?.sheet.supplementary_title === "Prototype B, for the rig test" && long2.result.sheet.title === longTitle, `with the user's supplementary title, theirs stays and the title has its cell (${long2.result?.sheet.title ?? long2.error})`);
+  check(long3.result && long3.result.sheet.supplementary_title.endsWith("…") && /The model's title was too long for the title block and is shortened on the sheet\./.test(long3.result.line), `a title too long even for both is cut at a word, and the line says so (${long3.result?.sheet.supplementary_title ?? long3.error})`);
+  await call("edit_model", { old_text: `title(${JSON.stringify(`${longTitle} `.repeat(4).trim())});\n`, new_text: "" });
 
   // The number belongs to the document: kept through Claude rewriting the
   // script, a new one for New, and each document's own back through undo.
@@ -267,7 +283,7 @@ try {
     for (let i = 0; i < 300 && !/Exported/.test(document.getElementById("status").textContent); i++) await new Promise((r) => setTimeout(r, 100));
     return document.getElementById("status").textContent;
   })()`);
-  check(/^Exported \S+\.svg\. Drawing 3DM-\w{6}, \w+ angle( \(from your region\))?, [\d:]+\. Created by, legal owner, approved by and revision left blank\. To fill in or change a field, tell Claude/.test(status), `Export > Drawing says what went on the sheet (${status})`);
+  check(/^Exported \S+\.svg\. Drawing 3DM-\w{6}, \w+ angle( \(from your region\))?, [\d:]+\. Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude/.test(status), `Export > Drawing says what went on the sheet (${status})`);
 
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.
