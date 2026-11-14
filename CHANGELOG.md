@@ -48,7 +48,7 @@ Notable changes to 3D Maker. The format follows
 
 ### Changed
 
-- The view uses much less GPU: motion plays at up to 30 frames a second and waits while the window
-  is in the background, the shadow map is kept while only the view moves, the floor's reflection
-  draws a sixteenth of the samples on a Retina screen, and app updates that leave the view as it
-  was no longer redraw it. Pictures and screenshots are unchanged.
+- The view uses much less GPU: motion plays at up to 60 frames a second (30 while you work in
+  another window, none while the window is hidden), the shadow map is kept while only the view
+  moves, the floor's reflection draws an eighth of the samples on a Retina screen, and app updates
+  that leave the view as it was no longer redraw it. Pictures and screenshots are unchanged.
