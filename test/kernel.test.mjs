@@ -10,7 +10,7 @@ import { runScript } from "../src/kernel/script.js";
 import { to3MF } from "../src/kernel/threemf.js";
 import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
-import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG } from "../src/kernel/drawing.js";
+import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, titleLines, textWidth, LIMITS } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
 
 const mesh = (node, budget = 40000) => {
@@ -990,26 +990,158 @@ test("drawing: the sheet has three views, a section, the overall sizes and a tit
   assert.ok(Math.abs(d.section.area - 1600) < 1);
   const label = (kind) => d.svg.match(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`))?.[1];
   assert.deepEqual([label("width"), label("depth"), label("height")], ["100", "60", "40"]);
-  for (const id of ["view-front", "view-top", "view-left", "section-A", "cutting-line", "dimensions", "title-block", "border"]) assert.ok(d.svg.includes(`id="${id}"`), `the sheet has no ${id}`);
+  for (const id of ["view-front", "view-top", "view-left", "view-iso", "section-A", "cutting-line", "dimensions", "title-block", "border", "grid", "centring-marks"]) assert.ok(d.svg.includes(`id="${id}"`), `the sheet has no ${id}`);
   assert.match(d.svg, /width="420mm" height="297mm" viewBox="0 0 420 297"/);
-  assert.match(d.svg, /<text id="title"[^>]*>Block &amp; hole<\/text>/);
-  assert.match(d.svg, /<text id="scale"[^>]*>1:1<\/text>/);
-  assert.match(d.svg, /<text id="date"[^>]*>2026-01-31<\/text>/);
-  assert.match(d.svg, />mm<\/text>/);
-  assert.match(d.svg, />First-angle projection<\/text>/);
-  assert.match(d.svg, /class="hatch"[^>]* d="M/);
-  // On paper at 1:1 the front view is 100 x 40 mm, and nothing is drawn off the sheet.
+  // On paper at 1:1 the front view is 100 x 40 mm, and nothing in the views
+  // is drawn outside the frame.
   const front = d.svg.match(/<g id="view-front"[\s\S]*?<\/g>/)[0];
-  const xy = [...front.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
-  const b = extent(xy);
+  const xy = (s) => [...s.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  const b = extent(xy(front));
   assert.ok(Math.abs(b[2] - b[0] - 100) < 0.05 && Math.abs(b[3] - b[1] - 40) < 0.05, `front view on paper is ${(b[2] - b[0]).toFixed(2)} x ${(b[3] - b[1]).toFixed(2)} mm`);
-  const all = [...d.svg.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
-  assert.ok(all.every(([x, y]) => x >= 20 && x <= 410 && y >= 10 && y <= 287), "a line leaves the sheet's border");
+  const drawing = d.svg.slice(d.svg.indexOf('<g id="view-front"'), d.svg.indexOf('<g id="title-block"'));
+  assert.ok(xy(drawing).every(([x, y]) => x >= 20 && x <= 410 && y >= 10 && y <= 287), "a line leaves the sheet's frame");
+  // Wide lines are twice the narrow ones (ISO 128), and the frame is 0.7 (ISO 5457).
+  assert.match(front, /stroke-width="0.5"/);
+  assert.match(d.svg, /class="hatch" stroke-width="0.25"/);
+  assert.match(d.svg, /<rect id="border"[^>]*stroke-width="0.7"/);
   // The scale steps through the standard ones as the model grows, and the
   // third angle puts the view from the right in.
   const big = (k) => [drawn("Big", { t: "box", s: [100 * k, 60 * k, 40 * k] }, 4000)];
   assert.deepEqual([0.2, 2, 4, 9, 30, 60].map((k) => drawingSVG(big(k)).scale), ["5:1", "1:2", "1:5", "1:10", "1:20", "1:50"]);
-  assert.match(drawingSVG(big(1), { projection: "third" }).svg, /id="view-right"[\s\S]*Third-angle projection/);
+  const third = drawingSVG(big(1), { projection: "third" }).svg;
+  assert.match(third, /id="view-right"/);
+  assert.match(third, /id="projection"[^>]*>Third angle</);
+});
+
+// The text with this id on a sheet: { x, y, size, s }.
+const sheetText = (svg, id) => {
+  const m = svg.match(new RegExp(`<text x="([\\d.-]+)" y="([\\d.-]+)" font-size="([\\d.]+)" id="${id}"[^>]*>([^<]*)<`));
+  return m && { x: +m[1], y: +m[2], size: +m[3], s: m[4].replace(/&amp;/g, "&") };
+};
+
+test("drawing: the title block has every field ISO 7200 asks for, and fills only what it was given", () => {
+  const block = [drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)];
+  const d = drawingSVG(block, { title: "Block & hole", date: "2026-01-31", info: { number: "3DM-4K7Q2X" } }).svg;
+  const tb = d.match(/<g id="title-block"[\s\S]*?\n<\/g>/)[0];
+  // The eight mandatory fields, each with its cell.
+  for (const l of ["Legal owner", "Identification number", "Date of issue", "Sheet", "Title", "Approved by", "Created by", "Document type"]) assert.ok(tb.includes(`>${l}</text>`), `no ${l} field`);
+  assert.equal(sheetText(d, "title").s, "Block & hole");
+  assert.equal(sheetText(d, "title").size, 5);
+  assert.equal(sheetText(d, "date").s, "2026-01-31");
+  assert.equal(sheetText(d, "sheet").s, "1/1");
+  assert.equal(sheetText(d, "number").s, "3DM-4K7Q2X");
+  assert.equal(sheetText(d, "number").size, 5);
+  assert.equal(sheetText(d, "document-type").s, "Part drawing");
+  assert.equal(sheetText(d, "scale").s, "1:1");
+  assert.equal(sheetText(d, "units").s, "mm");
+  assert.equal(sheetText(d, "projection").s, "First angle");
+  // Nothing nobody gave: no names, no revision, no tolerances.
+  for (const id of ["created-by", "approved-by", "owner", "revision", "subtitle", "tolerances"]) assert.equal(sheetText(d, id), null, `${id} is filled in`);
+  assert.ok(!tb.includes("General tolerances"));
+  // 180 mm wide, at the bottom right against the frame, with a 0.7 outline.
+  assert.match(tb, /<rect x="230" y="260" width="180" height="27" stroke-width="0.7"\/>/);
+  // The credit is outside the frame, and in the metadata only as a comment.
+  const credit = sheetText(d, "credit");
+  assert.ok(credit && credit.x < 20 && !tb.includes("3D Maker"), "the credit is in the title block");
+  assert.match(d, /<dc:identifier>3DM-4K7Q2X<\/dc:identifier>/);
+  assert.ok(!/<dc:creator>/.test(d));
+  // The projection symbol at its ISO 5456-2 size for 3.5 mm lettering:
+  // circles 3.5 and 7 across, a cone 7 long, lines 0.35.
+  const sym = d.match(/<g id="projection-symbol" stroke-width="([\d.]+)">([\s\S]*?)<\/g>/);
+  assert.equal(sym[1], "0.35");
+  assert.deepEqual([...sym[2].matchAll(/<circle [^>]*r="([\d.]+)"/g)].map((m) => +m[1] * 2), [3.5, 7]);
+  const cone = [...sym[2].match(/<path d="([^"]+)"/)[1].matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map((m) => [+m[1], +m[2]]);
+  assert.ok(Math.abs(cone[1][0] - cone[0][0] - 7) < 1e-6 && Math.abs(cone[3][1] - cone[0][1] - 3.5) < 1e-6 && Math.abs(cone[2][1] - cone[1][1] - 7) < 1e-6, `cone ${JSON.stringify(cone)}`);
+  // First angle: the end view right of the cone; third angle: left of it.
+  const cx = (svg) => +svg.match(/<circle cx="([\d.]+)"/)[1];
+  const coneX = (svg) => +svg.match(/<g id="projection-symbol"[^>]*><path d="M([\d.]+)/)[1];
+  assert.ok(cx(d) > coneX(d));
+  const t3 = drawingSVG(block, { projection: "third" }).svg;
+  assert.ok(cx(t3) < coneX(t3));
+
+  // Every field at its limit, in the widest letters there are: each value
+  // is on the sheet whole, inside its cell, at 2.5 mm or more.
+  const right = { "created-by": 285, "approved-by": 285, "document-type": 285, title: 355, "title-2": 355, subtitle: 355, "subtitle-2": 355, owner: 410, "owner-2": 410, number: 410, revision: 367, date: 392, sheet: 410, tolerances: 410 };
+  const ids = { createdBy: ["created-by"], approvedBy: ["approved-by"], owner: ["owner", "owner-2"], number: ["number"], revision: ["revision"], subtitle: ["subtitle", "subtitle-2"], tolerances: ["tolerances"] };
+  for (const letter of ["W", "—", "図", "m"]) {
+    const info = Object.fromEntries(Object.entries(LIMITS).map(([k, n]) => [k, letter.repeat(n)]));
+    // A title of 30 of them (ISO 7200's figure, which titleLines keeps to).
+    const svg = drawingSVG(block, { title: letter.repeat(30), date: "2026-01-31", info: { ...info, type: "Assembly drawing" } }).svg;
+    for (const [id, edge] of Object.entries(right)) {
+      const t = sheetText(svg, id);
+      if (!t && /-2$/.test(id)) continue;
+      assert.ok(t, `no ${id} with ${letter}`);
+      assert.ok(t.x + textWidth(t.s, t.size) <= edge - 1, `${id} "${t.s}" at ${t.size} mm runs to ${(t.x + textWidth(t.s, t.size)).toFixed(1)}, past ${edge}`);
+      assert.ok(t.size >= 2.5, `${id} is lettered ${t.size} mm high`);
+    }
+    // Whole: the rows of each field put together give the value back.
+    for (const [k, [id, id2]] of Object.entries(ids)) assert.equal((sheetText(svg, id)?.s ?? "") + (id2 ? sheetText(svg, id2)?.s ?? "" : "").replace(/^ /, ""), info[k], `${k} in ${letter} is not whole`);
+    assert.equal((sheetText(svg, "title")?.s ?? "") + (sheetText(svg, "title-2")?.s ?? ""), letter.repeat(30));
+  }
+  // One more than a cell can hold is refused, not cut short.
+  assert.throws(() => drawingSVG(block, { title: "Block", info: { createdBy: "—".repeat(22) } }), /Created by "—+" is too long for its cell/);
+  const named = drawingSVG(block, { title: "Block", info: { createdBy: "Ana Ruiz", owner: "Example Works Ltd" } }).svg;
+  assert.match(named, /<dc:creator>Ana Ruiz<\/dc:creator>/);
+});
+
+test("drawing: the section's name sits over what it cuts, and the isometric view has no scale", () => {
+  // A plate with a block standing on one end: the cut across the middle
+  // goes through the plate only, so the section is 50 mm lower than the box.
+  const bracket = [drawn("Bracket", { t: "union", c: [{ t: "box", s: [100, 60, 10] }, { t: "move", v: [-40, 0, 30], c: { t: "box", s: [20, 60, 50] } }] })];
+  const d = drawingSVG(bracket, { title: "Bracket" }).svg;
+  const name = d.match(/<text x="[\d.]+" y="([\d.]+)"[^>]*id="section-name"/);
+  const cut = [...d.match(/class="cut-outline"[^>]* d="([^"]+)"/)[1].matchAll(/[ML][\d.]+ ([\d.]+)/g)].map((m) => +m[1]);
+  const gap = Math.min(...cut) - +name[1];
+  assert.ok(gap > 2 && gap < 6, `A–A stands ${gap.toFixed(1)} mm above the cut face`);
+  // Drawn, and no scale given on it: nothing is measured on a pictorial view.
+  const iso = d.match(/<g id="view-iso"[\s\S]*?<\/g>/)?.[0];
+  assert.ok(iso && !/Scale|data-scale/.test(iso));
+});
+
+test("drawing: a long title is split the way ISO 7200 suggests, and never stops a drawing", () => {
+  assert.deepEqual(titleLines("Bearing block", ""), { title: "Bearing block", subtitle: "", shortened: false });
+  assert.deepEqual(titleLines(""), { title: "Untitled", subtitle: "", shortened: false });
+  // Fits the cell on one or two lines: kept whole.
+  assert.deepEqual(titleLines("Black Hawk-style main rotor head"), { title: "Black Hawk-style main rotor head", subtitle: "", shortened: false });
+  // 96 characters: the first words in the title, the rest in the supplementary title.
+  const long = "Main gearbox input pinion housing with integral oil jets and chip detector port, left hand side.";
+  assert.equal(long.length, 96);
+  const s = titleLines(long);
+  assert.ok(s.title.length <= 30 && !s.shortened, JSON.stringify(s));
+  assert.equal(`${s.title} ${s.subtitle}`, long);
+  // A supplementary title of the user's own stays, and the title has its cell to itself.
+  assert.deepEqual(titleLines(long, "Prototype"), { title: long, subtitle: "Prototype", shortened: false });
+  // Too long even for that: cut at a word, with "…".
+  const huge = `${long} `.repeat(4).trim();
+  const h = titleLines(huge), g = titleLines(huge, "Prototype");
+  assert.ok(h.shortened && h.subtitle.endsWith("…") && huge.startsWith(`${h.title} ${h.subtitle.slice(0, -1)}`), JSON.stringify(h));
+  assert.ok(g.shortened && g.title.endsWith("…") && g.subtitle === "Prototype" && huge.startsWith(g.title.slice(0, -1)), JSON.stringify(g));
+  // And the sheets are made, with every line inside its cell.
+  const block = [drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)];
+  for (const [title, subtitle] of [[long, ""], [long, "Prototype"], [huge, ""], [huge, "Prototype"]]) {
+    const svg = drawingSVG(block, { title, info: { subtitle } }).svg;
+    for (const id of ["title", "title-2", "subtitle", "subtitle-2"]) {
+      const t = sheetText(svg, id);
+      if (t) assert.ok(t.x + textWidth(t.s, t.size) <= 354 && t.size >= 2.5, `${id} "${t.s}" at ${t.size} mm`);
+    }
+  }
+});
+
+test("drawing: the frame has ISO 5457's grid and centring marks", () => {
+  const d = drawingSVG([drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)]).svg;
+  const grid = d.match(/<g id="grid"[\s\S]*?<\/g>/)[0];
+  const marks = [...grid.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*>([^<]*)</g)].map((m) => ({ x: +m[1], y: +m[2], s: m[3] }));
+  const top = marks.filter((m) => m.y < 10).sort((a, b) => a.x - b.x).map((m) => m.s).join("");
+  const left = marks.filter((m) => m.x < 20).sort((a, b) => a.y - b.y).map((m) => m.s).join("");
+  assert.equal(top, "12345678");
+  assert.equal(left, "ABCDEF");
+  assert.equal(marks.length, 2 * 8 + 2 * 6);
+  // Fields are 50 mm long from the middle of each side: the inner field
+  // boundaries along the top fall at 60, 110, ... 360.
+  const ticks = [...grid.matchAll(/M([\d.]+) 5V10/g)].map((m) => +m[1]);
+  assert.deepEqual(ticks, [60, 110, 160, 210, 260, 310, 360]);
+  assert.match(d, /<path id="centring-marks" stroke-width="0.7"[^>]*d="M210 5V20M210 292V277M15 148.5H30M415 148.5H400"/);
+  assert.equal(sheetText(d, "sheet-size").s, "A3");
 });
 
 test("drawing: Claude's rotor head draws, with its mast, hub and gearbox cut by the section", () => {
@@ -1025,6 +1157,10 @@ test("drawing: Claude's rotor head draws, with its mast, hub and gearbox cut by 
   for (const n of ["Gearbox top", "Rotor mast", "Hub", "Blade 1", "Blade 3"]) assert.ok(names.includes(n), `${n} is not cut`);
   assert.ok(!names.includes("Blade 2") && !names.includes("Blade 4"), "a blade that lies along Y, off the plane, is cut");
   assert.ok((d.svg.match(/class="cut"/g) ?? []).length === names.length);
+  // An assembly this crowded at 1:50 is drawn in the 0.25 line group, so
+  // the hub does not fill in; the block above is drawn in the 0.5 group.
+  assert.match(d.svg, /<g id="view-top"[^>]*stroke-width="0.25"/);
+  assert.equal(d.svg.match(/<text [^>]*id="document-type"[^>]*>([^<]*)</)[1], "Assembly drawing");
 });
 
 test("the app's Claude is allowed every tool the server offers", () => {

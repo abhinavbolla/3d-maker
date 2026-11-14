@@ -43,6 +43,8 @@ Notable changes to 3D Maker. The format follows
   a title block with the model's title, a standard scale and the date. The section is cut from
   the exact shapes, not from the mesh. Claude can export one with the new `export_drawing` tool
   and say where the section goes.
+- The drawing sheet follows ISO 5457 and ISO 7200: a full title block that fills itself in and
+  remembers what you tell Claude, an isometric view, a grid border and heavier lines.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
 

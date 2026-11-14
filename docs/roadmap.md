@@ -12,7 +12,7 @@ This page says where it stands against that goal and what comes next. The order 
 | Mechanisms | Motion, joints checked over the whole loop, collision checks. |
 | Looking at the model | Studio view with shadows, a reflecting floor and materials. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
 | Pictures | PNG studio shots of any view. |
-| 2D drawings | One A3 sheet as SVG: front, top and side views with hidden edges left out, a hatched section, the overall sizes and a title block. |
+| 2D drawings | One A3 sheet as SVG: front, top, side and isometric views with hidden edges left out, a hatched section, the overall sizes and an ISO title block. |
 | Files for other apps | Meshes only: STL and 3MF. |
 | Exact surfaces | None. Surfaces are fine meshes of distance fields. |
 | Direct editing | Sliders and prompts. No dragging, measuring or sectioning. |
@@ -34,14 +34,14 @@ A studio shot of a mechanism from a professional tool gets its look from four th
 
 A model is not finished for a workshop until it has drawings. Distance fields make some of this easier than it is for other kernels: a section through a part is an exact outline, with no surface-to-surface intersection to compute.
 
-Done so far: an A3 sheet as SVG with the front, top and side views (sharp edges and outlines, hidden edges left out), one section cut straight from the distance functions with its faces hatched per part, the overall width, depth and height, and a title block with a standard scale. Claude can export it and say where the section goes.
+Done so far: an A3 sheet as SVG to ISO 5457 (frame, grid reference border, centring marks) with the front, top and side views in first or third angle (sharp edges and outlines, hidden edges left out), an isometric view, one section cut straight from the distance functions with its faces hatched per part, the overall width, depth and height, and an ISO 7200 title block that fills itself in and remembers what you tell it. Claude can export it, say where the section goes and fill in the title block.
 
 What is left:
 
-1. **Views.** An isometric view. Hidden edges dashed, as a choice. The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Centre lines of holes and turned parts. Views drawn from the distance functions instead of the mesh, so curves are exact here too.
+1. **Views.** Detail views at a larger scale, for crowded parts of an assembly (at 1:50 the rotor head's hub fills in, however thin its lines). Hidden edges dashed, as a choice. The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Centre lines of holes and turned parts. Views drawn from the distance functions instead of the mesh, so curves are exact here too.
 2. **Sections.** Planes at any angle, stepped and half sections, several sections on a sheet, and detail views.
 3. **Dimensions.** Hole positions and diameters, radii and angles, taken from the model and from the values in its script.
-4. **Sheets.** PDF and DXF. Other sheet sizes, several sheets, a parts list with balloons, and a choice of third-angle projection (the kernel can already lay a sheet out that way).
+4. **Sheets.** PDF and DXF. Other sheet sizes, several sheets, and a parts list with balloons.
 5. **Drawings by prompt.** "Make a drawing of the bracket with a section through the holes": Claude choosing the views, the sections and what to dimension, and looking at the sheet it made.
 
 ## Files for other apps

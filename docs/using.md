@@ -41,11 +41,35 @@ Every visible part is meshed at the same detail on all cores, so a 60-part rotor
 
 ### The drawing
 
-![The rotor head as a drawing: front, top and side views, a section through the mast, overall sizes and a title block on an A3 sheet](rotor-head-drawing.png)
+![The rotor head as a drawing: front, top, side and isometric views, a section through the mast, overall sizes and a title block on an A3 sheet](rotor-head-drawing.png)
 
-The sheet shows the model from the front, from above and from the left, laid out in first-angle projection (the ISO way: the top view sits under the front view, and the view from the left sits on its right). Hidden edges are left out. Next to them is section A–A: the model cut by a plane, with the cut faces hatched, each part its own way, and what lies beyond the cut drawn behind them. The cutting line and the way the section looks are marked on one of the views.
+The sheet shows the model from the front, from above and from the side, with hidden edges left out, and where there is room an isometric view at the top right. Next to the views is section A–A: the model cut by a plane, with the cut faces hatched, each part its own way, and what lies beyond the cut drawn behind them. The cutting line and the way the section looks are marked on one of the views.
 
-The overall width, depth and height are dimensioned in millimetres. The title block gives the model's title, the scale and the date. The scale is the largest standard one that fits the sheet: 1:1, 1:2, 1:5, 1:10, 1:20, 1:50 and so on, or 2:1, 5:1 and up for small parts.
+The views are laid out in first-angle projection (ISO: the top view under the front view, the view from the left on its right) or third-angle projection (the top view above it, the view from the right on its right). Which one follows the region your system's language names: third angle in the US, Canada and Japan, first angle elsewhere, and first angle (ISO's) when no region is named. Say "third angle" or "first angle" to change it.
+
+The overall width, depth and height are dimensioned in millimetres. The scale is the largest standard one that fits the sheet: 1:1, 1:2, 1:5, 1:10, 1:20, 1:50 and so on, or 2:1, 5:1 and up for small parts. Outlines are 0.5 mm wide and dimensions and hatching 0.25 mm, or thinner where a crowded assembly would run together at that weight.
+
+The sheet follows ISO 5457 (frame, grid reference border, centring marks), and its title block ISO 7200. The block fills itself in:
+
+| Field | Where it comes from |
+| --- | --- |
+| Title | The model's title. A title too long for its cell is split near its 30th character, and the rest goes in the supplementary title (or, if you gave one, the title gets smaller letters). A title too long even for that is cut short with … on the sheet, and the app says so. |
+| Identification number | Made up once for the model (such as 3DM-4K7Q2X) and saved with it, until you give your own. |
+| Date of issue | Today. |
+| Document type | Part drawing, or Assembly drawing for more than one part. |
+| Scale, projection, units, sheet | From the sheet itself. |
+| Created by, legal owner | Blank until you say. The app does not know your name or employer and does not guess. |
+| Approved by | Blank, a line to sign, unless you name the approver when you ask for the drawing. An approval is for one issue of a drawing, so it is never remembered: the next drawing has the empty line again. |
+| Revision, general tolerances | Blank until you say; the app never changes a revision by itself. The tolerances note only appears when you give one. |
+
+To fill in or change any of it, tell Claude, for example: "export a drawing, drawn by Ana Ruiz, owner Example Works Ltd, drawing number BRK-0042, revision A, tolerances ISO 2768-m". Each field holds what ISO 7200 recommends: 20 characters for created by and approved by, 16 for the number, 2 for the revision, 50 for the supplementary title; 40 for the legal owner and 30 for the tolerances, which it leaves open. A longer value is refused with a message saying so, never cut short on the sheet. Ask for a field to be left empty to clear it; an empty number gets a new one made up.
+
+The app remembers what you said once the drawing is saved; a drawing that fails, or whose save you cancel, leaves nothing remembered:
+
+- **Kept for you, in this app only:** your name (created by), the legal owner, and first or third angle. They are never written into a model file.
+- **Kept with the model, and saved in its file:** the number, revision, supplementary title and general tolerances. No one's name is saved in a model file. Claude rewriting the script keeps them, since it is still the same model; New starts a model with none of them, and so a new number. Open brings in the file's own.
+
+After each drawing the app says in one line what went on the sheet: what you said, what was remembered, what is blank, and how to change it.
 
 From the Export menu the section cuts across the model's longest side, at its middle. Ask Claude for a different one: "export a drawing with the section across z, 40 mm up".
 
@@ -62,7 +86,7 @@ claude mcp add --scope user 3d-maker -- node /path/to/3d-maker/mcp/server.mjs
 ## Limitations
 
 - **No exact CAD surfaces yet.** Export is meshes (STL, 3MF), not STEP, and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
-- **Drawings are a first version.** One A3 sheet as SVG: no PDF or DXF, no isometric view, no dashed hidden edges, and only the overall sizes are dimensioned. Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
+- **Drawings are a first version.** One A3 sheet as SVG: no PDF or DXF, no dashed hidden edges, no centre lines or parts list, and only the overall sizes are dimensioned. Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
 - **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods.
 - **Changes are prompts and sliders.** You can't drag parts around in the view.
 - **Collisions in motion** are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.

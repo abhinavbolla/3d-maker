@@ -8,6 +8,7 @@ import { startBridge } from "./app/bridge.js";
 import { createClaude } from "./app/claude.js";
 import { loadAutosave } from "./app/autosave.js";
 import { saveBytes, openText } from "./app/files.js";
+import { makeDrawing } from "./app/sheet.js";
 
 const $ = (id) => document.getElementById(id);
 const kernel = createKernel();
@@ -336,10 +337,14 @@ const actions = {
     say(kind === "solid" ? "Joining the parts into one solid" : kind === "svg" ? "Making the drawing" : "Exporting", 0);
     try {
       const { parts, title } = store.state.result;
-      const r = kind === "svg" ? await kernel.exportDrawing(parts, title) : kind === "3mf" ? await kernel.export3MF(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
+      const drawing = kind === "svg" ? await makeDrawing({ store, kernel }) : null;
+      const r = drawing ? drawing.result : kind === "3mf" ? await kernel.export3MF(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
       const ext = kind === "svg" || kind === "3mf" ? kind : "stl";
       const where = await saveBytes(r.bytes, `${fileName()}.${ext}`, ext);
-      say(where ? `Exported ${where.split("/").pop()}` : "");
+      // A drawing whose save was cancelled leaves nothing remembered.
+      if (where) drawing?.keep();
+      // A drawing also says what went in its title block and how to change it.
+      say(where ? `Exported ${where.split("/").pop()}${r.line ? `. ${r.line}` : ""}` : "", r.line ? 20000 : 4000);
     } catch (err) {
       say(err.message, 8000);
     }

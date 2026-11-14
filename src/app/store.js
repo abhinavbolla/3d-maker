@@ -4,13 +4,21 @@ import { autosave } from "./autosave.js";
 
 // plan: null, or { steps: [{ name, parts: [part names], done }] } while
 // Claude builds a big model step by step.
-export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null, plan: null });
+// drawing: what this document's drawings keep (its number, revision and so
+// on; see sheet.js). It belongs to the document, not to one version of its
+// script: every version in the undo history, and every edit made from them,
+// holds the same object, which setDrawing changes in place. So a number
+// made after an edit is still there after undo, a commit already on its way
+// keeps it, and New or Open starts a document with a record of its own.
+export const emptyDoc = () => ({ version: 2, script: "", values: {}, session: null, plan: null, drawing: {} });
 const HISTORY_LIMIT = 200;
+// A document from outside (a file, the autosave) gets a record of its own.
+const own = (doc) => ({ ...doc, drawing: { ...(doc.drawing ?? {}) } });
 
 export function createStore(kernel, initial) {
   const listeners = new Set();
   const state = {
-    doc: initial ?? emptyDoc(),
+    doc: own(initial ?? emptyDoc()),
     past: [],
     future: [],
     result: null, // last good build
@@ -136,6 +144,15 @@ export function createStore(kernel, initial) {
     emit();
   }
 
+  // Replaces what a document's record holds (see emptyDoc), in place: the
+  // document itself is not replaced, so a build or fine pass under way still
+  // knows it as the current one.
+  function setDrawing(record, next) {
+    for (const k of Object.keys(record)) delete record[k];
+    Object.assign(record, next);
+    autosave(state.doc);
+  }
+
   return {
     state,
     subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
@@ -147,10 +164,11 @@ export function createStore(kernel, initial) {
     select,
     setSession,
     setPlan,
+    setDrawing,
     reload: () => commit(state.doc, { history: false }),
     load: (doc, fileName) => {
       state.fileName = fileName ?? null;
-      return commit(doc);
+      return commit(own(doc));
     },
     emit,
   };
