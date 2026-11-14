@@ -165,7 +165,11 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   const shadowFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.24, depthWrite: false }));
   shadowFloor.receiveShadow = true;
   shadowFloor.renderOrder = -2;
-  const mirror = new Reflector(new THREE.PlaneGeometry(1, 1), { shader: FLOOR, multisample: 4, clipBias: 0.001 });
+  // In the window the mirror's picture is drawn one pixel per CSS pixel and
+  // without multisampling: the floor blurs and fades it, so on a Retina screen
+  // this draws a sixteenth of the samples with no difference you can see.
+  // Saved pictures still get it at full size, multisampled.
+  const mirror = new Reflector(new THREE.PlaneGeometry(1, 1), { shader: FLOOR, multisample: 0, clipBias: 0.001 });
   Object.assign(mirror.material, { transparent: true, premultipliedAlpha: true, depthWrite: false });
   mirror.renderOrder = -1;
   scene.add(shadowFloor, mirror);
@@ -317,23 +321,59 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   const timer = new THREE.Timer();
   let time = 0;
   let loopSeconds = 4;
-  const moving = () => playing && [...parts.values()].some((p) => p.part.frames);
-  function tick() {
+  // The key light stands still with the model, so the shadow map only needs
+  // drawing again when parts move or change, not when the view turns.
+  let shadowsMoved = true;
+  // Motion stops while the window is hidden or another window has focus, and
+  // goes on from where it was when you come back.
+  let away = document.hidden;
+  const moving = () => playing && !away && [...parts.values()].some((p) => p.part.frames);
+  function wake() {
+    if (!away || document.hidden) return;
+    away = false;
+    timer.update();
+    render();
+  }
+  window.addEventListener("blur", () => (away = true));
+  window.addEventListener("focus", wake);
+  renderer.domElement.addEventListener("pointerdown", wake);
+  document.addEventListener("visibilitychange", () => (document.hidden ? (away = true) : document.hasFocus() && wake()));
+  // Motion on its own is drawn at up to 30 frames a second, half of what a
+  // screen shows (a quarter on a 120 Hz one). Moving the view still gets
+  // every frame.
+  const MOTION_FRAME = 1000 / 30;
+  let asked = false; // a frame was asked for by something other than the motion
+  let drawnAt = -Infinity;
+  function tick(now) {
     frame = 0;
+    if (!asked && !moving()) return;
+    if (!asked && now - drawnAt < MOTION_FRAME - 4) return schedule();
+    asked = false;
+    drawnAt = now;
     timer.update();
     const dt = timer.getDelta();
-    if (moving()) time += Math.min(dt, 0.1);
+    if (moving()) {
+      time += Math.min(dt, 0.1);
+      shadowsMoved = true;
+    }
     pose(time);
     if (guides.visible) sizePivot();
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = shadowsMoved;
     renderer.render(scene, camera);
+    // Pictures and screenshots draw their own shadows.
+    renderer.shadowMap.autoUpdate = true;
+    shadowsMoved = false;
     if (!seen.equals(camera.quaternion)) onView(camera);
     seen.copy(camera.quaternion);
-    if (moving()) render();
+    if (moving()) schedule();
+  }
+  function schedule() {
+    if (!frame) frame = requestAnimationFrame(tick);
   }
   function render() {
-    if (!frame) {
-      frame = requestAnimationFrame(tick);
-    }
+    asked = true;
+    schedule();
   }
 
   // Poses come from the kernel, sampled over the loop (60 per second); in
@@ -371,8 +411,12 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     renderer.setSize(w, h, false);
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
-    const px = renderer.getPixelRatio();
-    mirror.getRenderTarget().setSize(Math.round(w * px), Math.round(h * px));
+    const target = mirror.getRenderTarget();
+    if (target.samples) {
+      target.samples = 0;
+      target.dispose();
+    }
+    target.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     render();
@@ -429,6 +473,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       mesh.material.dispose();
     }
     parts = next;
+    shadowsMoved = true;
     const box = modelBox();
     if (!lastBox || !box || !box.equals(lastBox)) {
       lastBox = box;
@@ -465,7 +510,10 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   }
 
   function select(name) {
-    selected = name && parts.has(name) ? name : null;
+    const next = name && parts.has(name) ? name : null;
+    // The app asks again on every change of its state, most of them nothing to do with the view.
+    if (next === selected) return;
+    selected = next;
     highlight();
   }
 
@@ -642,6 +690,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     shadowFloor.visible = mirror.visible = guides.visible = false;
     renderer.setRenderTarget(target);
     renderer.render(scene, cam);
+    shadowsMoved = true; // the shadow map now holds this pose
     [shadowFloor.visible, mirror.visible, guides.visible] = floor;
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
@@ -677,8 +726,12 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     key.shadow.map = null;
     renderer.setPixelRatio(1);
     renderer.setSize(W, H, false);
-    mirror.getRenderTarget().setSize(W, H);
+    const target = mirror.getRenderTarget();
+    target.samples = 4;
+    target.dispose();
+    target.setSize(W, H);
     pose(time);
+    shadowsMoved = true;
     renderer.render(scene, camera);
     const png = renderer.domElement.toDataURL("image/png").split(",")[1];
     key.shadow.mapSize.setScalar(was.shadow);

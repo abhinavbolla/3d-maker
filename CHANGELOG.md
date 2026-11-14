@@ -45,3 +45,10 @@ Notable changes to 3D Maker. The format follows
   and say where the section goes.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
+
+### Changed
+
+- The view uses much less GPU: motion plays at up to 30 frames a second and waits while the window
+  is in the background, the shadow map is kept while only the view moves, the floor's reflection
+  draws a sixteenth of the samples on a Retina screen, and app updates that leave the view as it
+  was no longer redraw it. Pictures and screenshots are unchanged.

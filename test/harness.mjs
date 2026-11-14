@@ -45,9 +45,17 @@ export async function startHarness({ port = 5178 } = {}) {
     });
 
   // Opens a fresh app window; returns evaluate(expression) for it.
-  async function openWindow() {
-    const { targetId } = await send("Target.createTarget", { url: `http://localhost:${port}/` });
+  // scale: device pixels per CSS pixel, 2 for a Retina screen. preload: a
+  // script run in the page before the app's own.
+  async function openWindow({ scale, preload } = {}) {
+    const { targetId } = await send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+    if (scale) await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: scale, mobile: false }, sessionId);
+    if (preload) {
+      await send("Page.enable", {}, sessionId);
+      await send("Page.addScriptToEvaluateOnNewDocument", { source: preload }, sessionId);
+    }
+    await send("Page.navigate", { url: `http://localhost:${port}/` }, sessionId);
     const evaluate = async (expression) => {
       const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
       if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
@@ -124,3 +132,59 @@ export function checks() {
     },
   };
 }
+
+// A preload script for openWindow that counts what the page asks WebGL to
+// draw, below three.js, so it sees every pass however the view makes it.
+// window.__gl.take() returns the counts since the last take: frames (frames
+// that drew anything), passes (clears of a target: the frame itself, the
+// floor's mirror, the shadow map), draws, and pixels and samples (each
+// pass's size, and that times its multisampling).
+export const GL_COUNTER = `(() => {
+  const fbSamples = new Map(), rbSamples = new Map();
+  let drawFb = null, rb = null, vw = 0, vh = 0, defaultSamples = null;
+  let c = { frames: 0, passes: 0, draws: 0, pixels: 0, samples: 0 };
+  let drewThisFrame = false;
+  for (const P of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
+    const wrap = (name, f) => { const o = P[name]; if (o) P[name] = function (...a) { f.call(this, ...a); return o.apply(this, a); }; };
+    wrap("bindFramebuffer", function (t, fb) { if (t !== this.READ_FRAMEBUFFER) drawFb = fb; });
+    wrap("bindRenderbuffer", (t, r) => (rb = r));
+    wrap("renderbufferStorageMultisample", (t, s) => rbSamples.set(rb, s));
+    wrap("framebufferRenderbuffer", (t, att, rt, r) => { if (t !== 0x8ca8) fbSamples.set(drawFb, rbSamples.get(r) ?? 1); });
+    wrap("viewport", (x, y, w, h) => ((vw = w), (vh = h)));
+    wrap("clear", function (bits) {
+      if (!(bits & (this.COLOR_BUFFER_BIT | this.DEPTH_BUFFER_BIT))) return;
+      if (!drawFb && defaultSamples === null) defaultSamples = Math.max(1, this.getParameter(this.SAMPLES));
+      const s = drawFb ? (fbSamples.get(drawFb) || 1) : defaultSamples;
+      c.passes++; c.pixels += vw * vh; c.samples += vw * vh * s;
+    });
+    const draw = () => { c.draws++; drewThisFrame = true; };
+    for (const n of ["drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced", "drawRangeElements"]) wrap(n, draw);
+  }
+  const raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (cb) => raf((t) => {
+    drewThisFrame = false;
+    cb(t);
+    if (drewThisFrame) c.frames++;
+  });
+  window.__gl = { take() { const r = c; c = { frames: 0, passes: 0, draws: 0, pixels: 0, samples: 0 }; drewThisFrame = false; return r; } };
+})();`;
+
+// A preload script that takes animation frames off the screen's clock: they
+// run only when window.__frames.step(n) runs n of them, 1/60 s apart. Put it
+// before GL_COUNTER. Frames are slow in software GL, so this is how a test
+// sees what a second of a 60 Hz screen would draw.
+export const STEPPED_FRAMES = `(() => {
+  let queue = [], now = performance.now(), id = 0;
+  window.requestAnimationFrame = (cb) => (queue.push({ cb, id: ++id }), id);
+  window.cancelAnimationFrame = (n) => (queue = queue.filter((q) => q.id !== n));
+  window.__frames = {
+    step(n = 1) {
+      for (let i = 0; i < n; i++) {
+        now += 1000 / 60;
+        const run = queue;
+        queue = [];
+        for (const q of run) q.cb(now);
+      }
+    },
+  };
+})();`;

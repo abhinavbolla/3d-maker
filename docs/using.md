@@ -17,7 +17,7 @@ The [README](../README.md) gets you to a first model. This page is the full guid
 - Scroll with a mouse wheel, or pinch on a trackpad, to move towards what the pointer is on. Over empty space you keep flying, so you can travel to any part of a big model and look at it up close.
 - Double-click a point to bring it to the middle; the view then turns around it. Fit (or F) frames the whole model from a corner, and Esc deselects.
 - The view cube at the bottom right turns with the model. Click a side, an edge or a corner to look from there without losing your place, or drag the cube to turn the view. Its red, green and blue lines are the X, Y and Z axes, and the red and green lines on the ground are the X and Y axes.
-- Moving parts play in the view; Pause stops them.
+- Moving parts play in the view; Pause stops them. They also wait while the window is hidden or another window is in front, and go on when you come back.
 
 ## What Claude can draw
 

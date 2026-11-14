@@ -1,8 +1,8 @@
 // The app's commands in a real app window (headless Chrome), without Claude:
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
-import { startHarness, checks } from "./harness.mjs";
-import { writeFileSync, rmSync } from "node:fs";
+import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER } from "./harness.mjs";
+import { writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -349,6 +349,32 @@ joint("Rod", "Piston", top);` });
   check(swiped.wheel < 12, `a mouse wheel still zooms to the pointer after that (${Math.round(swiped.wheel)} px)`);
   check(swiped.pinch > 3, `and a pinch zooms (${Math.round(swiped.pinch)} px)`);
   check(swiped.straight.dy < -15 && Math.abs(swiped.straight.dx) < 4, `and two fingers moved straight up slide the view, not zoom it (${JSON.stringify(swiped.straight)})`);
+
+  // What the view costs the GPU, counted below three.js on a Retina-sized
+  // window, with the rotor head (47 parts that turn). A still view draws
+  // nothing; motion draws at most every other frame of a 60 Hz screen, in at
+  // most three passes (the shadow map, the floor's mirror, the view) that
+  // stay within a stated number of samples; turning the view leaves the
+  // shadow map alone; a window in the background draws nothing.
+  const g = await h.openWindow({ scale: 2, preload: STEPPED_FRAMES + GL_COUNTER });
+  await h.command(g, "set_model", { script: readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8") });
+  await h.command(g, "screenshot", { width: 200, height: 150 }); // waits for the fine mesh
+  const cost = (js) => g(`(async () => { window.__gl.take(); { ${js}; } const c = window.__gl.take(); const px = document.querySelector("#viewport canvas"); return { ...c, canvas: px.width * px.height }; })()`);
+  await g(`document.getElementById("play").click(); window.__frames.step(2)`);
+  const idle = await cost(`for (let i = 0; i < 5; i++) window.__3dmaker.select(null); const c = document.querySelector("#viewport canvas"); for (let i = 0; i < 20; i++) c.dispatchEvent(new PointerEvent("pointermove", { clientX: 300 + i, clientY: 300, bubbles: true })); window.__frames.step(120); await new Promise((r) => setTimeout(r, 2000))`);
+  check(idle.draws === 0, `a still view draws nothing for two seconds, hovered and with the app's state re-rendered (${JSON.stringify(idle)})`);
+  await g(`document.getElementById("play").click()`);
+  const playing = await cost(`window.__frames.step(30)`);
+  const perFrame = (c, k) => c[k] / Math.max(c.frames, 1);
+  check(playing.frames >= 12 && playing.frames <= 16, `moving parts draw every other frame of a 60 Hz screen (${playing.frames} of 30)`);
+  check(perFrame(playing, "passes") <= 3 && perFrame(playing, "samples") <= 5.5 * playing.canvas, `in at most 3 passes and 5.5 samples per window pixel (${perFrame(playing, "passes")} passes, ${(perFrame(playing, "samples") / playing.canvas).toFixed(2)} samples)`);
+  await g(`document.getElementById("play").click(); window.__frames.step(2)`);
+  const orbit = await cost(`const c = document.querySelector("#viewport canvas"); const ev = (t, x) => c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: 300, button: 0, buttons: 1, pointerId: 9, bubbles: true })); ev("pointerdown", 300); for (let i = 1; i <= 6; i++) { ev("pointermove", 300 + i * 10); window.__frames.step(1); } ev("pointerup", 360); window.__frames.step(1)`);
+  check(orbit.frames === 7 && orbit.passes === 2 * orbit.frames, `turning the view draws each frame without the shadow map (${orbit.frames} frames, ${orbit.passes} passes)`);
+  await g(`document.getElementById("play").click(); window.__frames.step(2); window.dispatchEvent(new Event("blur"))`);
+  const away = await cost(`window.__frames.step(30)`);
+  const back = await cost(`window.dispatchEvent(new Event("focus")); window.__frames.step(30)`);
+  check(away.draws === 0 && back.frames >= 12, `motion waits while the window is in the background and goes on when it is back (${away.draws} draws away, ${back.frames} frames back)`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);
