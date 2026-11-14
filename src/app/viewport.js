@@ -165,6 +165,12 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   const shadowFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.24, depthWrite: false }));
   shadowFloor.receiveShadow = true;
   shadowFloor.renderOrder = -2;
+  // In the window the mirror's picture is drawn one pixel per CSS pixel. The
+  // floor blurs and fades it, so on a Retina screen that and 2 samples (not 4)
+  // look the same as full size and draw an eighth of the samples. With no
+  // samples, thin moving parts get stepped edges that crawl. Below a pixel
+  // ratio of 2 it keeps 4 samples, so at a ratio of 1 it is as before. Saved
+  // pictures get it at full size, 4 samples.
   const mirror = new Reflector(new THREE.PlaneGeometry(1, 1), { shader: FLOOR, multisample: 4, clipBias: 0.001 });
   Object.assign(mirror.material, { transparent: true, premultipliedAlpha: true, depthWrite: false });
   mirror.renderOrder = -1;
@@ -317,23 +323,63 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   const timer = new THREE.Timer();
   let time = 0;
   let loopSeconds = 4;
-  const moving = () => playing && [...parts.values()].some((p) => p.part.frames);
-  function tick() {
+  // The key light stands still with the model, so the shadow map only needs
+  // drawing again when parts move or change, not when the view turns.
+  let shadowsMoved = true;
+  renderer.domElement.addEventListener("webglcontextrestored", () => {
+    shadowsMoved = true;
+    render();
+  });
+  // Motion stops while the page is hidden and goes on from where it was when
+  // it shows again.
+  const moving = () => playing && !document.hidden && [...parts.values()].some((p) => p.part.frames);
+  document.addEventListener("visibilitychange", () => {
+    if (!moving()) return;
+    timer.update();
+    schedule();
+  });
+  // Motion on its own is drawn at up to 60 frames a second, which is every
+  // frame of most screens and every other one of a 120 Hz screen, and at up
+  // to 30 while another window has focus (you are typing to Claude beside
+  // it, say). Anything you do still gets every frame.
+  let asked = false; // a frame was asked for by something other than the motion
+  let drawnAt = -Infinity;
+  function tick(now) {
     frame = 0;
+    if (!asked) {
+      if (!moving()) return;
+      // 4 ms short of the full gap, so a frame that comes a little early still counts.
+      if (now - drawnAt < 1000 / (document.hasFocus() ? 60 : 30) - 4) return schedule();
+    }
+    asked = false;
+    drawnAt = now;
     timer.update();
     const dt = timer.getDelta();
-    if (moving()) time += Math.min(dt, 0.1);
+    if (moving()) {
+      time += Math.min(dt, 0.1);
+      shadowsMoved = true;
+    }
     pose(time);
     if (guides.visible) sizePivot();
-    renderer.render(scene, camera);
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = shadowsMoved;
+    try {
+      renderer.render(scene, camera);
+      shadowsMoved = false;
+    } finally {
+      // Pictures and screenshots draw their own shadows.
+      renderer.shadowMap.autoUpdate = true;
+    }
     if (!seen.equals(camera.quaternion)) onView(camera);
     seen.copy(camera.quaternion);
-    if (moving()) render();
+    if (moving()) schedule();
+  }
+  function schedule() {
+    if (!frame) frame = requestAnimationFrame(tick);
   }
   function render() {
-    if (!frame) {
-      frame = requestAnimationFrame(tick);
-    }
+    asked = true;
+    schedule();
   }
 
   // Poses come from the kernel, sampled over the loop (60 per second); in
@@ -365,14 +411,21 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     }
   }
 
+  function sizeMirror(w, h, samples) {
+    const target = mirror.getRenderTarget();
+    if (target.samples !== samples) {
+      target.samples = samples;
+      target.dispose();
+    }
+    target.setSize(w, h);
+  }
   function resize() {
     const { clientWidth: w, clientHeight: h } = container;
     if (!w || !h) return;
     renderer.setSize(w, h, false);
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
-    const px = renderer.getPixelRatio();
-    mirror.getRenderTarget().setSize(Math.round(w * px), Math.round(h * px));
+    sizeMirror(w, h, renderer.getPixelRatio() >= 2 ? 2 : 4);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     render();
@@ -429,6 +482,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       mesh.material.dispose();
     }
     parts = next;
+    shadowsMoved = true;
     const box = modelBox();
     if (!lastBox || !box || !box.equals(lastBox)) {
       lastBox = box;
@@ -465,7 +519,10 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   }
 
   function select(name) {
-    selected = name && parts.has(name) ? name : null;
+    const next = name && parts.has(name) ? name : null;
+    // The app asks again on every change of its state, most of them nothing to do with the view.
+    if (next === selected) return;
+    selected = next;
     highlight();
   }
 
@@ -642,6 +699,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     shadowFloor.visible = mirror.visible = guides.visible = false;
     renderer.setRenderTarget(target);
     renderer.render(scene, cam);
+    shadowsMoved = true; // the shadow map now holds this pose
     [shadowFloor.visible, mirror.visible, guides.visible] = floor;
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
@@ -668,30 +726,33 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     const W = Math.min(Math.round(width), renderer.capabilities.maxTextureSize);
     const H = Math.round((W * h) / w);
     const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, shadow: key.shadow.mapSize.x, guides: guides.visible };
-    selected = null;
-    highlight();
-    grid.visible = guides.visible = false;
-    scene.background = paper;
-    key.shadow.mapSize.setScalar(4096);
-    key.shadow.map?.dispose();
-    key.shadow.map = null;
-    renderer.setPixelRatio(1);
-    renderer.setSize(W, H, false);
-    mirror.getRenderTarget().setSize(W, H);
-    pose(time);
-    renderer.render(scene, camera);
-    const png = renderer.domElement.toDataURL("image/png").split(",")[1];
-    key.shadow.mapSize.setScalar(was.shadow);
-    key.shadow.map?.dispose();
-    key.shadow.map = null;
-    grid.visible = was.grid;
-    guides.visible = was.guides;
-    scene.background = theme.bg;
-    renderer.setPixelRatio(was.ratio);
-    selected = was.selected;
-    highlight();
-    resize();
-    return { png, width: W, height: H };
+    shadowsMoved = true;
+    try {
+      selected = null;
+      highlight();
+      grid.visible = guides.visible = false;
+      scene.background = paper;
+      key.shadow.mapSize.setScalar(4096);
+      key.shadow.map?.dispose();
+      key.shadow.map = null;
+      renderer.setPixelRatio(1);
+      renderer.setSize(W, H, false);
+      sizeMirror(W, H, 4);
+      pose(time);
+      renderer.render(scene, camera);
+      return { png: renderer.domElement.toDataURL("image/png").split(",")[1], width: W, height: H };
+    } finally {
+      key.shadow.mapSize.setScalar(was.shadow);
+      key.shadow.map?.dispose();
+      key.shadow.map = null;
+      grid.visible = was.grid;
+      guides.visible = was.guides;
+      scene.background = theme.bg;
+      renderer.setPixelRatio(was.ratio);
+      selected = was.selected;
+      highlight();
+      resize();
+    }
   }
 
   // Where a point of the model is in the window, px.

@@ -27,7 +27,9 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
    shows first; a finer mesh follows in the background, and screenshots wait for it.
 5. [src/app/viewport.js](../src/app/viewport.js) draws the parts with three.js in a studio (a
    key light with shadows, a floor with a faint reflection, and materials), plays their motion,
-   and takes the screenshots Claude looks at. [src/app/navigate.js](../src/app/navigate.js)
+   and takes the screenshots Claude looks at. It draws a frame only when something changes, and
+   motion at up to 60 frames a second (30 while the window is not focused, none while it is
+   hidden). [src/app/navigate.js](../src/app/navigate.js)
    moves the camera the way CAD programs do, and
    [src/app/viewcube.js](../src/app/viewcube.js) draws the view cube.
 

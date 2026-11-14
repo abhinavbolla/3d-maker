@@ -1,8 +1,8 @@
 // The app's commands in a real app window (headless Chrome), without Claude:
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
-import { startHarness, checks } from "./harness.mjs";
-import { writeFileSync, rmSync } from "node:fs";
+import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER } from "./harness.mjs";
+import { writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -349,6 +349,50 @@ joint("Rod", "Piston", top);` });
   check(swiped.wheel < 12, `a mouse wheel still zooms to the pointer after that (${Math.round(swiped.wheel)} px)`);
   check(swiped.pinch > 3, `and a pinch zooms (${Math.round(swiped.pinch)} px)`);
   check(swiped.straight.dy < -15 && Math.abs(swiped.straight.dx) < 4, `and two fingers moved straight up slide the view, not zoom it (${JSON.stringify(swiped.straight)})`);
+
+
+  // What the view costs the GPU, counted below three.js on a Retina-sized
+  // window, with the rotor head (47 parts that turn). A still view draws
+  // nothing. Motion draws at up to 60 frames a second, 30 while another
+  // window has focus and none while the page is hidden, in at most three
+  // passes (the shadow map, the floor's mirror, the view) within a stated
+  // size. The shadow map is drawn again when parts change, and left alone
+  // while only the view turns.
+  const g = await h.openWindow({ scale: 2, preload: STEPPED_FRAMES + GL_COUNTER });
+  await h.command(g, "set_model", { script: readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8") });
+  await h.command(g, "screenshot", { width: 200, height: 150 }); // waits for the fine mesh
+  // The page's focus and visibility, set by the test: page(hidden, focused).
+  await g(`(() => {
+    let hidden = false, focused = true;
+    Object.defineProperty(document, "hidden", { get: () => hidden, configurable: true });
+    Object.defineProperty(document, "visibilityState", { get: () => (hidden ? "hidden" : "visible"), configurable: true });
+    document.hasFocus = () => focused;
+    window.page = (h, f) => { hidden = h; focused = f; document.dispatchEvent(new Event("visibilitychange")); };
+  })()`);
+  const cost = (js) => g(`(async () => { window.__gl.take(); { ${js}; } const c = window.__gl.take(); const px = document.querySelector("#viewport canvas"); return { ...c, canvas: px.width * px.height }; })()`);
+  const perFrame = (c, k) => c[k] / Math.max(c.frames, 1);
+  await g(`document.getElementById("play").click(); window.__frames.step(2)`);
+  const idle = await cost(`for (let i = 0; i < 5; i++) window.__3dmaker.select(null); const c = document.querySelector("#viewport canvas"); for (let i = 0; i < 20; i++) c.dispatchEvent(new PointerEvent("pointermove", { clientX: 300 + i, clientY: 300, bubbles: true })); window.__frames.step(120); await new Promise((r) => setTimeout(r, 2000))`);
+  check(idle.draws === 0, `a still view draws nothing in 120 frames, nor in 2 s of timers, hovered and with the app's state re-rendered (${JSON.stringify(idle)})`);
+  const shadowDrawn = (c) => c.frames > 0 && c.passes === 3 * c.frames;
+  const slid = await cost(`await window.__3dmaker.setValue("Collective (mm)", 25); window.__frames.step(2)`);
+  await h.command(g, "screenshot", { width: 200, height: 150 });
+  await g("window.__frames.step(2)");
+  const shotAt = await cost(`await window.__3dmaker.call("screenshot", { width: 200, height: 150, at: 0.5 }); window.__gl.take(); window.__frames.step(2)`);
+  const pic = await cost(`window.__3dmaker.picture({ width: 320 }); window.__gl.take(); window.__frames.step(2)`);
+  check(shadowDrawn(slid) && shadowDrawn(shotAt) && shadowDrawn(pic), `while paused, the shadow map is drawn again after a slider change, a screenshot and a picture (${[slid, shotAt, pic].map((c) => `${c.passes} passes in ${c.frames} frames`).join("; ")})`);
+  const orbit = await cost(`const c = document.querySelector("#viewport canvas"); const ev = (t, x) => c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: 300, button: 0, buttons: 1, pointerId: 9, bubbles: true })); ev("pointerdown", 300); for (let i = 1; i <= 6; i++) { ev("pointermove", 300 + i * 10); window.__frames.step(1); } ev("pointerup", 360); window.__frames.step(1)`);
+  check(orbit.frames === 7 && orbit.passes === 2 * orbit.frames, `turning the view draws each frame without the shadow map (${orbit.frames} frames, ${orbit.passes} passes)`);
+  await g(`document.getElementById("play").click(); window.__frames.step(2)`);
+  const at60 = await cost(`window.__frames.step(30)`);
+  const at120 = await cost(`window.__frames.step(60, 120)`);
+  check(at60.frames >= 29 && at120.frames >= 29 && at120.frames <= 31, `moving parts draw 60 frames a second: every frame at 60 Hz, every other at 120 Hz (${at60.frames} of 30, ${at120.frames} of 60)`);
+  check(perFrame(at60, "passes") <= 3 && perFrame(at60, "pixels") <= 2.4 * at60.canvas && perFrame(at60, "samples") <= 6 * at60.canvas, `in at most 3 passes, 2.4 pixels and 6 samples per window pixel (${perFrame(at60, "passes")} passes, ${(perFrame(at60, "pixels") / at60.canvas).toFixed(2)} pixels, ${(perFrame(at60, "samples") / at60.canvas).toFixed(2)} samples)`);
+  const blurred = await cost(`window.page(false, false); window.__frames.step(30); window.__frames.step(60, 120)`);
+  check(blurred.frames >= 28 && blurred.frames <= 32, `with another window in focus they draw 30 a second (${blurred.frames} in 30 frames at 60 Hz and 60 at 120 Hz)`);
+  const hidden = await cost(`window.page(true, false); window.__frames.step(30)`);
+  const shown = await cost(`window.page(false, true); window.__frames.step(30)`);
+  check(hidden.draws === 0 && shown.frames >= 29, `a hidden page draws nothing, and motion goes on when it shows (${hidden.draws} draws hidden, ${shown.frames} of 30 frames back)`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);
