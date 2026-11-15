@@ -475,6 +475,85 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
   return { positions: Float32Array.from(pos), normals: Float32Array.from(nrm), indices: corner };
 }
 
+// A lighter copy of a drawing mesh, for where its detail cannot be seen: the
+// shadow it casts and its reflection in the floor. All vertices in one cell
+// of a grid move to their average, and triangles that collapse are dropped,
+// so the surface stays joined wherever it was joined, sharp edges included,
+// and no vertex moves by more than a cell's diagonal. Within a cell, vertices
+// that face different ways (along different ones of the six axis directions)
+// stay separate vertices with their own normals. That keeps both skins of a
+// plate thinner than a cell, as two sheets back to back, so a thin blade
+// still casts a shadow and is shaded on both sides.
+export function lightMesh({ positions: P, normals: N, indices: I }, cell) {
+  const nv = P.length / 3;
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity, y1 = -Infinity, z1 = -Infinity;
+  for (let v = 0; v < nv; v++) {
+    x0 = Math.min(x0, P[v * 3]);
+    y0 = Math.min(y0, P[v * 3 + 1]);
+    y1 = Math.max(y1, P[v * 3 + 1]);
+    z0 = Math.min(z0, P[v * 3 + 2]);
+    z1 = Math.max(z1, P[v * 3 + 2]);
+  }
+  const ny = Math.floor((y1 - y0) / cell) + 1, nz = Math.floor((z1 - z0) / cell) + 1;
+  const ids = new Map(); // grid cell and direction -> new vertex
+  const places = new Map(); // grid cell -> its place
+  const to = new Uint32Array(nv); // old vertex -> new vertex
+  const placeOf = []; // new vertex -> its cell's place
+  const facing = []; // per new vertex: its normals, summed
+  const at = []; // per place: its positions and their count, summed
+  for (let v = 0; v < nv; v++) {
+    const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+    const a = N[v * 3], b = N[v * 3 + 1], c = N[v * 3 + 2];
+    const ax = Math.abs(a), ay = Math.abs(b), az = Math.abs(c);
+    const way = ax >= ay && ax >= az ? (a < 0 ? 0 : 1) : ay >= az ? (b < 0 ? 2 : 3) : c < 0 ? 4 : 5;
+    const where = (Math.floor((x - x0) / cell) * ny + Math.floor((y - y0) / cell)) * nz + Math.floor((z - z0) / cell);
+    let place = places.get(where);
+    if (place === undefined) {
+      place = at.length / 4;
+      places.set(where, place);
+      at.push(0, 0, 0, 0);
+    }
+    at[place * 4] += x;
+    at[place * 4 + 1] += y;
+    at[place * 4 + 2] += z;
+    at[place * 4 + 3]++;
+    let id = ids.get(where * 6 + way);
+    if (id === undefined) {
+      id = placeOf.length;
+      ids.set(where * 6 + way, id);
+      placeOf.push(place);
+      facing.push(0, 0, 0);
+    }
+    to[v] = id;
+    facing[id * 3] += a;
+    facing[id * 3 + 1] += b;
+    facing[id * 3 + 2] += c;
+  }
+  const n = placeOf.length;
+  const positions = new Float32Array(n * 3), normals = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const o = placeOf[i] * 4, k = at[o + 3];
+    positions[i * 3] = at[o] / k;
+    positions[i * 3 + 1] = at[o + 1] / k;
+    positions[i * 3 + 2] = at[o + 2] / k;
+    const l = Math.hypot(facing[i * 3], facing[i * 3 + 1], facing[i * 3 + 2]) || 1;
+    normals[i * 3] = facing[i * 3] / l;
+    normals[i * 3 + 1] = facing[i * 3 + 1] / l;
+    normals[i * 3 + 2] = facing[i * 3 + 2] / l;
+  }
+  const kept = new Uint32Array(I.length);
+  let m = 0;
+  for (let t = 0; t < I.length; t += 3) {
+    const a = to[I[t]], b = to[I[t + 1]], c = to[I[t + 2]];
+    // Collapsed: two of its corners are in one cell.
+    if (placeOf[a] === placeOf[b] || placeOf[b] === placeOf[c] || placeOf[a] === placeOf[c]) continue;
+    kept[m++] = a;
+    kept[m++] = b;
+    kept[m++] = c;
+  }
+  return { positions, normals, indices: kept.slice(0, m) };
+}
+
 // Where the surface pinches inside a cell, one vertex ends up joined to a
 // neighbour twice and their edge is shared by four triangles. The ring of
 // neighbours around such a vertex then passes through a point twice; split

@@ -138,11 +138,12 @@ export function checks() {
 // window.__gl.take() returns the counts since the last take: frames (frames
 // that drew anything), passes (clears of a target: the frame itself, the
 // floor's mirror, the shadow map), draws, and pixels and samples (each
-// pass's size, and that times its multisampling).
+// pass's size, and that times its multisampling) and triangles.
 export const GL_COUNTER = `(() => {
   const fbSamples = new Map(), rbSamples = new Map();
   let drawFb = null, rb = null, vw = 0, vh = 0, defaultSamples = null;
-  let c = { frames: 0, passes: 0, draws: 0, pixels: 0, samples: 0 };
+  const none = () => ({ frames: 0, passes: 0, draws: 0, pixels: 0, samples: 0, triangles: 0 });
+  let c = none();
   let drewThisFrame = false;
   for (const P of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
     const wrap = (name, f) => { const o = P[name]; if (o) P[name] = function (...a) { f.call(this, ...a); return o.apply(this, a); }; };
@@ -157,8 +158,9 @@ export const GL_COUNTER = `(() => {
       const s = drawFb ? (fbSamples.get(drawFb) || 1) : defaultSamples;
       c.passes++; c.pixels += vw * vh; c.samples += vw * vh * s;
     });
-    const draw = () => { c.draws++; drewThisFrame = true; };
-    for (const n of ["drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced", "drawRangeElements"]) wrap(n, draw);
+    // count: which argument holds the number of vertices drawn.
+    const draw = (count) => function (mode, ...a) { c.draws++; drewThisFrame = true; if (mode === this.TRIANGLES) c.triangles += a[count] / 3; };
+    for (const [n, count] of [["drawArrays", 1], ["drawElements", 0], ["drawArraysInstanced", 1], ["drawElementsInstanced", 0], ["drawRangeElements", 2]]) wrap(n, draw(count));
   }
   const raf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = (cb) => raf((t) => {
@@ -166,7 +168,7 @@ export const GL_COUNTER = `(() => {
     cb(t);
     if (drewThisFrame) c.frames++;
   });
-  window.__gl = { take() { const r = c; c = { frames: 0, passes: 0, draws: 0, pixels: 0, samples: 0 }; drewThisFrame = false; return r; } };
+  window.__gl = { take() { const r = c; c = none(); drewThisFrame = false; return r; } };
 })();`;
 
 // A preload script that takes animation frames off the screen's clock: they

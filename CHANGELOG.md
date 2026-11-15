@@ -47,6 +47,9 @@ Notable changes to 3D Maker. The format follows
   remembers what you tell Claude, an isometric view, a grid border and heavier lines.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
+- `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
+  silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
+  view and moving parts.
 
 ### Changed
 
@@ -54,3 +57,6 @@ Notable changes to 3D Maker. The format follows
   another window, none while the window is hidden), the shadow map is kept while only the view
   moves, the floor's reflection draws an eighth of the samples on a Retina screen, and app updates
   that leave the view as it was no longer redraw it. Pictures and screenshots are unchanged.
+- The view's shadow and floor reflection cost the GPU much less. Both are drawn before the view
+  instead of in the middle of it, from a lighter copy of each part with about a ninth of its
+  triangles. Pictures and screenshots still use the full meshes.

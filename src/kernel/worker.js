@@ -2,10 +2,15 @@
 // parallel; each job is independent.
 import { runScript } from "./script.js";
 import { compile } from "./sdf.js";
-import { meshSDF, meshBounds, meshArea, displayMesh } from "./mesh.js";
+import { meshSDF, meshBounds, meshArea, displayMesh, lightMesh } from "./mesh.js";
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
 import { viewOutline, sectionView } from "./drawing.js";
+
+// A part with at least this many triangles gets a lighter copy, its vertices
+// merged over this many of its cells: about a ninth of the triangles.
+const LIGHT_FROM = 4000;
+const LIGHT_CELLS = 3;
 
 self.onmessage = ({ data: job }) => {
   try {
@@ -21,7 +26,14 @@ self.onmessage = ({ data: job }) => {
       // vertices split along sharp edges.
       const d = displayMesh(m);
       const result = { ...d, cellSize: m.cellSize, volume: m.volume, area: meshArea(m), bounds: m.indices.length ? meshBounds(m) : null };
-      self.postMessage({ id: job.id, ok: true, result }, [d.positions.buffer, d.indices.buffer, d.normals.buffer]);
+      const buffers = [d.positions.buffer, d.indices.buffer, d.normals.buffer];
+      // A lighter copy for the view's shadow and reflection, where a mesh is
+      // big enough for it to save anything.
+      if (d.indices.length >= LIGHT_FROM * 3) {
+        result.light = lightMesh(d, m.cellSize * LIGHT_CELLS);
+        buffers.push(result.light.positions.buffer, result.light.indices.buffer, result.light.normals.buffer);
+      }
+      self.postMessage({ id: job.id, ok: true, result }, buffers);
     } else if (job.type === "fit") {
       self.postMessage({ id: job.id, ok: true, result: checkPairs(job.parts, job.pairs, job) });
     } else if (job.type === "export") {

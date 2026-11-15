@@ -30,6 +30,23 @@ cd src-tauri && cargo test -- --include-ignored   # also finds and runs your Cla
 
 It needs Google Chrome. It does not drive the desktop window itself, because WebDriver for Tauri does not run on macOS; the desktop app's way of starting Claude is covered by the Rust test.
 
+## GPU load
+
+```bash
+node test/gpu-load.mjs                        # the rotor head: still, turning, parts moving
+node test/gpu-load.mjs runs/x/model.js        # any saved script
+node test/gpu-load.mjs --root ../other-copy   # the app from another checkout, to compare two versions
+```
+
+This measures what the view really costs the GPU, which `npm test` cannot: the tests draw in software. It opens the app in Chrome with hardware WebGL and runs each case for a few seconds. It needs a Mac with Apple silicon and the Xcode command line tools (for `clang`), and no admin rights.
+
+It reports two things per case:
+
+- **At the screen's pace**, as you would use the app: the GPU's power in watts, the frames drawn, and how long the GPU was busy for that Chrome per second. Power is read from the energy counters macOS keeps ([test/gpu-power.c](../test/gpu-power.c)) and is the whole machine's, so the still case is the floor to compare against. Busy time is the figure Activity Monitor shows per process; it says little about the work done, because a lightly loaded GPU slows its clock until it is busy most of the time anyway.
+- **Flat out:** frames drawn back to back, which keeps the GPU at full speed. Frames per second measured this way is how much work a frame is, and is the steadiest figure of all; GPU time per frame is the GPU's share of it.
+
+Each case runs in three rounds, taking turns, and the middle value is printed, with the lowest and highest for power. Other apps share the GPU and move the power readings, so close the ones that draw a lot before a run you want to quote. Without `--window` the frames come 60 a second, whatever the screen. CI does not run it: its numbers depend on the machine.
+
 ## Benchmarks
 
 How to run them, and every result so far, are in [benchmarks.md](benchmarks.md).
