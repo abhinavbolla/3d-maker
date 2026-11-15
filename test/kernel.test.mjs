@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compile, threadRoot } from "../src/kernel/sdf.js";
 import { checkPairs } from "../src/kernel/fit.js";
-import { meshSDF, meshVolume, meshBounds, openEdges, toSTL, displayMesh } from "../src/kernel/mesh.js";
+import { meshSDF, meshVolume, meshBounds, openEdges, toSTL, displayMesh, lightMesh } from "../src/kernel/mesh.js";
 import { runScript } from "../src/kernel/script.js";
 import { to3MF } from "../src/kernel/threemf.js";
 import { meshPart, splitPieces } from "../src/kernel/pieces.js";
@@ -127,6 +127,48 @@ test("sharp edges are drawn sharp, smooth surfaces smooth", () => {
   // A sphere has no edges, so no vertex is split.
   const s = meshOf({ t: "sphere", r: 20 }, { normals: true });
   assert.equal(displayMesh(s).positions.length, s.positions.length);
+});
+
+test("the lighter copy of a mesh keeps its shape with far fewer triangles", () => {
+  // Signed volume of a triangle mesh; it is only meaningful for a closed one.
+  const volume = ({ positions: P, indices: I }) => {
+    let v = 0;
+    for (let t = 0; t < I.length; t += 3) {
+      const [a, b, c] = [I[t] * 3, I[t + 1] * 3, I[t + 2] * 3];
+      v += P[a] * (P[b + 1] * P[c + 2] - P[b + 2] * P[c + 1]) - P[a + 1] * (P[b] * P[c + 2] - P[b + 2] * P[c]) + P[a + 2] * (P[b] * P[c + 1] - P[b + 1] * P[c]);
+    }
+    return v / 6;
+  };
+  // A machined block with a bore and a boss.
+  const node = { t: "subtract", a: { t: "union", c: [{ t: "box", s: [80, 60, 30] }, { t: "move", v: [0, 0, 20], c: { t: "cylinder", r: 15, h: 20 } }] }, b: [{ t: "cylinder", r: 8, h: 100 }] };
+  const { f, box } = compile(node);
+  const m = meshSDF(f, box, { budget: 40000, normals: true });
+  const d = displayMesh(m);
+  const l = lightMesh(d, m.cellSize * 3);
+  assert.ok(l.indices.length < d.indices.length / 5, `${d.indices.length / 3} -> ${l.indices.length / 3} triangles`);
+  assert.equal(l.normals.length, l.positions.length);
+  for (const i of l.indices) assert.ok(i < l.positions.length / 3);
+  // Every vertex is still on the surface, to within a cell.
+  let off = 0;
+  for (let i = 0; i < l.positions.length; i += 3) off = Math.max(off, Math.abs(f(l.positions[i], l.positions[i + 1], l.positions[i + 2])));
+  assert.ok(off < m.cellSize * 3, `a vertex is ${off.toFixed(2)} mm off the surface (cell ${m.cellSize.toFixed(2)} mm)`);
+  // The same solid: its volume and its overall size.
+  assert.ok(Math.abs(volume(l) / volume(d) - 1) < 0.03, `volume ${volume(d).toFixed(0)} -> ${volume(l).toFixed(0)} mm3`);
+  const [bd, bl] = [meshBounds(d), meshBounds(l)];
+  for (let a = 0; a < 6; a++) assert.ok(Math.abs(bd[a] - bl[a]) < m.cellSize * 3, `bounds ${bd} -> ${bl}`);
+  // A plate thinner than the merging cell keeps both its skins.
+  const pm = meshPart({ t: "box", s: [200, 120, 4] }, { budget: 40000, normals: true });
+  assert.ok(pm.indices.length > 3000 && pm.cellSize < 4, `the plate has ${pm.indices.length / 3} triangles at ${pm.cellSize.toFixed(2)} mm`);
+  const pl = lightMesh(displayMesh(pm), 12);
+  let up = 0, down = 0;
+  for (let t = 0; t < pl.indices.length; t += 3) {
+    const [a, b, c] = [pl.indices[t] * 3, pl.indices[t + 1] * 3, pl.indices[t + 2] * 3];
+    const P = pl.positions;
+    const nz = (P[b] - P[a]) * (P[c + 1] - P[a + 1]) - (P[b + 1] - P[a + 1]) * (P[c] - P[a]);
+    if (nz > 0) up += nz / 2;
+    else down -= nz / 2;
+  }
+  assert.ok(up > 200 * 120 * 0.8 && down > 200 * 120 * 0.8, `the plate's top covers ${up.toFixed(0)} mm2 and its underside ${down.toFixed(0)} mm2 of 24000`);
 });
 
 test("a union of many parts gives exactly the nearest part's distance", () => {

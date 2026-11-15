@@ -215,7 +215,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
 
   // The mirror's own picture holds just the model: no backdrop, grid or shadow.
   const reflect = mirror.onBeforeRender;
-  mirror.onBeforeRender = function (...args) {
+  const drawMirror = (mirror.onBeforeRender = function (...args) {
     const was = [scene.background, renderer.getClearAlpha(), grid.visible, shadowFloor.visible, guides.visible];
     scene.background = null;
     renderer.setClearAlpha(0);
@@ -225,7 +225,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     mirrorFade.value.x = 0;
     [scene.background, , grid.visible, shadowFloor.visible, guides.visible] = was;
     renderer.setClearAlpha(was[1]);
-  };
+  });
 
   // Stands the lights and the floor around the model.
   let stageSize = 400; // the model's overall size, mm
@@ -364,7 +364,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     renderer.shadowMap.autoUpdate = false;
     renderer.shadowMap.needsUpdate = shadowsMoved;
     try {
-      renderer.render(scene, camera);
+      draw();
       shadowsMoved = false;
     } finally {
       // Pictures and screenshots draw their own shadows.
@@ -373,6 +373,38 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     if (!seen.equals(camera.quaternion)) onView(camera);
     seen.copy(camera.quaternion);
     if (moving()) schedule();
+  }
+  // One frame of the view. The floor's mirror is drawn first, and with it the
+  // shadow map if it is due, both from the parts' lighter copies: neither
+  // shows a part's fine detail, and together they were most of a frame's
+  // triangles. three.js would draw the mirror when it reaches the floor, in
+  // the middle of the view; the GPU then has to put the half-drawn view aside
+  // and pick it up again, which costs more than the mirror itself.
+  // Pictures and screenshots are drawn the plain way, from the full meshes.
+  function draw() {
+    if (!mirror.visible) return renderer.render(scene, camera);
+    scene.updateMatrixWorld();
+    camera.updateMatrixWorld();
+    lighten(true);
+    try {
+      drawMirror.call(mirror, renderer, scene, camera);
+    } finally {
+      lighten(false);
+    }
+    mirror.onBeforeRender = () => {};
+    try {
+      renderer.render(scene, camera);
+    } finally {
+      mirror.onBeforeRender = drawMirror;
+    }
+  }
+  // Shows each part's lighter copy in place of its mesh, or the mesh again.
+  function lighten(on) {
+    for (const { mesh, light } of parts.values()) {
+      if (!light) continue;
+      light.visible = on;
+      mesh.visible = !on;
+    }
   }
   function schedule() {
     if (!frame) frame = requestAnimationFrame(tick);
@@ -441,22 +473,39 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     geo.setIndex(new THREE.BufferAttribute(indices, 1));
     geo.computeBoundingSphere();
     const mesh = new THREE.Mesh(geo, fadeInMirror(new THREE.MeshPhysicalMaterial({ color: part.color, clearcoatRoughness: 0.3 })));
-    dress(mesh, part);
     mesh.receiveShadow = true;
     mesh.userData.name = part.name;
     const object = new THREE.Group();
     object.matrixAutoUpdate = false;
     object.add(mesh);
-    return { object, mesh };
+    // The part's lighter copy, shown only while the shadow map and the
+    // floor's mirror are drawn (see draw). It is never picked.
+    let light = null;
+    if (part.mesh.light) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(part.mesh.light.positions, 3));
+      g.setAttribute("normal", new THREE.BufferAttribute(part.mesh.light.normals, 3));
+      g.setIndex(new THREE.BufferAttribute(part.mesh.light.indices, 1));
+      g.boundingSphere = geo.boundingSphere;
+      light = new THREE.Mesh(g, mesh.material);
+      light.receiveShadow = true;
+      light.visible = false;
+      light.raycast = () => {};
+      object.add(light);
+    }
+    dress(mesh, light, part);
+    return { object, mesh, light };
   }
 
-  function dress(mesh, part) {
+  function dress(mesh, light, part) {
     const look = lookOf(part);
     if (mesh.userData.look === look) return;
     mesh.userData.look = look;
     Object.assign(mesh.material, LOOKS[look], { needsUpdate: true });
-    mesh.castShadow = look !== "glass";
-    mesh.renderOrder = look === "glass" ? 1 : 0;
+    for (const m of light ? [mesh, light] : [mesh]) {
+      m.castShadow = look !== "glass";
+      m.renderOrder = look === "glass" ? 1 : 0;
+    }
   }
 
   function setParts(list) {
@@ -466,7 +515,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       const old = parts.get(part.name);
       if (old && old.part.mesh === part.mesh) {
         old.mesh.material.color.set(part.color);
-        dress(old.mesh, part);
+        dress(old.mesh, old.light, part);
         old.part = part;
         next.set(part.name, old);
         parts.delete(part.name);
@@ -476,9 +525,10 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       content.add(made.object);
       next.set(part.name, { ...made, part });
     }
-    for (const { object, mesh } of parts.values()) {
+    for (const { object, mesh, light } of parts.values()) {
       content.remove(object);
       mesh.geometry.dispose();
+      light?.geometry.dispose();
       mesh.material.dispose();
     }
     parts = next;

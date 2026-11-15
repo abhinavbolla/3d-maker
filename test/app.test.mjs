@@ -493,8 +493,9 @@ joint("Rod", "Piston", top);` });
   // nothing. Motion draws at up to 60 frames a second, 30 while another
   // window has focus and none while the page is hidden, in at most three
   // passes (the shadow map, the floor's mirror, the view) within a stated
-  // size. The shadow map is drawn again when parts change, and left alone
-  // while only the view turns.
+  // size, the shadow and the mirror from lighter copies of the parts. The
+  // shadow map is drawn again when parts change, and left alone while only
+  // the view turns.
   const g = await h.openWindow({ scale: 2, preload: STEPPED_FRAMES + GL_COUNTER });
   await h.command(g, "set_model", { script: readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8") });
   await h.command(g, "screenshot", { width: 200, height: 150 }); // waits for the fine mesh
@@ -525,6 +526,16 @@ joint("Rod", "Piston", top);` });
   const at120 = await cost(`window.__frames.step(60, 120)`);
   check(at60.frames >= 29 && at120.frames >= 29 && at120.frames <= 31, `moving parts draw 60 frames a second: every frame at 60 Hz, every other at 120 Hz (${at60.frames} of 30, ${at120.frames} of 60)`);
   check(perFrame(at60, "passes") <= 3 && perFrame(at60, "pixels") <= 2.4 * at60.canvas && perFrame(at60, "samples") <= 6 * at60.canvas, `in at most 3 passes, 2.4 pixels and 6 samples per window pixel (${perFrame(at60, "passes")} passes, ${(perFrame(at60, "pixels") / at60.canvas).toFixed(2)} pixels, ${(perFrame(at60, "samples") / at60.canvas).toFixed(2)} samples)`);
+  // The shadow and the mirror are drawn from the parts' lighter copies, so a
+  // moving frame draws far fewer triangles than a picture, which draws the
+  // full meshes three times over.
+  const whole = await cost(`window.__3dmaker.picture({ width: 320 })`);
+  await g("window.__frames.step(2)");
+  check(perFrame(at60, "triangles") < whole.triangles * 0.45, `a moving frame draws ${Math.round(perFrame(at60, "triangles") / 1000)} thousand triangles; a picture, from the full meshes, ${Math.round(whole.triangles / 1000)} thousand`);
+  // The lighter copies are never what a click picks.
+  const hit = await g(`(() => { window.__3dmaker.fit(); const c = document.querySelector("#viewport canvas"), name = window.__3dmaker.state().parts[0], p = window.__3dmaker.screenPosition(name); const at = { clientX: p.x, clientY: p.y, button: 0, pointerId: 3, bubbles: true }; c.dispatchEvent(new PointerEvent("pointerdown", at)); c.dispatchEvent(new PointerEvent("pointerup", at)); return window.__3dmaker.state().selected; })()`);
+  check(typeof hit === "string" && hit.length > 0, `a click on a part still picks a part ("${hit}")`);
+  await g(`window.__3dmaker.select(null); window.__frames.step(2)`);
   const blurred = await cost(`window.page(false, false); window.__frames.step(30); window.__frames.step(60, 120)`);
   check(blurred.frames >= 28 && blurred.frames <= 32, `with another window in focus they draw 30 a second (${blurred.frames} in 30 frames at 60 Hz and 60 at 120 Hz)`);
   const hidden = await cost(`window.page(true, false); window.__frames.step(30)`);

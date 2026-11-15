@@ -29,7 +29,9 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
    key light with shadows, a floor with a faint reflection, and materials), plays their motion,
    and takes the screenshots Claude looks at. It draws a frame only when something changes, and
    motion at up to 60 frames a second (30 while the window is not focused, none while it is
-   hidden). [src/app/navigate.js](../src/app/navigate.js)
+   hidden). The shadow and the floor's reflection are drawn before the view, from a lighter copy
+   of each part that the kernel workers make with its mesh; pictures and screenshots use the
+   full meshes. [src/app/navigate.js](../src/app/navigate.js)
    moves the camera the way CAD programs do, and
    [src/app/viewcube.js](../src/app/viewcube.js) draws the view cube.
 
