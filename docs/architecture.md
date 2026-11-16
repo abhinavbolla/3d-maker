@@ -31,7 +31,10 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
    motion at up to 60 frames a second (30 while the window is not focused, none while it is
    hidden). The shadow and the floor's reflection are drawn before the view, from a lighter copy
    of each part that the kernel workers make with its mesh; pictures and screenshots use the
-   full meshes. [src/app/navigate.js](../src/app/navigate.js)
+   full meshes. [src/app/look.js](../src/app/look.js) adds shading in the creases
+   ([creases.js](../src/app/creases.js)), worked out once when the view rests and laid over the
+   canvas, and the optional edge lines ([edges.js](../src/app/edges.js)), prebuilt per mesh.
+   [src/app/navigate.js](../src/app/navigate.js)
    moves the camera the way CAD programs do, and
    [src/app/viewcube.js](../src/app/viewcube.js) draws the view cube.
 
