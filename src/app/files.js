@@ -13,6 +13,8 @@ const FILTERS = {
   "3mf": { name: "3MF model", extensions: ["3mf"] },
   png: { name: "PNG picture", extensions: ["png"] },
   svg: { name: "SVG drawing", extensions: ["svg"] },
+  pdf: { name: "PDF drawing", extensions: ["pdf"] },
+  dxf: { name: "DXF drawing", extensions: ["dxf"] },
 };
 
 // Returns the saved path (or file name in a browser), or null if cancelled.

@@ -5,7 +5,7 @@ import { compile } from "./sdf.js";
 import { meshSDF, meshBounds, meshArea, displayMesh, lightMesh } from "./mesh.js";
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
-import { viewOutline, sectionView } from "./drawing.js";
+import { viewOutline, sectionView, sectionCut } from "./drawing.js";
 
 // A part with at least this many triangles gets a lighter copy, its vertices
 // merged over this many of its cells: about a ninth of the triangles.
@@ -55,7 +55,7 @@ self.onmessage = ({ data: job }) => {
       // One view of a drawing, or its section: the parts' export meshes, with
       // their distance functions compiled here.
       const parts = job.parts.map((p) => ({ ...p, ...compile(p.node) }));
-      self.postMessage({ id: job.id, ok: true, result: job.section ? sectionView(parts, job.section) : viewOutline(parts, job.view) });
+      self.postMessage({ id: job.id, ok: true, result: job.section ? (job.cutOnly ? sectionCut : sectionView)(parts, job.section) : viewOutline(parts, job.view, job.opts) });
     }
   } catch (err) {
     self.postMessage({ id: job.id, ok: false, error: String(err?.message ?? err) });

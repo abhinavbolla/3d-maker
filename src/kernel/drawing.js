@@ -219,7 +219,8 @@ function edgesOf(part, crease) {
 //
 // cut: { depth, loops } draws only what lies beyond that depth (the far side
 // of a cutting plane), with the loops (the cut faces) hiding what is behind them.
-export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut = null } = {}) {
+// hidden: also the hidden edges, as each part's `hidden` polylines (see hiddenLines).
+export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut = null, hidden: hiddenToo = false } = {}) {
   const { u, v, w } = viewOf(view);
   // Project every part's vertices.
   const proj = parts.map(({ positions: P }) => {
@@ -350,11 +351,17 @@ export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut =
     // Visible pieces: [node a, node b] with their points; a node is a mesh
     // vertex, or -1 where an edge was cut short.
     const ka = [], kb = [], pts = [];
+    // Hidden pieces, the same way, where they are asked for.
+    const hka = [], hkb = [], hpts = [];
     for (let e = 0; e < ne; e++) {
       const t0 = E[e * 6 + 2], t1 = E[e * 6 + 3];
       const f0 = front[t0], f1 = t1 < 0 ? 0 : front[t1];
       // An outline (only for the mesh's own edges), or a sharp edge on a face that shows.
-      if (!((f0 !== f1 && e < real) || (sharp[e] && (f0 || f1)))) continue;
+      const outline = f0 !== f1 && e < real;
+      const shows = outline || (sharp[e] && (f0 || f1));
+      // Hidden: an outline or any sharp edge, where something nearer covers it.
+      const mayHide = hiddenToo && (outline || sharp[e]);
+      if (!shows && !mayHide) continue;
       const a = E[e * 6], b = E[e * 6 + 1];
       const xa = (U[a] - u0) / px, ya = (V[a] - v0) / px, xb = (U[b] - u0) / px, yb = (V[b] - v0) / px;
       const len = hypot(xb - xa, yb - ya);
@@ -368,25 +375,83 @@ export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut =
       const n = max(1, ceil(((tb - ta) * len) / 0.5));
       if (f0) into(a, b, E[e * 6 + 4], 0);
       if (f1) into(a, b, E[e * 6 + 5], 3);
-      let start = -1;
+      let start = -1, hstart = -1;
+      const piece = (K, KB, Q, s, k) => {
+        const s0 = ta + (s / n) * (tb - ta), s1 = ta + (k / n) * (tb - ta);
+        K.push(s === 0 && ta === 0 ? a : -1);
+        KB.push(k === n && tb === 1 ? b : -1);
+        Q.push(U[a] + s0 * (U[b] - U[a]), V[a] + s0 * (V[b] - V[a]), U[a] + s1 * (U[b] - U[a]), V[a] + s1 * (V[b] - V[a]));
+      };
       for (let k = 0; k <= n; k++) {
         const t = ta + ((k + 0.5) / n) * (tb - ta);
         const x = xa + t * (xb - xa), y = ya + t * (yb - ya), z = za + t * (zb - za);
-        const vis = k < n && ((f0 && !hidden(x + step[0], y + step[1], z + step[2])) || (f1 && !hidden(x + step[3], y + step[4], z + step[5])));
+        const vis = shows && k < n && ((f0 && !hidden(x + step[0], y + step[1], z + step[2])) || (f1 && !hidden(x + step[3], y + step[4], z + step[5])));
         if (vis && start < 0) start = k;
         else if (!vis && start >= 0) {
-          const s0 = ta + (start / n) * (tb - ta), s1 = ta + (k / n) * (tb - ta);
-          ka.push(start === 0 && ta === 0 ? a : -1);
-          kb.push(k === n && tb === 1 ? b : -1);
-          pts.push(U[a] + s0 * (U[b] - U[a]), V[a] + s0 * (V[b] - V[a]), U[a] + s1 * (U[b] - U[a]), V[a] + s1 * (V[b] - V[a]));
+          piece(ka, kb, pts, start, k);
           start = -1;
+        }
+        if (!mayHide) continue;
+        // An edge that shows where it is not covered is hidden where it is;
+        // one between two faces turned away is hidden where something is in front of it.
+        const hid = k < n && !vis && (shows || hidden(x, y, z));
+        if (hid && hstart < 0) hstart = k;
+        else if (!hid && hstart >= 0) {
+          piece(hka, hkb, hpts, hstart, k);
+          hstart = -1;
         }
       }
     }
     const lines = chain(ka, kb, pts, U.length, 3 * px, 0.2 * px);
-    if (lines.length) out.push({ name: part.name, lines });
+    if (lines.length || hka.length) out.push({ name: part.name, lines, raw: hiddenToo ? [hka, hkb, hpts, U.length] : null });
   });
-  return { view, box, pixel: px, parts: out };
+  if (hiddenToo) hiddenLines(out, { u0, v0, px, nx, ny });
+  for (const p of out) delete p.raw;
+  return { view, box, pixel: px, parts: out.filter((p) => p.lines.length || p.hidden?.length) };
+}
+
+// Hidden lines are drawn only where no visible line is: an edge behind a
+// visible one of the same shape (the back of a box, the far rim of a hole)
+// would only thicken it. So the visible lines are marked on a picture of the
+// view, a pixel either side, and each hidden piece keeps only its stretches
+// off them. Sets parts[i].hidden to polylines, like lines.
+function hiddenLines(parts, { u0, v0, px, nx, ny }) {
+  const mask = new Uint8Array(nx * ny);
+  for (const { lines } of parts)
+    for (const L of lines)
+      for (let n = 2; n < L.length; n += 2) {
+        const xa = (L[n - 2] - u0) / px, ya = (L[n - 1] - v0) / px, xb = (L[n] - u0) / px, yb = (L[n + 1] - v0) / px;
+        const k = max(1, ceil(hypot(xb - xa, yb - ya) / 0.5));
+        for (let i = 0; i <= k; i++) {
+          const x = floor(xa + ((xb - xa) * i) / k), y = floor(ya + ((yb - ya) * i) / k);
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (x + dx >= 0 && y + dy >= 0 && x + dx < nx && y + dy < ny) mask[(y + dy) * nx + x + dx] = 1;
+        }
+      }
+  for (const p of parts) {
+    if (!p.raw) continue;
+    const [hka, hkb, hpts, nv] = p.raw;
+    const ka = [], kb = [], pts = [];
+    for (let s = 0; s < hka.length; s++) {
+      const [ua, va, ub, vb] = hpts.slice(s * 4, s * 4 + 4);
+      const xa = (ua - u0) / px, ya = (va - v0) / px, xb = (ub - u0) / px, yb = (vb - v0) / px;
+      const n = max(1, ceil(hypot(xb - xa, yb - ya) / 0.5));
+      let start = -1;
+      for (let k = 0; k <= n; k++) {
+        const t = (k + 0.5) / n;
+        const x = floor(xa + t * (xb - xa)), y = floor(ya + t * (yb - ya));
+        const free = k < n && !(x >= 0 && y >= 0 && x < nx && y < ny && mask[y * nx + x]);
+        if (free && start < 0) start = k;
+        else if (!free && start >= 0) {
+          const s0 = start / n, s1 = k / n;
+          ka.push(start === 0 ? hka[s] : -1);
+          kb.push(k === n ? hkb[s] : -1);
+          pts.push(ua + s0 * (ub - ua), va + s0 * (vb - va), ua + s1 * (ub - ua), va + s1 * (vb - va));
+          start = -1;
+        }
+      }
+    }
+    p.hidden = chain(ka, kb, pts, nv, 4 * px, 0.2 * px);
+  }
 }
 
 // Joins pieces end to end into polylines. Pieces shorter than minLen that
@@ -1122,7 +1187,7 @@ function frame() {
 function titleBlock(f, scale, first) {
   const R = SHEET.right, B = SHEET.bottom, X = R - TITLE.w, row = TITLE.row;
   const top = B - 3 * row, strip = top - row;
-  const out = [`<g id="title-block" stroke-width="${THIN}">\n`];
+  const out = [`<g id="title-block" data-layer="TITLE" stroke-width="${THIN}">\n`];
   const lines = [];
   // A cell: its label small at the top left, its value below, fitted to the
   // cell, on two lines where `two` allows. Text that cannot fit is an error
@@ -1225,13 +1290,22 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   out.push(`<metadata><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description rdf:about="">${dc.filter(([, v]) => v).map(([k, v]) => `<dc:${k}>${xml(v)}</dc:${k}>`).join("")}</rdf:Description></rdf:RDF></metadata>\n`);
   out.push(`<rect width="${SHEET.w}" height="${SHEET.h}" fill="#fff"/>\n`);
   out.push(`<g fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" ${FONT}>\n`);
-  out.push(frame());
+  out.push(`<g data-layer="FRAME">\n${frame()}</g>\n`);
 
   // The three views, and the isometric one.
   for (const k of ["front", "top", "side"]) {
     const { tx, ty } = map(k);
-    out.push(`<g id="view-${names[k]}" class="view" data-view="${names[k]}" stroke-width="${wide}">\n`);
-    for (const p of views[k].parts) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
+    out.push(`<g id="view-${names[k]}" class="view" data-view="${names[k]}" data-layer="VISIBLE" stroke-width="${wide}">\n`);
+    // Hidden edges, where asked for: narrow and dashed (ISO 128-20 type 02:
+    // dashes 12 line widths long, gaps 3), under the visible ones.
+    const hid = views[k].parts.filter((p) => p.hidden?.length);
+    if (hid.length) {
+      const d = max(narrow, 0.25);
+      out.push(`<g class="hidden" data-layer="HIDDEN" stroke-width="${narrow}" stroke-dasharray="${c2(12 * d)} ${c2(3 * d)}" stroke-linecap="butt">\n`);
+      for (const p of hid) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.hidden, tx, ty)}"/>\n`);
+      out.push("</g>\n");
+    }
+    for (const p of views[k].parts) if (p.lines.length) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
     out.push("</g>\n");
   }
   if (iso) {
@@ -1239,7 +1313,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
     const tx = (pu) => iso.x + (pu - b[0]) * iso.s, ty = (pv) => iso.y + (b[3] - pv) * iso.s;
     // No scale is given: an isometric view foreshortens every axis, so
     // nothing on it is measured (it is a picture of the part).
-    out.push(`<g id="view-iso" class="view" data-view="iso" stroke-width="${wide}">\n`);
+    out.push(`<g id="view-iso" class="view" data-view="iso" data-layer="VISIBLE" stroke-width="${wide}">\n`);
     for (const p of isoView.parts) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
     out.push("</g>\n");
   }
@@ -1247,8 +1321,8 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   // The section: what lies beyond the cut, then the cut faces, hatched.
   {
     const { tx, ty } = map("section");
-    out.push(`<g id="section-A" class="section" data-axis="${section.axis}" data-offset="${fmt(section.offset)}" data-area="${fmt(section.area)}">\n`);
-    out.push(`<g class="beyond" stroke-width="${wide}">\n`);
+    out.push(`<g id="section-A" class="section" data-axis="${section.axis}" data-offset="${fmt(section.offset)}" data-area="${fmt(section.area)}" data-layer="SECTION">\n`);
+    out.push(`<g class="beyond" data-layer="VISIBLE" stroke-width="${wide}">\n`);
     for (const p of section.beyond ?? []) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
     out.push("</g>\n");
     section.parts.forEach((p, i) => {
@@ -1258,7 +1332,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
       for (const L of loops) for (let n = 0; n < L.length; n++) (lo[n % 2] = min(lo[n % 2], L[n])), (hi[n % 2] = max(hi[n % 2], L[n]));
       const spacing = min([2.4, 3.2, 1.8, 4][(i >> 1) % 4], max(0.6, min(hi[0] - lo[0], hi[1] - lo[1]) / 3));
       out.push(`<g class="cut" data-part="${xml(p.name)}" data-area="${fmt(p.area)}">`);
-      out.push(`<path class="hatch" stroke-width="${narrow}" d="${hatch(loops, i % 2 ? -45 : 45, spacing)}"/>`);
+      out.push(`<path class="hatch" stroke-width="${narrow}" data-layer="HATCH" d="${hatch(loops, i % 2 ? -45 : 45, spacing)}"/>`);
       out.push(`<path class="cut-outline" stroke-width="${wide}" d="${loops.map((L) => `${pathOf([L], (q) => q, (q) => q)}Z`).join("")}"/></g>\n`);
     });
     // The name goes just above what the section draws, which can be well
@@ -1284,7 +1358,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
     const look = section.axis === "x" ? [1, 0] : section.axis === "y" ? [0, -1] : [0, 1];
     const ends = vertical ? [[c, r.y - 6], [c, r.y + r.h + 6]] : [[r.x - 6, c], [r.x + r.w + 6, c]];
     const inner = vertical ? [[c, r.y], [c, r.y + r.h]] : [[r.x, c], [r.x + r.w, c]];
-    out.push(`<g id="cutting-line" data-view="${host}">\n`);
+    out.push(`<g id="cutting-line" data-view="${host}" data-layer="SECTION">\n`);
     out.push(`<path stroke-width="${narrow}" stroke-dasharray="8 1.5 0.5 1.5" d="M${c2(ends[0][0])} ${c2(ends[0][1])}L${c2(ends[1][0])} ${c2(ends[1][1])}"/>`);
     ends.forEach((e, i) => {
       out.push(`<path stroke-width="${wide}" stroke-linecap="butt" d="M${c2(e[0])} ${c2(e[1])}L${c2(inner[i][0])} ${c2(inner[i][1])}"/>`);
@@ -1302,7 +1376,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   {
     const size = [0, 1, 2].map((a) => bounds[a + 3] - bounds[a]);
     const f = at.front, t = at.top, low = first ? t : f;
-    out.push(`<g id="dimensions" stroke-width="${narrow}">\n`);
+    out.push(`<g id="dimensions" data-layer="DIMENSIONS" stroke-width="${narrow}">\n`);
     out.push(dimension("height", f.y, f.y + f.h, f.x, -DIM_OFF, dimensionText(size[2])), "\n");
     out.push(dimension("depth", t.y, t.y + t.h, t.x, -DIM_OFF, dimensionText(size[1])), "\n");
     // In third angle a cut across X ends under the front view, so its letter
@@ -1314,7 +1388,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
 
   out.push(titleBlock(f, scaleText(scale), first));
   // Credit where it belongs: in the filing margin, outside the frame.
-  out.push(text(10, SHEET.bottom, 1.8, "Made with 3D Maker", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
+  out.push(text(10, SHEET.bottom, 1.8, "Made with 3D Maker", `id="credit" data-layer="FRAME" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
   out.push("</g>\n</svg>\n");
   return { svg: out.join(""), scale: scaleText(scale), iso: Boolean(iso), titles: { title, subtitle, shortened } };
 }
@@ -1333,11 +1407,12 @@ export const sideViewOf = (projection) => (projection === "third" ? "right" : "l
 // over its workers instead): { svg, scale, iso, section: { axis, offset, area } }.
 // title and date go in the title block, with the rest of info (see sheetSVG).
 // section: { axis, offset }, both optional (see sectionPlane).
-export function drawingSVG(parts, { title, date = today(), info = {}, section, projection = "first", resolution, crease } = {}) {
+export function drawingSVG(parts, { title, date = today(), info = {}, section, projection = "first", resolution, crease, hidden = false } = {}) {
   const bounds = modelBounds(parts);
   const plane = sectionPlane(bounds, section);
   const opts = { resolution, crease };
-  const views = { front: viewOutline(parts, "front", opts), top: viewOutline(parts, "top", opts), side: viewOutline(parts, sideViewOf(projection), opts) };
+  const flat = { ...opts, hidden };
+  const views = { front: viewOutline(parts, "front", flat), top: viewOutline(parts, "top", flat), side: viewOutline(parts, sideViewOf(projection), flat) };
   // The isometric view is drawn only where the sheet has room for it.
   if (planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(parts, "iso") }).iso) views.iso = viewOutline(parts, "iso", opts);
   const cut = sectionView(parts, plane, opts);

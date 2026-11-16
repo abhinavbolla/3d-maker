@@ -12,6 +12,11 @@ import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
 import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, titleLines, textWidth, LIMITS } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
+import { readDXF } from "./check-dxf.mjs";
+import { sheetPDF } from "../src/kernel/pdf.js";
+import { sheetDXF, outlineDXF, outlineSVG, fitCircle } from "../src/kernel/dxf.js";
+import { readSheet } from "../src/kernel/svgread.js";
+import { inflateSync } from "node:zlib";
 
 const mesh = (node, budget = 40000) => {
   const { f, box } = compile(node);
@@ -1203,6 +1208,99 @@ test("drawing: Claude's rotor head draws, with its mast, hub and gearbox cut by 
   // the hub does not fill in; the block above is drawn in the 0.5 group.
   assert.match(d.svg, /<g id="view-top"[^>]*stroke-width="0.25"/);
   assert.equal(d.svg.match(/<text [^>]*id="document-type"[^>]*>([^<]*)</)[1], "Assembly drawing");
+});
+
+// The sheet's marks, read back from its SVG: lines, circles, fills and text.
+const sheetMarks = (svg) => readSheet(svg).marks;
+
+test("drawing: the sheet as PDF draws what the SVG does, at the sheet's size", async () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block & hole (Ø20)", date: "2026-01-31" });
+  const bytes = await sheetPDF(svg, { title: "Block & hole", date: "2026-01-31" });
+  const pdf = Buffer.from(bytes).toString("latin1");
+  assert.match(pdf, /^%PDF-1\.4\n/);
+  assert.match(pdf, /\/MediaBox \[0 0 1190\.551 841\.89\]/, "A3 is 420 x 297 mm, 1190.55 x 841.89 points");
+  assert.match(pdf, /\/BaseFont \/Helvetica \/Encoding \/WinAnsiEncoding/);
+  // Every object is where the cross-reference table says.
+  const xref = Number(pdf.match(/startxref\n(\d+)\n%%EOF\n$/)[1]);
+  const offsets = pdf.slice(xref).match(/^\d{10} 00000 n $/gm).map((l) => Number(l.slice(0, 10)));
+  offsets.forEach((o, i) => assert.equal(pdf.slice(o, o + `${i + 1} 0 obj`.length), `${i + 1} 0 obj`));
+  // The content: one stroke per line and circle of the SVG, one fill per arrowhead, one text per text.
+  const at = pdf.indexOf("stream\n") + 7, len = Number(pdf.match(/\/Length (\d+)/)[1]);
+  const ops = inflateSync(Buffer.from(bytes.subarray(at, at + len))).toString("latin1");
+  const marks = sheetMarks(svg);
+  const count = (k) => marks.filter((m) => m.kind === k).length;
+  assert.equal(ops.match(/ S$/gm).length, count("line") + count("circle"));
+  assert.equal(ops.match(/ f$/gm).length, count("fill") + count("disc"));
+  assert.equal(ops.match(/ Tj ET$/gm).length, count("text"));
+  // The widths and dashes the SVG uses, and the text in the font's own bytes.
+  for (const w of ["0.5 w", "0.25 w", "0.7 w"]) assert.ok(ops.includes(`\n${w}\n`), `no ${w}`);
+  assert.ok(ops.includes("[8 1.5 0.5 1.5] 0 d"), "the cutting line is not long-dash-dot");
+  assert.ok(ops.includes("(Block & hole \\(\\33020\\)) Tj"), "the title is not set in WinAnsi");
+  assert.ok(bytes.length < svg.length / 2, `the PDF is ${bytes.length} bytes, the SVG ${svg.length}`);
+});
+
+test("drawing: the sheet as DXF has its lines and text on named layers, in paper millimetres", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block", date: "2026-01-31", hidden: true });
+  const d = readDXF(sheetDXF(svg));
+  assert.deepEqual(d.problems, []);
+  assert.equal(d.version, "AC1009");
+  assert.equal(d.units, 4, "millimetres");
+  for (const l of ["VISIBLE", "HIDDEN", "SECTION", "HATCH", "DIMENSIONS", "FRAME", "TITLE"]) assert.ok(d.byLayer[l] > 0, `nothing on layer ${l}`);
+  assert.ok(d.bounds[0] >= 0 && d.bounds[1] >= 0 && d.bounds[2] <= 420 && d.bounds[3] <= 297, `bounds ${d.bounds}`);
+  // The frame is 390 x 277 mm, 20 mm in from the left and 10 from the bottom (y up).
+  const frame = d.entities.find((e) => e.type === "POLYLINE" && e.layer === "FRAME" && e.closed && Math.abs(e.pts[0] - 20) < 1e-6 && Math.abs(e.pts[1] - 287) < 1e-6);
+  assert.ok(frame, "no closed frame from (20, 287)");
+  const fb = extent(Array.from({ length: frame.pts.length / 2 }, (_, i) => [frame.pts[i * 2], frame.pts[i * 2 + 1]]));
+  assert.deepEqual(fb, [20, 10, 410, 287]);
+  // The section's cut face is closed; hidden edges are dashed by their layer.
+  const cuts = d.entities.filter((e) => e.layer === "SECTION" && e.type === "POLYLINE" && e.closed);
+  assert.ok(cuts.length >= 2, `${cuts.length} closed cut outlines`);
+  assert.equal(d.layers.HIDDEN.ltype, "HIDDEN");
+  assert.ok(d.ltypes.HIDDEN.length === 2 && d.ltypes.HIDDEN[0] > 0 && d.ltypes.HIDDEN[1] < 0);
+  const texts = d.entities.filter((e) => e.type === "TEXT").map((e) => e.text);
+  for (const t of ["100", "60", "40", "Block", "A\\U+2013A", "1:1"]) assert.ok(texts.includes(t), `no text ${t}`);
+  assert.equal(texts.length, sheetMarks(svg).filter((m) => m.kind === "text").length);
+});
+
+test("drawing: an outline at 1:1 has the plate's size, and its holes as true circles", () => {
+  // A 120 x 80 plate, 6 thick, with four 9 mm holes and one 20 mm bore.
+  const holes = [[-45, -25], [45, -25], [-45, 25], [45, 25]].map(([x, y]) => ({ t: "move", v: [x, y, 0], c: { t: "cylinder", r: 4.5, h: 20 } }));
+  const plate = [drawn("Plate", { t: "subtract", a: { t: "box", s: [120, 80, 6] }, b: [...holes, { t: "cylinder", r: 10, h: 20 }] })];
+  const cut = sectionCut(plate, { axis: "z", offset: 0 });
+  const shape = { loops: cut.parts.flatMap((p) => p.loops) };
+  const dxf = outlineDXF(shape);
+  const d = readDXF(dxf.text);
+  assert.deepEqual(d.problems, []);
+  assert.deepEqual(d.counts, { CIRCLE: 5, POLYLINE: 1 });
+  const radii = d.entities.filter((e) => e.type === "CIRCLE").map((e) => e.r).sort((a, b) => a - b);
+  radii.forEach((r, i) => assert.ok(Math.abs(r - [4.5, 4.5, 4.5, 4.5, 10][i]) < 0.005, `radius ${r}`));
+  const outer = d.entities.find((e) => e.type === "POLYLINE");
+  assert.ok(outer.closed && outer.pts.length === 8, "the plate is not one closed four-cornered outline");
+  assert.deepEqual(d.bounds.map((v) => Math.round(v * 1000) / 1000), [-60, -40, 60, 40]);
+  const svg = outlineSVG(shape).text;
+  assert.match(svg, /width="122mm" height="82mm" viewBox="0 0 122 82"/, "the SVG is not at true size (with 1 mm round it)");
+  assert.equal(svg.match(/<circle /g).length, 5);
+  // A loop that is nearly round but is not a circle stays a polyline.
+  assert.equal(fitCircle(Array.from({ length: 64 }, (_, i) => [Math.cos(i / 10) * (10 + (i % 2) * 0.3), Math.sin(i / 10) * 10]).flat()), null);
+});
+
+test("drawing: hidden edges can be drawn dashed, and never over a visible line", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const plain = viewOutline(block, "front");
+  assert.ok(!plain.parts[0].hidden, "hidden edges without being asked");
+  const v = viewOutline(block, "front", { hidden: true });
+  const hid = v.parts[0].hidden.flatMap((L) => Array.from({ length: L.length / 2 }, (_, i) => [L[i * 2], L[i * 2 + 1]]));
+  // From the front, the hole is two vertical lines at x = ±10, the block's height.
+  assert.ok(hid.length >= 4 && hid.every(([x]) => Math.abs(Math.abs(x) - 10) < 0.15), `hidden points off the hole's sides: ${JSON.stringify(hid.filter(([x]) => Math.abs(Math.abs(x) - 10) >= 0.15).slice(0, 3))}`);
+  for (const s of [-1, 1]) {
+    const ys = hid.filter(([x]) => Math.sign(x) === s).map(([, y]) => y);
+    assert.ok(Math.max(...ys) - Math.min(...ys) > 39, `the hidden side at x = ${s * 10} runs ${Math.min(...ys)} to ${Math.max(...ys)}`);
+  }
+  // On the sheet: narrow and dashed, on their own layer.
+  const { svg } = drawingSVG(block, { hidden: true });
+  assert.match(svg, /<g class="hidden" data-layer="HIDDEN" stroke-width="0\.25" stroke-dasharray="3 0\.75"/);
 });
 
 test("the app's Claude is allowed every tool the server offers", () => {

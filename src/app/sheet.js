@@ -12,7 +12,9 @@
 // - An approval is not remembered at all: it is an act on one issue of a
 //   drawing, so approved_by goes on the sheet it is given with, and the
 //   next sheet has an empty line to sign.
-import { LIMITS, today } from "../kernel/drawing.js";
+import { LIMITS, today, dimensionText } from "../kernel/drawing.js";
+import { sheetPDF } from "../kernel/pdf.js";
+import { sheetDXF, outlineDXF, outlineSVG } from "../kernel/dxf.js";
 
 const KEY = "3d-maker:drawing";
 // export_drawing's names for the fields the user can set, and the title
@@ -88,14 +90,56 @@ function given(args) {
 const list = (a) => (a.length > 1 ? `${a.slice(0, -1).join(", ")} and ${a.at(-1)}` : a[0]);
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
+// The file formats a drawing comes in, and what an outline can be of.
+const FORMATS = ["svg", "pdf", "dxf"];
+const OUTLINES = ["section", "front", "back", "left", "right", "top", "bottom"];
+function formatOf(args) {
+  const f = args.format || "svg";
+  if (!FORMATS.includes(f)) throw new Error(`format is "svg", "pdf" or "dxf", not ${JSON.stringify(f)}.`);
+  return f;
+}
+
+// One outline alone at true size (1:1, mm, no sheet), for a laser or
+// water-jet cutter: a section's cut faces, or one view's visible lines.
+// Loops that are circles go out as true circles.
+async function makeOutline({ store, kernel }, args) {
+  const format = formatOf(args);
+  if (format === "pdf") throw new Error('An outline is exported as "svg" or "dxf", at true size. PDF is for the drawing sheet.');
+  if (!OUTLINES.includes(args.outline)) throw new Error(`outline is one of ${OUTLINES.join(", ")}, not ${JSON.stringify(args.outline)}.`);
+  const view = args.outline === "section" ? null : args.outline;
+  const title = store.state.result?.title || "model";
+  const o = await kernel.exportOutline(store.state.result?.parts ?? [], { view, section: { axis: args.axis, offset: args.offset } });
+  const made = (format === "dxf" ? outlineDXF : outlineSVG)(o, { title });
+  const size = [made.box[2] - made.box[0], made.box[3] - made.box[1]].map((v) => Math.round(v * 100) / 100);
+  const what = view ? `The ${view} view's visible lines` : `Section across ${o.section.axis} at ${dimensionText(o.section.offset_mm)} mm`;
+  const pieces = [made.loops && `${made.loops} closed outline${made.loops > 1 ? "s" : ""}`, made.circles && `${made.circles} circle${made.circles > 1 ? "s" : ""}`, made.lines && `${made.lines} open line${made.lines > 1 ? "s" : ""}`].filter(Boolean);
+  const line = `${what}, at true size (1:1, mm): ${dimensionText(size[0])} x ${dimensionText(size[1])} mm, ${pieces.join(", ") || "nothing"}.${view ? " A view's lines come from the mesh, so its curves are as fine as the mesh." : ""}`;
+  return {
+    name: `${title} ${args.outline}`,
+    bytes: new TextEncoder().encode(made.text),
+    format,
+    outline: args.outline,
+    size_mm: size,
+    closed_outlines: made.loops,
+    circles: made.circles,
+    open_lines: made.lines,
+    ...(o.section ? { section: o.section } : {}),
+    line,
+  };
+}
+
 // Makes the drawing of the current document. args: what the user said, as
 // export_drawing takes it (see mcp/server.mjs), plus axis and offset for
-// the section. Returns { result, keep }: result is the kernel's export with
+// the section, format ("svg", "pdf" or "dxf") and outline (a section or a
+// view alone at 1:1 instead of the sheet; see makeOutline).
+// Returns { result, keep }: result is the kernel's export with
 // sheet (what went in the title block, except names that were remembered,
 // which it only says are filled) and line (one sentence that says the same
 // and how to change it). Nothing is remembered and no number is kept until
 // keep() is called, once the file is saved.
 export async function makeDrawing({ store, kernel }, args = {}) {
+  if (args.outline) return { result: await makeOutline({ store, kernel }, args), keep: () => {} };
+  const format = formatOf(args);
   const record = store.state.doc.drawing;
   const add = given(args);
   const pick = (keys, from) => {
@@ -111,7 +155,14 @@ export async function makeDrawing({ store, kernel }, args = {}) {
   const region = regionProjection();
   const projection = user.projection || region.projection;
   const info = { title: store.state.result?.title, subtitle: model.subtitle ?? "", number: model.number, revision: model.revision ?? "", date: today(), createdBy: user.drawn_by ?? "", approvedBy: add.approved_by ?? "", owner: user.owner ?? "", tolerances: model.tolerances ?? "" };
-  const { titles, ...r } = await kernel.exportDrawing(store.state.result?.parts ?? [], { info, projection, section: { axis: args.axis, offset: args.offset } });
+  const { titles, ...r } = await kernel.exportDrawing(store.state.result?.parts ?? [], { info, projection, section: { axis: args.axis, offset: args.offset }, hidden: Boolean(args.hidden_edges) });
+
+  // The same sheet as PDF or DXF, written from its SVG.
+  if (format !== "svg") {
+    const svg = new TextDecoder().decode(r.bytes);
+    r.bytes = format === "pdf" ? await sheetPDF(svg, { title: [titles.title, titles.subtitle].filter(Boolean).join(" – "), date: info.date }) : new TextEncoder().encode(sheetDXF(svg));
+  }
+  r.format = format;
 
   // How each field the user fills in came to be on the sheet.
   const values = { drawn_by: user.drawn_by, owner: user.owner, approved_by: add.approved_by, revision: model.revision, subtitle: model.subtitle, tolerances: model.tolerances };

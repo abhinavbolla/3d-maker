@@ -152,6 +152,27 @@ try {
   check(across.result?.section.axis === "z" && across.result.section.parts_cut.join() === "Peg" && Math.abs(across.result.section.cut_area_mm2 - Math.PI * 25) < 0.1, `a section can be put anywhere (${JSON.stringify(across.result?.section ?? across.error)})`);
   check(/misses the model/.test((await call("export_drawing", { axis: "z", offset: 60 })).error ?? ""), "a section that misses the model is refused");
 
+  // The same sheet as PDF and as DXF, and one outline alone at 1:1.
+  const bytesOf = (r) => Buffer.from(r.result?.base64 ?? "", "base64");
+  const pdf = await call("export_drawing", { format: "pdf" });
+  const pdfText = bytesOf(pdf).toString("latin1");
+  const xrefAt = Number(/startxref\n(\d+)/.exec(pdfText)?.[1]);
+  check(pdf.result?.format === "pdf" && pdfText.startsWith("%PDF-1.4") && pdfText.trimEnd().endsWith("%%EOF") && /\/MediaBox \[0 0 1190\.551 841\.89\]/.test(pdfText) && pdfText.slice(xrefAt, xrefAt + 4) === "xref" && /\/BaseFont \/Helvetica/.test(pdfText) && pdf.result.bytes < 60000, `the sheet as PDF: A3 in points, a sound cross-reference table, Helvetica, ${pdf.result?.bytes ?? pdf.error} bytes`);
+  const { readDXF } = await import("./check-dxf.mjs");
+  const dxf = await call("export_drawing", { format: "dxf" });
+  const dx = readDXF(bytesOf(dxf).toString("utf8"));
+  check(dxf.result?.format === "dxf" && !dx.problems.length && dx.version === "AC1009" && dx.bounds[0] >= 0 && dx.bounds[2] <= 420 && dx.bounds[3] <= 297 && ["VISIBLE", "SECTION", "HATCH", "DIMENSIONS", "FRAME", "TITLE"].every((l) => dx.byLayer[l] > 0), `the sheet as DXF: well formed, on the A3 sheet, on named layers (${JSON.stringify(dx.byLayer)} ${dx.problems.slice(0, 3)})`);
+  const cutOut = await call("export_drawing", { outline: "section", format: "dxf" });
+  const co = readDXF(bytesOf(cutOut).toString("utf8"));
+  const circle = co.entities.find((e) => e.type === "CIRCLE");
+  check(!co.problems.length && co.counts.CIRCLE === 1 && Math.abs(circle.r - 5) < 0.01 && cutOut.result?.section.axis === "z" && cutOut.result.size_mm.join() === "10,10", `an outline across the thinnest side cuts the peg: one true circle, r ${circle?.r} (${cutOut.result?.line ?? cutOut.error})`);
+  const baseOut = readDXF(bytesOf(await call("export_drawing", { outline: "section", format: "dxf", axis: "z", offset: 0 })).toString("utf8"));
+  const loop = baseOut.entities.find((e) => e.type === "POLYLINE");
+  check(baseOut.counts.POLYLINE === 1 && loop.closed && baseOut.bounds.map((v) => Math.round(v * 100) / 100).join() === "-20,-20,20,20", `and through the base: one closed 40 x 40 mm outline (${baseOut.bounds})`);
+  const svgOut = await call("export_drawing", { outline: "top" });
+  check(svgOut.result?.format === "svg" && /width="42mm"/.test(bytesOf(svgOut).toString()) && svgOut.result.circles === 1 && svgOut.result.closed_outlines === 1 && /PDF/.test((await call("export_drawing", { outline: "top", format: "pdf" })).error ?? ""), `a view's outline as SVG at true size, and no PDF of an outline (${svgOut.result?.line ?? svgOut.error})`);
+  check((await w('[...document.querySelectorAll("#export-menu [data-export]")].map((b) => b.dataset.export).join()')).includes("svg,pdf,dxf,outline"), "the Export menu offers the drawing as SVG, PDF and DXF, and the outline");
+
   // The title block with nothing said: honest and complete. A number is
   // made up once for the document; nobody's name is filled in; the date of
   // issue is today.
