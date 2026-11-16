@@ -182,6 +182,13 @@ tool(
   },
 );
 
+tool(
+  "set_look",
+  "Change how the view draws the model. edges: true for the \"shaded with edges\" look, where sharp edges and outlines are drawn as thin dark lines, as in engineering views; false for the plain shaded look (the default). The app remembers the choice. Pictures and screenshots use it too. Use it when the user asks to see edges or outlines, or to turn them off.",
+  { edges: z.boolean().describe("Draw sharp edges and outlines as thin dark lines.") },
+  async (a) => json(await call("set_look", a)),
+);
+
 // Writes an exported file; path defaults to ~/Downloads/<title>.<ext>.
 async function save(r, path, ext) {
   const base = (r.name || "model").replace(/[^\w.-]+/g, "-");

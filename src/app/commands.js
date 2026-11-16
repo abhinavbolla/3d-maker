@@ -155,6 +155,12 @@ export function createCommands({ store, viewport, kernel }) {
       else out.note = store.state.result?.motion ? "No parts pass into each other, at rest or during the motion." : "No parts pass into each other.";
       return out;
     },
+    // How the view draws the model, remembered for this user.
+    set_look: ({ edges } = {}) => {
+      if (edges !== undefined && typeof edges !== "boolean") throw new Error("edges must be true or false.");
+      const look = viewport.setLook({ edges });
+      return { edges: look.edges, note: look.edges ? "Sharp edges are drawn as thin dark lines, and outlines once the view is still. Pictures and screenshots show them too." : "Edges are off: the plain shaded look." };
+    },
     screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async ({ solid = false } = {}) => exported(await kernel.exportSTL(store.state.result?.parts ?? [], { solid: Boolean(solid) })),
     export_3mf: async () => exported(await kernel.export3MF(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
