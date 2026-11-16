@@ -541,6 +541,57 @@ joint("Rod", "Piston", top);` });
   const hidden = await cost(`window.page(true, false); window.__frames.step(30)`);
   const shown = await cost(`window.page(false, true); window.__frames.step(30)`);
   check(hidden.draws === 0 && shown.frames >= 29, `a hidden page draws nothing, and motion goes on when it shows (${hidden.draws} draws hidden, ${shown.frames} of 30 frames back)`);
+
+  // An empty window offers the examples; one click opens a ready model
+  // without Claude, loaded only then, with a clean undo history and two
+  // prompts to try. They go when a model is there, or as soon as you type.
+  const { EXAMPLES } = await import("../src/examples/list.js");
+  const { sleep } = await import("./harness.mjs");
+  const e = await h.openWindow({ preload: `localStorage.removeItem("3d-maker:autosave")` });
+  const startShown = async () => !(await e('document.getElementById("start").hidden'));
+  const offered = await e(`[...document.querySelectorAll("#ideas [data-example]")].map((b) => b.dataset.example)`);
+  check((await startShown()) && offered.join() === EXAMPLES.map((x) => x.id).join() && offered.length >= 4, `an empty window offers ${offered.length} examples (${offered.join(", ")})`);
+  const pics = await e(`Promise.all([...document.querySelectorAll("#ideas img")].map((i) => i.decode().then(() => i.naturalWidth + "x" + i.naturalHeight, () => "broken")))`);
+  check(pics.length === EXAMPLES.length && pics.every((p) => p === "80x56"), `each has its picture (${pics.join(", ")})`);
+  const type = (text) => e(`(() => { const i = document.getElementById("input"); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event("input")); })()`);
+  await type("a lamp");
+  const hiddenWhileTyping = !(await startShown());
+  await type("");
+  check(hiddenWhileTyping && (await startShown()), "they go as soon as you type, and come back when the box is empty again");
+  const fetched = (id) => e(`performance.getEntriesByType("resource").some((r) => r.name.includes("/examples/${id}.js"))`);
+  check(!(await fetched("mug")), "no example script is loaded before one is chosen");
+  const openExample = async (id) => {
+    await e(`document.querySelector('#ideas [data-example="${id}"]').click()`);
+    for (let i = 0; i < 300 && !(await e("window.__3dmaker.state().parts.length")); i++) await sleep(100);
+    return e("window.__3dmaker.state()");
+  };
+  const mug = await openExample("mug");
+  check(mug.title === "Coffee mug" && mug.parts.join() === "Mug,Handle,Coaster" && (await fetched("mug")), `the mug opens with its parts (${mug.parts.join(", ")}), its script loaded only now`);
+  check(!(await startShown()), "the examples are gone once a model is there");
+  check(JSON.stringify(await e("window.__3dmaker.history()")) === '{"undo":0,"redo":0}', "undo history starts clean");
+  check((await e('document.getElementById("input").placeholder')) === "Try “make it 120 mm tall” or “write COFFEE around the side”", "the prompt box suggests two prompts to try");
+  // It is a normal document: sliders, undo, and the suggestion lasts as long as the script is the example's.
+  await e(`window.__3dmaker.setValue("Mug / Height", 120)`);
+  const tall = await e("window.__3dmaker.summary()");
+  check(Math.abs(tall.overall.size[2] - 127) < 1.5 && JSON.stringify(await e("window.__3dmaker.history()")) === '{"undo":1,"redo":0}', `its Height slider makes it 120 mm tall (${tall.overall.size[2]} mm with the coaster and lip) and can be undone`);
+  await e(`(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); })()`);
+  for (let i = 0; i < 100 && (await e("window.__3dmaker.history().undo")); i++) await sleep(100);
+  check(JSON.stringify(await e("window.__3dmaker.history()")) === '{"undo":0,"redo":1}' && !(await startShown()), "undo goes back to the example as it opened, not to an empty window");
+  // New brings the examples back; the biggest opens with every part.
+  await e(`document.querySelector('[data-action="new"]').click()`);
+  for (let i = 0; i < 100 && (await e("window.__3dmaker.state().parts.length")); i++) await sleep(100);
+  check(await startShown(), "New brings the examples back");
+  for (const id of ["bracket", "rotor-head", "helicopter"]) {
+    await e(`document.querySelector('[data-action="new"]').click()`);
+    for (let i = 0; i < 100 && (await e("window.__3dmaker.state().parts.length")); i++) await sleep(100);
+    const t = Date.now();
+    const s = await openExample(id);
+    const want = EXAMPLES.find((x) => x.id === id);
+    check(s.parts.length === want.parts && s.title, `the ${want.name.toLowerCase()} opens with ${s.parts.length} parts in ${((Date.now() - t) / 1000).toFixed(1)} s`);
+    if (id !== "bracket") continue;
+    const fit = await h.command(e, "check_fit");
+    check(fit.result?.overlaps.length === 0, `the bracket's bolts, washers and nuts fit without overlaps (${fit.result?.checked_pairs} pairs checked)`);
+  }
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

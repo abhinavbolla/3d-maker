@@ -13,6 +13,7 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Live reload is off, so editing the app's code while a test runs cannot
 // reload a window and lose a Claude run.
 export async function startHarness({ port = 5178 } = {}) {
+  port = Number(process.env.TEST_PORT) || port;
   const vite = await createServer({ root, configFile: join(root, "vite.config.js"), server: { port, strictPort: true, hmr: false, watch: null }, logLevel: "warn" });
   await vite.listen();
   const profile = mkdtempSync(join(tmpdir(), "3d-maker-test-"));
