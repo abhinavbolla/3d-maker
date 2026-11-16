@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- 3D Maker's app icon: a solid seen from a corner, on a dark tile.
+       The icon set in this folder is made from it with `npx tauri icon src-tauri/icons/icon.svg`. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3647"/>
+      <stop offset="1" stop-color="#141a24"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
+  <g stroke-linejoin="round" stroke-width="28">
+    <path d="M512 520 L742 387 L742 652 L512 785 Z" fill="#2f6fde" stroke="#2f6fde"/>
+    <path d="M512 520 L282 387 L282 652 L512 785 Z" fill="#6d9bf2" stroke="#6d9bf2"/>
+    <path d="M512 520 L742 387 L512 254 L282 387 Z" fill="#f2f5f9" stroke="#f2f5f9"/>
+  </g>
+</svg>
