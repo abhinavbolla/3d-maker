@@ -9,6 +9,8 @@ node test/check-stl.mjs model.stl         # checks an STL is well formed and clo
 node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, every part closed
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
 node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
+node test/drawing-run.mjs model.js out.pdf "" "" '{"format":"pdf"}'  # the same as PDF (or DXF)
+node test/check-dxf.mjs file.dxf [look.svg]  # reads a DXF on its own, checks it, draws what it holds
 node test/kernel.test.mjs drawing         # only the kernel tests with "drawing" in their name
 cd src-tauri && cargo test                # the desktop app's Rust side
 ```

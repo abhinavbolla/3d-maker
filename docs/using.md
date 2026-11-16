@@ -36,6 +36,9 @@ The Export menu saves:
 - **3MF**: one named, coloured object per part, for other 3D apps and slicers.
 - **STL**: each part its own closed shell, or all parts joined into one solid.
 - **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
+- **Drawing, PDF**: the same sheet as a PDF at its real size, to print or send.
+- **Drawing, DXF**: the same sheet as a DXF for 2D CAD programs, on layers: VISIBLE, HIDDEN, CENTRE, SECTION, HATCH, DIMENSIONS, DETAIL, FRAME and TITLE.
+- **Outline, DXF**: one section alone at true size (1:1, in mm, no sheet), for a laser or water-jet cutter.
 
 Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
 
@@ -46,6 +49,8 @@ Every visible part is meshed at the same detail on all cores, so a 60-part rotor
 The sheet shows the model from the front, from above and from the side, with hidden edges left out, and where there is room an isometric view at the top right. Next to the views is section A–A: the model cut by a plane, with the cut faces hatched, each part its own way, and what lies beyond the cut drawn behind them. The cutting line and the way the section looks are marked on one of the views.
 
 The views are laid out in first-angle projection (ISO: the top view under the front view, the view from the left on its right) or third-angle projection (the top view above it, the view from the right on its right). Which one follows the region your system's language names: third angle in the US, Canada and Japan, first angle elsewhere, and first angle (ISO's) when no region is named. Say "third angle" or "first angle" to change it.
+
+Holes and turned parts get centre lines. On a drawing of up to three parts, the holes seen end on are dimensioned too: their diameters (equal holes together, as "4× ⌀9"; a tapped hole by its thread, as "M6") and their positions, measured from the part's left and bottom edges on one running dimension line each way. The sizes are the script's own values, not measurements: a `hole(9, 10)` is called out as ⌀9. A round hole the script does not describe as a cylinder (a bore in a revolved or lofted part) is found by fitting a circle to the view, and the app says how close the fit is. A bigger assembly gets centre lines only; its parts' sizes belong on their own drawings. Labels are placed where nothing else is; one that finds no room is left out, and the app says so.
 
 The overall width, depth and height are dimensioned in millimetres. The scale is the largest standard one that fits the sheet: 1:1, 1:2, 1:5, 1:10, 1:20, 1:50 and so on, or 2:1, 5:1 and up for small parts. Outlines are 0.5 mm wide and dimensions and hatching 0.25 mm, or thinner where a crowded assembly would run together at that weight.
 
@@ -73,6 +78,14 @@ After each drawing the app says in one line what went on the sheet: what you sai
 
 From the Export menu the section cuts across the model's longest side, at its middle. Ask Claude for a different one: "export a drawing with the section across z, 40 mm up".
 
+More you can ask for:
+
+- **Hidden edges dashed**: "with hidden lines". Edges behind other surfaces are drawn as narrow dashed lines on the front, top and side views, never over a visible line. For that drawing only.
+- **Another sheet size**: "on A4" (upright) or A2, A1, A0 (across). The frame, its grid and the scale follow the sheet; the title block stays in the bottom right corner.
+- **A detail view**: "with a detail of the hub". A crowded place of one view is drawn again in a free part of the sheet at a larger standard scale (at least twice the sheet's), as view B with its scale, and a circle and the letter B mark it on the view it comes from. Claude can say which view and where, or let the app pick the most crowded place.
+- **PDF or DXF**: "as a PDF", "as a DXF".
+- **An outline to cut**: "a DXF of the plate's outline for the laser cutter". With no other say, the section goes across the model's thinnest side, at its middle, so it cuts through a plate rather than along it; a view's outline ("the top view's outline") works too, from the mesh. Round loops come out as true circles.
+
 Parts are drawn where the script puts them, not as their motion poses them, the same as in the STL and 3MF files. The views are drawn from the same meshes as those files, so a line can be off by the mesh's detail; the section is not, because it is cut from the exact shapes.
 
 ## Driving it from Claude Code
@@ -86,7 +99,7 @@ claude mcp add --scope user 3d-maker -- node /path/to/3d-maker/mcp/server.mjs
 ## Limitations
 
 - **No exact CAD surfaces yet.** Export is meshes (STL, 3MF), not STEP, and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
-- **Drawings are a first version.** One A3 sheet as SVG: no PDF or DXF, no dashed hidden edges, no centre lines or parts list, and only the overall sizes are dimensioned. Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
+- **Drawings are early.** One sheet per drawing, no parts list, and only the overall sizes and holes are dimensioned (no radii, angles or counterbores). Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
 - **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods.
 - **Changes are prompts and sliders.** You can't drag parts around in the view.
 - **Collisions in motion** are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.

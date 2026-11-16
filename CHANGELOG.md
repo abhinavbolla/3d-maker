@@ -45,6 +45,14 @@ Notable changes to 3D Maker. The format follows
   and say where the section goes.
 - The drawing sheet follows ISO 5457 and ISO 7200: a full title block that fills itself in and
   remembers what you tell Claude, an isometric view, a grid border and heavier lines.
+- Drawings as PDF and DXF as well as SVG, from the Export menu or `export_drawing`. The PDF is
+  vector, at the sheet's real size; the DXF has layers for visible and hidden edges, centre
+  lines, section, hatching, dimensions and frame. Export > Outline, DXF saves one section alone
+  at 1:1 for a laser cutter, with round holes as true circles (SVG too, and any view's outline).
+- Drawings show centre lines of holes and turned parts, and the diameters and positions of holes,
+  sized from the script's own values (or from circles fitted to the view, with their accuracy).
+  Hidden edges can be drawn dashed, sheets come in A4 to A0, and a detail view shows a crowded
+  place at a larger scale.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
