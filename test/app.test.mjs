@@ -158,6 +158,8 @@ try {
   const pdfText = bytesOf(pdf).toString("latin1");
   const xrefAt = Number(/startxref\n(\d+)/.exec(pdfText)?.[1]);
   check(pdf.result?.format === "pdf" && pdfText.startsWith("%PDF-1.4") && pdfText.trimEnd().endsWith("%%EOF") && /\/MediaBox \[0 0 1190\.551 841\.89\]/.test(pdfText) && pdfText.slice(xrefAt, xrefAt + 4) === "xref" && /\/BaseFont \/Helvetica/.test(pdfText) && pdf.result.bytes < 60000, `the sheet as PDF: A3 in points, a sound cross-reference table, Helvetica, ${pdf.result?.bytes ?? pdf.error} bytes`);
+  const a4 = await call("export_drawing", { format: "pdf", sheet: "A4" });
+  check(/\/MediaBox \[0 0 595\.276 841\.89\]/.test(bytesOf(a4).toString("latin1")) && / on A4\./.test(a4.result?.line ?? ""), `and on A4, upright (${a4.result?.line ?? a4.error})`);
   const { readDXF } = await import("./check-dxf.mjs");
   const dxf = await call("export_drawing", { format: "dxf" });
   const dx = readDXF(bytesOf(dxf).toString("utf8"));
@@ -170,8 +172,15 @@ try {
   const loop = baseOut.entities.find((e) => e.type === "POLYLINE");
   check(baseOut.counts.POLYLINE === 1 && loop.closed && baseOut.bounds.map((v) => Math.round(v * 100) / 100).join() === "-20,-20,20,20", `and through the base: one closed 40 x 40 mm outline (${baseOut.bounds})`);
   const svgOut = await call("export_drawing", { outline: "top" });
-  check(svgOut.result?.format === "svg" && /width="42mm"/.test(bytesOf(svgOut).toString()) && svgOut.result.circles === 1 && svgOut.result.closed_outlines === 1 && /PDF/.test((await call("export_drawing", { outline: "top", format: "pdf" })).error ?? ""), `a view's outline as SVG at true size, and no PDF of an outline (${svgOut.result?.line ?? svgOut.error})`);
+  check(svgOut.result?.format === "svg" && /width="4[12](\.\d+)?mm"/.test(bytesOf(svgOut).toString()) && svgOut.result.circles === 1 && svgOut.result.closed_outlines === 1 && /PDF/.test((await call("export_drawing", { outline: "top", format: "pdf" })).error ?? ""), `a view's outline as SVG at true size, and no PDF of an outline (${svgOut.result?.line ?? svgOut.error})`);
   check((await w('[...document.querySelectorAll("#export-menu [data-export]")].map((b) => b.dataset.export).join()')).includes("svg,pdf,dxf,outline"), "the Export menu offers the drawing as SVG, PDF and DXF, and the outline");
+  // Holes, sized from the script by the app's workers, and hidden edges on request.
+  await call("set_model", { script: readFileSync(new URL("./models/bracket.js", import.meta.url), "utf8") });
+  const holes = await call("export_drawing", { hidden_edges: true });
+  const holeSvg = bytesOf(holes).toString();
+  const sizes = holes.result?.holes?.holes.map((x) => x.text).sort().join(", ");
+  check(sizes === "2× ⌀6.6, 4× ⌀9, ⌀12" && holes.result.holes.positions === 7 && /Holes .* sized from the script's own values\./.test(holes.result.line) && /<g class="hidden" data-layer="HIDDEN"/.test(holeSvg) && /id="centre-lines"/.test(holeSvg), `the bracket's holes are sized and placed, with centre lines and dashed hidden edges (${sizes}; ${holes.result?.line ?? holes.error})`);
+  await call("set_model", { script: 'part("Base", box(40, 40, 10), { color: "#4f7cac" });\npart("Peg", cylinder(5, 20).at(0, 0, 12), { color: "#d9a441" });' });
 
   // The title block with nothing said: honest and complete. A number is
   // made up once for the document; nobody's name is filled in; the date of

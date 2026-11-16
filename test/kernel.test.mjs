@@ -16,6 +16,7 @@ import { readDXF } from "./check-dxf.mjs";
 import { sheetPDF } from "../src/kernel/pdf.js";
 import { sheetDXF, outlineDXF, outlineSVG, fitCircle } from "../src/kernel/dxf.js";
 import { readSheet } from "../src/kernel/svgread.js";
+import { partFeatures, featuresInView } from "../src/kernel/holes.js";
 import { inflateSync } from "node:zlib";
 
 const mesh = (node, budget = 40000) => {
@@ -1301,6 +1302,126 @@ test("drawing: hidden edges can be drawn dashed, and never over a visible line",
   // On the sheet: narrow and dashed, on their own layer.
   const { svg } = drawingSVG(block, { hidden: true });
   assert.match(svg, /<g class="hidden" data-layer="HIDDEN" stroke-width="0\.25" stroke-dasharray="3 0\.75"/);
+});
+
+// Text on a sheet, outside the title block and the frame's border, as
+// rectangles: [x0, y0, x1, y1, text].
+const textBoxes = (svg) =>
+  sheetMarks(svg)
+    .filter((m) => m.kind === "text" && m.layer !== "TITLE" && m.layer !== "FRAME")
+    .map((m) => {
+      const w = textWidth(m.str, m.size), h = m.size * 0.72;
+      const x0 = m.anchor === "middle" ? -w / 2 : m.anchor === "end" ? -w : 0;
+      // Corners along and up from the baseline, turned as the text is.
+      const t = (m.angle * Math.PI) / 180, c = Math.cos(t), s = Math.sin(t);
+      const pts = [[x0, 0], [x0 + w, 0], [x0, -h], [x0 + w, -h]].map(([a, b]) => [m.x + a * c - b * s, m.y + a * s + b * c]);
+      return [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1])), m.str];
+    });
+const overlapping = (boxes) => {
+  const out = [];
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) if (boxes[i][0] < boxes[j][2] - 0.1 && boxes[j][0] < boxes[i][2] - 0.1 && boxes[i][1] < boxes[j][3] - 0.1 && boxes[j][1] < boxes[i][3] - 0.1) out.push(`${boxes[i][4]} / ${boxes[j][4]}`);
+  return out;
+};
+const bracketParts = (budget = 30000) => {
+  const r = runScript(readFileSync(new URL("./models/bracket.js", import.meta.url), "utf8"), {});
+  return r.parts.map((p) => {
+    const m = meshPart(p.node, { budget });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+};
+
+test("drawing: holes and turned parts are found in the script, and checked against the shape", () => {
+  const parts = bracketParts(8000);
+  const found = partFeatures(parts);
+  const of = (part, kind) => found.filter((f) => f.part === part && f.kind === kind).map((f) => Math.round(f.r * 2 * 100) / 100).sort((a, b) => a - b);
+  assert.deepEqual(of("Bracket", "hole"), [6.6, 6.6, 9, 9, 9, 9, 20]);
+  assert.deepEqual(of("Bush", "hole"), [12]);
+  assert.deepEqual(of("Bush", "solid"), [28]);
+  // A hole filled in again is not a hole; a pin buried inside a block is not a turned part.
+  const filled = { t: "union", c: [{ t: "subtract", a: { t: "box", s: [40, 40, 10] }, b: [{ t: "cylinder", r: 5, h: 20 }] }, { t: "cylinder", r: 6, h: 20 }] };
+  const buried = { t: "union", c: [{ t: "box", s: [40, 40, 10] }, { t: "cylinder", r: 3, h: 6 }] };
+  assert.deepEqual(partFeatures([{ name: "F", node: filled }]).map((f) => `${f.kind} ${f.r}`), ["solid 6"]);
+  assert.deepEqual(partFeatures([{ name: "B", node: buried }]), []);
+  // A tapped hole is called out by its thread.
+  const tapped = runScript('part("P", box(30, 30, 10).at(0, 0, 5).cut(hole("M6", 8, { tapped: true }).at(0, 0, 10)));', {}).parts[0];
+  assert.ok(partFeatures([{ name: "P", node: tapped.node }]).some((f) => f.kind === "hole" && f.label === "M6"));
+});
+
+test("drawing: a bore the script does not describe is found by fitting a circle, with its accuracy", () => {
+  // A ring turned from a profile: the script says "revolve", not "a 10 mm hole".
+  const node = { t: "revolve", p: { t: "move2", v: [12.5, 0], c: { t: "rect2", w: 15, h: 6 } } };
+  const ring = [{ ...drawn("Ring", node, 20000), node }];
+  const top = viewOutline(ring, "top");
+  const { circles } = featuresInView(partFeatures(ring), top, ring);
+  const bore = circles.find((c) => c.source === "fitted");
+  assert.ok(bore && bore.kind === "hole" && Math.abs(bore.r - 5) < 0.05 && bore.error < 0.05, `the bore: ${JSON.stringify(bore)}`);
+  assert.ok(circles.some((c) => c.source === "script" && c.kind === "solid" && Math.abs(c.r - 20) < 1e-9), "the ring's outside, from the script");
+});
+
+test("drawing: the bracket's sheet has centre lines, hole sizes and positions, and no text on other text", () => {
+  const d = drawingSVG(bracketParts(), { title: "Angle bracket", date: "2026-01-31" });
+  assert.match(d.svg, /<g id="centre-lines" data-layer="CENTRE"/);
+  const said = (kind) => [...d.svg.matchAll(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`, "g"))].map((m) => m[1]).sort();
+  assert.deepEqual(said("diameter"), ["2× ⌀6.6", "4× ⌀9", "⌀12"]);
+  // From the bracket's left and bottom edges: 45 and 105 across, 15 and 65 up; 20, 60 and 50 on the upright.
+  assert.deepEqual(said("position"), ["105", "15", "20", "45", "50", "60", "65"]);
+  assert.equal(d.marks.left_out.length, 0, d.marks.left_out.join("; "));
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+  // In the DXF, centre lines are on their own layer, long-dash-dot.
+  const x = readDXF(sheetDXF(d.svg));
+  assert.ok(x.byLayer.CENTRE > 8 && !x.problems.length);
+});
+
+test("drawing: a big assembly gets centre lines but no hole sizes, and no text on other text", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
+  const parts = r.parts.map((p) => {
+    const m = meshPart(p.node, { budget: 3000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 } });
+  assert.ok(d.marks.centre_lines > 5, `${d.marks.centre_lines} centre lines`);
+  assert.equal(d.marks.holes.length, 0);
+  assert.match(d.marks.left_out.join(), /an assembly of 47 parts gets centre lines only/);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
+test("drawing: sheets come in A4 to A0, with the frame and grid to match", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] }, 8000)];
+  const got = {};
+  for (const size of ["A4", "A3", "A2", "A1", "A0"]) {
+    const d = drawingSVG(block, { size });
+    const [, w, h] = d.svg.match(/width="(\d+)mm" height="(\d+)mm"/);
+    const border = d.svg.match(/<rect id="border" x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/).slice(1).map(Number);
+    const label = d.svg.match(/id="sheet-size"[^>]*>([^<]*)</)[1];
+    // Grid numbers along the top: none in a field narrower than 25 mm.
+    got[size] = `${w}x${h} ${border.join(",")} ${label} ${d.scale}`;
+    assert.deepEqual(overlapping(textBoxes(d.svg)), [], size);
+  }
+  assert.deepEqual(got, { A4: "210x297 20,10,180,277 A4 1:2", A3: "420x297 20,10,390,277 A3 1:1", A2: "594x420 20,10,564,400 A2 2:1", A1: "841x594 20,10,811,574 A1 2:1", A0: "1189x841 20,10,1159,821 A0 5:1" });
+  assert.throws(() => drawingSVG(block, { size: "B4" }), /A4, A3, A2, A1, A0/);
+});
+
+test("drawing: a detail view shows a crowded place at a larger scale, marked on its view", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
+  const parts = r.parts.map((p) => {
+    const m = meshPart(p.node, { budget: 3000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 }, detail: true });
+  assert.deepEqual(d.detail, { view: "top", scale: "1:10", letter: "B" });
+  assert.match(d.svg, /<g id="detail-B" class="detail" data-view="top" data-scale="1:10">/);
+  assert.match(d.svg, />B \(1:10\)</);
+  // Every detail line lies inside its circle.
+  const g = d.svg.slice(d.svg.indexOf('<g id="detail-B"'), d.svg.indexOf('id="detail-name"'));
+  const circles = [...g.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g)].map((m) => m.slice(1).map(Number));
+  const [cx, cy, R] = circles[1];
+  const pts = [...g.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  assert.ok(pts.length > 500 && pts.every(([x, y]) => Math.hypot(x - cx, y - cy) <= R + 0.02), `${pts.length} points, the furthest ${Math.max(...pts.map(([x, y]) => Math.hypot(x - cx, y - cy))).toFixed(2)} from the middle (radius ${R})`);
+  assert.ok(Math.abs(R / circles[0][2] - 5) < 1e-6, "the detail is not 5 times its circle on the view");
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+  // At a given place too.
+  const at = drawingSVG(parts, { section: { axis: "y", offset: 0 }, detail: { view: "front", at: [0, 0, 800], radius: 300 } });
+  assert.equal(at.detail?.view, "front");
 });
 
 test("the app's Claude is allowed every tool the server offers", () => {

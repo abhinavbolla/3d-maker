@@ -155,7 +155,7 @@ export async function makeDrawing({ store, kernel }, args = {}) {
   const region = regionProjection();
   const projection = user.projection || region.projection;
   const info = { title: store.state.result?.title, subtitle: model.subtitle ?? "", number: model.number, revision: model.revision ?? "", date: today(), createdBy: user.drawn_by ?? "", approvedBy: add.approved_by ?? "", owner: user.owner ?? "", tolerances: model.tolerances ?? "" };
-  const { titles, ...r } = await kernel.exportDrawing(store.state.result?.parts ?? [], { info, projection, section: { axis: args.axis, offset: args.offset }, hidden: Boolean(args.hidden_edges) });
+  const { titles, marks, ...r } = await kernel.exportDrawing(store.state.result?.parts ?? [], { info, projection, section: { axis: args.axis, offset: args.offset }, hidden: Boolean(args.hidden_edges), size: args.sheet || "A3", detail: args.detail || null });
 
   // The same sheet as PDF or DXF, written from its SVG.
   if (format !== "svg") {
@@ -187,8 +187,10 @@ export async function makeDrawing({ store, kernel }, args = {}) {
   const kept = order.filter((k) => how(k) === "remembered").map((k) => LABELS[k]);
   // Only the mandatory fields count as missing: revision and the rest are optional.
   const blank = ["drawn_by", "owner", "approved_by"].filter((k) => how(k) === "blank").map((k) => LABELS[k]);
-  const parts = [`Drawing ${info.number}${info.revision ? ` rev. ${info.revision}` : ""}, ${projection} angle${fromRegion ? " (from your region)" : ""}, ${r.scale}.`];
+  const parts = [`Drawing ${info.number}${info.revision ? ` rev. ${info.revision}` : ""}, ${projection} angle${fromRegion ? " (from your region)" : ""}, ${r.scale}${r.sheet_size && r.sheet_size !== "A3" ? ` on ${r.sheet_size}` : ""}.`];
+  if (r.detail_view) parts.push(`Detail view ${r.detail_view.letter} of the ${r.detail_view.view} view at ${r.detail_view.scale}.`);
   if (titles.shortened) parts.push("The model's title was too long for the title block and is shortened on the sheet.");
+  parts.push(...marksLines(marks));
   if (said.length) parts.push(`${cap(list(said))} as given.`);
   if (kept.length) parts.push(`${cap(list(kept))} as remembered.`);
   if (blank.length) parts.push(`${cap(list(blank))} left blank.`);
@@ -199,5 +201,22 @@ export async function makeDrawing({ store, kernel }, args = {}) {
     writeUser(user);
     store.setDrawing(record, model);
   };
-  return { result: { ...r, sheet, line: parts.join(" ") }, keep };
+  return { result: { ...r, holes: marks, sheet, line: parts.join(" ") }, keep };
+}
+
+// What the sheet says about holes, in a sentence or two: the centre lines,
+// the sizes called out and where they came from, how close a fitted circle
+// is, and what was left out.
+function marksLines(m) {
+  if (!m) return [];
+  const out = [];
+  const sizes = m.holes.map((h) => h.text);
+  if (m.centre_lines) out.push(`Centre lines on ${m.centre_lines} hole${m.centre_lines > 1 ? "s" : ""} and turned part${m.centre_lines > 1 ? "s" : ""}.`);
+  if (sizes.length) {
+    const fromScript = m.holes.every((h) => h.from === "the script");
+    out.push(`Holes ${list(sizes)}${m.positions ? `, with ${m.positions} position${m.positions > 1 ? "s" : ""}` : ""}, sized ${fromScript ? "from the script's own values" : "from the script and from circles fitted to the views"}.`);
+  }
+  for (const f of m.fitted) out.push(`⌀${f.diameter} is a circle fitted to the view, within ${f.within_mm} mm.`);
+  if (m.left_out.length) out.push(`Left out: ${list(m.left_out)}.`);
+  return out;
 }

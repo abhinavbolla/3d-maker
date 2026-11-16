@@ -22,6 +22,7 @@ const LAYERS = {
   SECTION: [7, "CONTINUOUS"],
   HATCH: [8, "CONTINUOUS"],
   DIMENSIONS: [3, "CONTINUOUS"],
+  DETAIL: [6, "CONTINUOUS"],
   FRAME: [7, "CONTINUOUS"],
   TITLE: [7, "CONTINUOUS"],
   OUTLINE: [7, "CONTINUOUS"],
@@ -184,9 +185,10 @@ export function sheetDXF(svg) {
 // A circle through a closed loop [x, y, ...] when every point is within tol
 // of it: { cx, cy, r, error } (error: the largest distance off it), else null.
 // The fit is the least-squares one of Kåsa (1976), then checked.
-export function fitCircle(pts, tolOf = (r) => max(0.01, r * 0.004)) {
+// whole: false takes an arc too (the points need not go round).
+export function fitCircle(pts, tolOf = (r) => max(0.01, r * 0.004), { whole = true } = {}) {
   const n = pts.length / 2;
-  if (n < 8) return null;
+  if (n < (whole ? 8 : 5)) return null;
   let mx = 0, my = 0;
   for (let i = 0; i < n; i++) (mx += pts[i * 2]), (my += pts[i * 2 + 1]);
   (mx /= n), (my /= n);
@@ -205,14 +207,14 @@ export function fitCircle(pts, tolOf = (r) => max(0.01, r * 0.004)) {
   for (let i = 0; i < n; i++) error = max(error, abs(hypot(pts[i * 2] - cx, pts[i * 2 + 1] - cy) - r));
   // The points must go all the way round, not bunch on one side.
   let turned = 0;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < n && whole; i++) {
     const j = (i + 1) % n;
     let d = atan2(pts[j * 2 + 1] - cy, pts[j * 2] - cx) - atan2(pts[i * 2 + 1] - cy, pts[i * 2] - cx);
     if (d > PI) d -= 2 * PI;
     if (d < -PI) d += 2 * PI;
     turned += d;
   }
-  if (abs(abs(turned) - 2 * PI) > 0.1) return null;
+  if (whole && abs(abs(turned) - 2 * PI) > 0.1) return null;
   return error <= tolOf(r) ? { cx, cy, r, error } : null;
 }
 
