@@ -7,7 +7,7 @@
 
 ![A helicopter rotor head made in 3D Maker: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
 
-> **3D Maker is in early development.** It runs from a clone of this repository, and there is no installer yet.
+> **3D Maker is in early development.** From the first [release](https://github.com/abhinavbolla/3d-maker/releases) on, each comes with installers for macOS, Windows and Linux, not signed yet. Until then it runs from a clone of this repository.
 
 ## What works today
 
@@ -19,13 +19,18 @@
 | A studio view with materials, and CAD-style navigation | ✅ |
 | Export: PNG pictures, STL and 3MF meshes | ✅ |
 | 2D drawings: front, top and side views, a section and the overall sizes on an A3 sheet (SVG) | ✅ |
-| Dimensions of holes, PDF and DXF drawings, STEP export, video, installers | Planned |
+| Installers for macOS, Windows and Linux (unsigned), and examples to start from | ✅ |
+| Dimensions of holes, PDF and DXF drawings, STEP export, video, signed installers | Planned |
 
 The [roadmap](docs/roadmap.md) has the plan.
 
+## Install
+
+Download the installer for your system from the [releases page](https://github.com/abhinavbolla/3d-maker/releases). You also need [Claude Code](https://claude.com/claude-code), installed and logged in, and [Node.js](https://nodejs.org) 20 or newer. The [guide](docs/using.md#install) says what to do when your system warns about an unsigned app.
+
 ## Run it
 
-You need Node 20 or newer and [Claude Code](https://claude.com/claude-code), installed and logged in. The desktop app also needs Rust and Xcode's command line tools.
+Or run it from a clone. You need Node 20 or newer and [Claude Code](https://claude.com/claude-code), installed and logged in. The desktop app also needs Rust and Xcode's command line tools.
 
 ```bash
 npm install
@@ -35,6 +40,7 @@ npm start          # or in your browser, at http://localhost:5173
 
 ## Your first model
 
+- **Or start from an example.** An empty window offers a few ready models; open one and change it.
 - **Describe it.** Type "a desk lamp with a weighted base" in the box at the bottom and press Enter. Claude builds it, looks at it, and fixes what looks wrong.
 - **Go big.** For a helicopter or an engine, Claude makes a plan and builds it one checked step at a time.
 - **Change a part.** Click it, then move its sliders or type "make this longer".
@@ -64,7 +70,7 @@ On 20 of CADPrompt's 200 parts, every part built, at 0.916 IoGT. Eight complex m
 - **Drawings are a first version.** One A3 sheet with three views, a section and the overall sizes, as SVG. No PDF or DXF yet, and no dimensions of holes.
 - **No dragging.** You change a model with prompts and sliders.
 - **Fine detail on big parts** is limited by the mesh: a 1 mm engraving on a 10 m fuselage comes out rough.
-- **No installer.** It runs from this folder.
+- **Unsigned installers.** macOS and Windows warn you the first time you open the app.
 
 The [guide](docs/using.md#limitations) lists the rest.
 

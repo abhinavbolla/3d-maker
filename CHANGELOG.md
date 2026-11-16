@@ -50,6 +50,15 @@ Notable changes to 3D Maker. The format follows
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
+- Examples on the empty window: a coffee mug, an angle bracket with bolts, a rotor head that
+  moves and a helicopter. One click opens a ready model without Claude, with sliders, a clean
+  undo history, and two prompts to try on it in the prompt box.
+- Installers: a release workflow builds the desktop app for macOS (Apple silicon and Intel),
+  Windows and Linux when a version tag is pushed and attaches them to a draft release. It signs
+  when the certificates are added as secrets ([docs/releasing.md](docs/releasing.md)). The
+  installed app carries its own MCP server and runs it with the user's Node.js; it says when
+  Claude Code or Node.js is missing and where to get them.
+- An app icon of our own.
 
 ### Changed
 

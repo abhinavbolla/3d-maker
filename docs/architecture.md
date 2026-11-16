@@ -15,6 +15,8 @@ prompt box ──▶ your `claude -p` (Claude Code) ──stdio──▶ mcp/ser
    `claude -p` with this app's MCP server, only its tools allowed, and Bash, file and web tools
    turned off. The desktop app starts it from Rust ([src-tauri/src/lib.rs](../src-tauri/src/lib.rs));
    the browser version uses a small endpoint in the dev server ([vite.config.js](../vite.config.js)).
+   An installed app runs its own copy of the MCP server, bundled into one file by
+   [vite.mcp.config.js](../vite.mcp.config.js), with the user's Node.js.
 2. Claude reads the modelling language from the `reference` tool
    ([mcp/reference.mjs](../mcp/reference.mjs)), then calls tools such as `set_plan`, `set_model`,
    `edit_model`, `screenshot`, `check_fit` and `finish_step` ([mcp/server.mjs](../mcp/server.mjs)).
