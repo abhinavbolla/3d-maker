@@ -3,6 +3,7 @@
 import { worldBox, boxesMeet } from "../kernel/fit.js";
 import { toSTL } from "../kernel/mesh.js";
 import { to3MF } from "../kernel/threemf.js";
+import { exactParts, facetDetail, partsToSTEP } from "../kernel/step.js";
 import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox } from "../kernel/drawing.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
@@ -223,6 +224,23 @@ export function createKernel() {
     return { bytes: await to3MF(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0) };
   }
 
+  // STEP: one named, coloured solid per visible part, exact where the script
+  // says exactly what the shape is, else flat faces from a coarser mesh.
+  async function exportSTEP(parts, title) {
+    const shown = visible(parts);
+    const exact = exactParts(shown);
+    const { cell, budgets } = facetDetail(shown.map((p, i) => (exact[i] ? null : p)));
+    const full = exportDetail(shown);
+    // Each part meshed whole (one closed surface, no pieces passing through
+    // each other); a part too thin for the coarse cells gets the STL's detail.
+    const mesh = (p, budget, maxCell) => job({ type: "export", solid: true, node: p.node, budget, maxCell, what: `Part "${p.name}"` }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`);
+    const meshes = await Promise.all(shown.map((p, i) => !exact[i] && mesh(p, budgets[i], cell).catch(() => mesh(p, full.budgets[i], full.cell))));
+    const r = partsToSTEP(shown, exact, meshes, { title, file: `${(title || "model").replace(/[^\w.-]+/g, "-")}.step` });
+    const n = shown.length, e = r.exact.length;
+    const line = e === n ? (n === 1 ? "It has exact surfaces." : "Every part has exact surfaces.") : e ? `${e} of ${n} parts have exact surfaces; the others are flat faces from their mesh.` : n === 1 ? "It is flat faces from its mesh." : "Every part is flat faces from its mesh.";
+    return { bytes: new TextEncoder().encode(r.text), exact_parts: r.exact, faceted_parts: r.faceted, faces: r.faces, line };
+  }
+
   // A drawing sheet as SVG: front, top and side views, an isometric view, a
   // section and the overall sizes. The parts are meshed as for any export;
   // then each view and the section go to a worker of their own.
@@ -294,5 +312,5 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportDrawing, checkFit };
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, checkFit };
 }

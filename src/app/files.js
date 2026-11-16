@@ -11,6 +11,7 @@ const FILTERS = {
   json: { name: "3D Maker model", extensions: ["json"] },
   stl: { name: "STL mesh", extensions: ["stl"] },
   "3mf": { name: "3MF model", extensions: ["3mf"] },
+  step: { name: "STEP model", extensions: ["step", "stp"] },
   png: { name: "PNG picture", extensions: ["png"] },
   svg: { name: "SVG drawing", extensions: ["svg"] },
 };
