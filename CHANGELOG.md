@@ -25,6 +25,9 @@ Notable changes to 3D Maker. The format follows
 - Plans for big models: Claude lists the sub-assemblies and their parts, then builds and checks
   them one step at a time, with progress shown above the prompt.
 - Export as STL (each part its own shell), STL as one solid, and 3MF with named, coloured parts.
+- Export as glTF (.glb) with a named node, colour and material per part and the motion as an
+  animation; OBJ with an MTL; and binary PLY coloured per vertex. From the Export menu, and for
+  Claude as `export_glb`, `export_obj` and `export_ply`.
 - A studio view: a key light that casts shadows, a floor with a soft shadow and a faint
   reflection, and parts drawn as metal, paint, plastic, rubber or glass. Scripts can name a
   part's material.
