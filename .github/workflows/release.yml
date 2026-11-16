@@ -1,0 +1,193 @@
+name: Release
+
+# Builds the desktop app for macOS (Apple silicon and Intel), Windows and
+# Linux and attaches the installers to a draft GitHub release, which a person
+# then reads over and publishes. Runs when a version tag (v0.3.0) is pushed,
+# or by hand from the Actions tab with a tag to build.
+#
+# Signing switches on by itself when its secrets exist and is skipped when
+# they do not: docs/releasing.md lists them, and what an unsigned build means
+# for the people who open it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build, such as v0.3.0 (it must exist and match package.json's version)"
+        required: true
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  # One draft release per tag, made before the builds so each can add its files.
+  draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Check the tag matches package.json
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The tag is $TAG but package.json says $version. Tag v$version, or change the version first."
+            exit 1
+          fi
+
+      - name: Make the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG exists; the builds add to it."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "3D Maker ${TAG#v}" \
+              --notes "Installers for macOS, Windows and Linux. See CHANGELOG.md for what changed, and docs/using.md#install for how to install and what you need first."
+          fi
+
+  build:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - name: macOS (Intel)
+            runner: macos-latest
+            target: x86_64-apple-darwin
+          - name: Windows
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: Linux
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # What Tauri needs to build on Linux (WebKitGTK and friends).
+      - name: Linux build packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
+
+      - run: npm ci
+
+      # macOS: sign with a Developer ID certificate and notarize when the
+      # secrets exist. Without them the app is signed ad hoc ("-"), which
+      # Apple silicon needs to run it at all, and is not notarized.
+      - name: macOS signing
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing with $APPLE_SIGNING_IDENTITY."
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            } >> "$GITHUB_ENV"
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              echo "Notarizing as $APPLE_ID."
+              {
+                echo "APPLE_ID=$APPLE_ID"
+                echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+                echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+              } >> "$GITHUB_ENV"
+            else
+              echo "::warning::Signed but not notarized: APPLE_ID, APPLE_PASSWORD or APPLE_TEAM_ID is not set."
+            fi
+          else
+            echo "::warning::No Apple certificate: the app is signed ad hoc and not notarized."
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
+      # Windows: import the code-signing certificate and give Tauri its
+      # thumbprint when the secrets exist; otherwise build unsigned.
+      - name: Windows signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:WINDOWS_CERTIFICATE) {
+            $pfx = Join-Path $env:RUNNER_TEMP "certificate.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            Remove-Item $pfx
+            $config = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://timestamp.digicert.com" } } } | ConvertTo-Json -Depth 4 -Compress
+            Set-Content -Path (Join-Path $env:RUNNER_TEMP "signing.json") -Value $config
+            "SIGNING_CONFIG=$(Join-Path $env:RUNNER_TEMP 'signing.json')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Output "Signing with certificate $($cert.Subject)."
+          } else {
+            Write-Output "::warning::No Windows certificate: the installers are not signed."
+          }
+
+      - name: Build
+        run: |
+          extra=()
+          if [ -n "${SIGNING_CONFIG:-}" ]; then extra=(--config "$SIGNING_CONFIG"); fi
+          npx tauri build --config src-tauri/tauri.release.conf.json --target "${{ matrix.target }}" "${extra[@]}"
+
+      - name: Attach the installers to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          files=("$bundle"/dmg/*.dmg "$bundle"/msi/*.msi "$bundle"/nsis/*.exe "$bundle"/deb/*.deb "$bundle"/rpm/*.rpm "$bundle"/appimage/*.AppImage)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No installers were made in $bundle."
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            ls -l "$f"
+            if [ "$RUNNER_OS" = "Windows" ]; then (cd "$(dirname "$f")" && certutil -hashfile "$(basename "$f")" SHA256); else shasum -a 256 "$f"; fi
+          done
+          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
