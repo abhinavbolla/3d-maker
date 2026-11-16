@@ -50,7 +50,7 @@ export function parseStep(text) {
         } else out += s[i++];
       }
       i++;
-      return { k: "str", v: out };
+      return { k: "str", v: decode(out), raw: out };
     }
     if (c === "#") {
       const m = /^#(\d+)/.exec(s.slice(i, i + 20));
@@ -142,6 +142,26 @@ export function parseStep(text) {
     problems.push(`does not parse: ${err.message}`);
   }
   return { problems, entities, header };
+}
+
+// Part 21 string escapes: \\ is \, \X2\ hex \X0\ is UTF-16, \X\hh one byte.
+function decode(s) {
+  let out = "";
+  for (let i = 0; i < s.length; ) {
+    if (s.startsWith("\\X2\\", i)) {
+      const end = s.indexOf("\\X0\\", i);
+      const hex = s.slice(i + 4, end);
+      for (let k = 0; k < hex.length; k += 4) out += String.fromCharCode(parseInt(hex.slice(k, k + 4), 16));
+      i = end + 4;
+    } else if (s.startsWith("\\X\\", i)) {
+      out += String.fromCharCode(parseInt(s.slice(i + 3, i + 5), 16));
+      i += 5;
+    } else if (s.startsWith("\\\\", i)) {
+      out += "\\";
+      i += 2;
+    } else out += s[i++];
+  }
+  return out;
 }
 
 // ---- the AP214 entities used, with their attributes ----
@@ -621,13 +641,16 @@ function loopIntegral(pts, surf, same, G) {
 
 // Points of a curved face: a grid in (u, v) over its loops' range, kept
 // where inside the loops (even-odd).
-function facePoints(domain, surf) {
+function facePoints(fine, surf) {
+  // The loops thinned to at most ~300 points each, for speed (the box is
+  // checked to a fraction of a cell, not to the last micrometre).
+  const domain = fine.map((l) => l.filter((_, i) => i % Math.ceil(l.length / 300) === 0));
   const all = domain.flat();
   if (!all.length) return [];
   let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
   for (const [u, v] of all) (u0 = Math.min(u0, u)), (u1 = Math.max(u1, u)), (v0 = Math.min(v0, v)), (v1 = Math.max(v1, v));
   const out = [];
-  const N = 64;
+  const N = 40;
   for (let i = 0; i <= N; i++)
     for (let j = 0; j <= N; j++) {
       const u = u0 + ((u1 - u0) * (i + 0.5)) / (N + 1), v = v0 + ((v1 - v0) * (j + 0.5)) / (N + 1);

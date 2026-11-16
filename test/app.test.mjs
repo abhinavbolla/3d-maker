@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { check3MF } from "./check-3mf.mjs";
+import { checkStep } from "./check-step.mjs";
 
 const { check, fail, done } = checks();
 const h = await startHarness({ port: 5179 });
@@ -118,6 +119,11 @@ try {
   const m3 = await call("export_3mf");
   const r3 = m3.result ? check3MF(Buffer.from(m3.result.base64, "base64")) : { problems: [m3.error], objects: [] };
   check(!r3.problems.length && r3.objects.map((o) => `${o.name} ${o.color}`).join(", ") === "Base #4F7CACFF, Peg #D9A441FF", `3MF has both parts, named, coloured and closed (${r3.objects.map((o) => `${o.name} ${o.color} ${o.triangles}`).join(", ") || r3.problems})`);
+  // As STEP: both parts named, coloured, closed solids, and exact (a box and a cylinder).
+  const st = await call("export_step");
+  const rs = st.result ? checkStep(Buffer.from(st.result.base64, "base64").toString("latin1")) : { problems: [st.error], parts: [] };
+  const stepParts = rs.parts.map((p) => `${p.name} ${p.colour?.map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("")} ${Object.keys(p.surfaces).sort().join("+")} ${Math.round(p.volume)}`).join(", ");
+  check(!rs.problems.length && st.result.exact_parts.join() === "Base,Peg" && stepParts === `Base 4f7cac plane 16000, Peg d9a441 cylinder+plane ${Math.round(Math.PI * 25 * 20)}`, `STEP has both parts as exact, named, coloured solids (${stepParts || rs.problems.slice(0, 3)})`);
 
   // The same model as a drawing: a well-formed SVG sheet with three views,
   // a section through both parts, and the overall sizes (40 x 40, and 27
