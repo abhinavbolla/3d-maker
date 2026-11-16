@@ -50,6 +50,11 @@ Notable changes to 3D Maker. The format follows
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
+- STEP export (AP214). Export > STEP, or the `export_step` tool, saves an assembly of named,
+  coloured solids in mm for other CAD programs. Boxes, cylinders, cones, spheres, tori, capsules,
+  and extrusions and revolves of outlines made of lines and arcs (holes included) come out with
+  exact planes, cylinders, cones, spheres and tori; every other part comes out as a closed solid of
+  flat faces made from its mesh. `node test/check-step.mjs` checks a STEP file on its own.
 
 ### Changed
 

@@ -7,6 +7,8 @@ npm test                                  # kernel, window routing, plan tools (
 npm run licenses                          # every npm package carries an accepted license; CI runs this
 node test/check-stl.mjs model.stl         # checks an STL is well formed and closed
 node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, every part closed
+node test/check-step.mjs model.step       # checks a STEP file: entities, assembly, closed solids, geometry, volumes
+node test/step-run.mjs model.js out.step  # loads a script, exports it as STEP and checks the file
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
 node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
 node test/kernel.test.mjs drawing         # only the kernel tests with "drawing" in their name
