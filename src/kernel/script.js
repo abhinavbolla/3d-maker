@@ -944,7 +944,7 @@ const DEG = Math.PI / 180;
 export const JOINT_TOLERANCE_MM = 1;
 // Globals a model script has no business touching inside the worker.
 // How a part's surface is drawn. Without one the view picks from the colour.
-const MATERIALS = ["metal", "paint", "plastic", "rubber", "glass"];
+const MATERIALS = ["metal", "brushed", "anodised", "paint", "plastic", "rubber", "glass"];
 const BLOCKED = ["self", "globalThis", "window", "fetch", "importScripts", "XMLHttpRequest", "WebSocket", "postMessage", "close", "indexedDB", "caches", "Worker", "Function"];
 
 let lineOffset = null;
