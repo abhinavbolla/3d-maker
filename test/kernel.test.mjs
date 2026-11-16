@@ -502,6 +502,55 @@ test("thin parts are not lost", () => {
   assert.ok(Math.abs(meshVolume(m) / (5000 * 300 * 50) - 1) < 0.05);
 });
 
+test("thin plates, tubes, blades and pins never mesh to nothing or lose a wall", () => {
+  // [shape, budget, exact volume, tolerance]. A 1 mm plate at 3.2 mm cells
+  // used to mesh to nothing: every grid corner and cell centre fell outside it.
+  const tube = (R, w, h) => ({ t: "subtract", a: { t: "cylinder", r: R, h }, b: [{ t: "cylinder", r: R - w, h: h + 2 }] });
+  const cases = [
+    [{ t: "box", s: [200, 120, 1] }, 1500, 24000, 0.01],
+    [{ t: "box", s: [200, 120, 1] }, 20000, 24000, 0.01],
+    [{ t: "box", s: [200, 120, 0.6] }, 6000, 14400, 0.01],
+    [{ t: "box", s: [500, 500, 2] }, 1500, 500000, 0.01],
+    [{ t: "move", v: [7, 3, 0.3], c: { t: "box", s: [300, 80, 1.5] } }, 1500, 36000, 0.01],
+    [{ t: "cylinder", r: 100, h: 1 }, 1500, Math.PI * 1e4, 0.01],
+    [{ t: "box", s: [600, 60, 1.2] }, 1500, 43200, 0.02],
+    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 20000, 900000, 0.01],
+    [tube(50, 1, 100), 20000, Math.PI * (2500 - 49 * 49) * 100, 0.01],
+    [{ t: "cylinder", r: 1, h: 40 }, 1500, Math.PI * 40, 0.05],
+    // A 1 mm rod at 0.8 mm cells comes out fat, never thin or broken.
+    [{ t: "rotate", deg: [0, 90, 0], c: { t: "cylinder", r: 0.5, h: 200 } }, 1500, Math.PI * 0.25 * 200, 0.35],
+  ];
+  for (const [node, budget, exact, tol] of cases) {
+    const m = mesh(node, budget);
+    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget} (cell ${m.cellSize.toFixed(2)} mm)`;
+    assert.ok(m.indices.length > 0, `${what} is empty`);
+    assert.equal(openEdges(m), 0, `${what} is not closed`);
+    assert.ok(Math.abs(meshVolume(m) / exact - 1) < tol, `${what}: volume ${meshVolume(m).toFixed(0)} of ${exact.toFixed(0)}`);
+    assert.equal(m.thickened, undefined, `${what} was drawn thicker`);
+  }
+  // Walls far thinner than any cell the budget allows (a 0.5 mm tube 400 mm
+  // long, a 0.8 mm shell, a tilted 3 mm sheet at a small budget) are drawn a
+  // little more than a cell thick, whole, instead of in shreds or not at all.
+  for (const [node, budget, exact, wall] of [
+    [tube(20, 0.5, 400), 1500, Math.PI * (400 - 19.5 ** 2) * 400, 0.5],
+    [tube(100, 0.8, 300), 1500, Math.PI * (100 ** 2 - 99.2 ** 2) * 300, 0.8],
+    [{ t: "shell", th: 0.8, c: { t: "box", s: [200, 150, 100] } }, 1500, 200 * 150 * 100 - 198.4 * 148.4 * 98.4, 0.8],
+    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 1500, 900000, 3],
+  ]) {
+    const m = mesh(node, budget);
+    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget}`;
+    assert.ok(m.thickened > 0, `${what} was not drawn thicker`);
+    assert.equal(openEdges(m), 0, `${what} is not closed`);
+    // Every wall is there: no less than the true volume, and no more than
+    // walls a cell and a half thick would hold.
+    const v = meshVolume(m);
+    assert.ok(v > exact && v < exact * ((1.5 * m.cellSize) / wall), `${what}: volume ${v.toFixed(0)} of ${exact.toFixed(0)}`);
+  }
+  // A part through meshPart, as the app meshes it, the same.
+  const p = meshPart({ t: "box", s: [200, 120, 1] }, { budget: 20000, normals: true });
+  assert.ok(p.indices.length > 1000 && Math.abs(p.volume / 24000 - 1) < 0.01, `plate part: ${p.indices.length / 3} triangles, volume ${p.volume.toFixed(0)}`);
+});
+
 test("model scripts: example, test helicopter, Claude's helicopter", () => {
   const lamp = readFileSync(new URL("../mcp/reference.mjs", import.meta.url), "utf8").match(/EXAMPLE\n([\s\S]*?)\n\n[A-Z]/)[1];
   for (const src of [lamp, ...["helicopter.js", "claude-helicopter.js"].map((f) => readFileSync(new URL(`./models/${f}`, import.meta.url), "utf8"))]) {

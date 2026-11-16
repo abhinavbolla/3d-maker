@@ -71,6 +71,7 @@ More on the mesher and the fit checks:
 - **Detail** is shared out by surface area, so a big part gets as much detail as a small one.
   The fine pass uses the real surface of the preview meshes, so a rotor spread over 16 m does not
   starve the fuselage.
+- **Thin walls.** A wall thinner than a cell can fall between the grid points, so the search also tests cell edges: where the empty spheres around an edge's two ends (radius: their distance) do not cover it, the edge is split and its middle tested. A part with walls hidden this way is refined, or meshed stretched if it is flat; if no cell the budget allows can hold the wall, its surface is moved out until the wall is a little more than a cell thick, so it is drawn whole.
 - **Thin edges.** A flat part whose edges taper thinner than a cell (a rotor blade, a wing, a
   keel) is meshed stretched up to 8x through its thickness and squeezed back. Its trailing edge
   comes out straight instead of bitten, without filling its broad faces with cells.

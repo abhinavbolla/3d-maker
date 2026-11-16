@@ -60,3 +60,8 @@ Notable changes to 3D Maker. The format follows
 - The view's shadow and floor reflection cost the GPU much less. Both are drawn before the view
   instead of in the middle of it, from a lighter copy of each part with about a ninth of its
   triangles. Pictures and screenshots still use the full meshes.
+- Thin walls no longer go missing from meshes. A 200 x 120 x 1 mm plate at a small budget used to
+  mesh to nothing, because every grid point fell outside it; the mesher now finds walls hidden
+  between grid points, meshes flat plates, discs and blades stretched through their thickness, and
+  refines for thin tubes and shells. A wall too thin for any cell the budget allows is drawn a
+  little more than a cell thick instead of in shreds.
