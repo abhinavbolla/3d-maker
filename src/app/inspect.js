@@ -176,15 +176,19 @@ export function createInspect({ onChange }) {
     // Lighter and darker by turns, so the cut faces of neighbouring parts of
     // one colour (an assembly of grey metal) can be told apart.
     if (fill) m.userData.cap.value.set(entry.part.color).lerp(index % 2 ? BLACK : WHITE, index % 2 ? 0.14 : 0.12);
+    // And hatched, as a drawing's section is, the other way on the next part.
+    m.userData.hatch.value = index % 2 ? 1 : -1;
     m.userData.cap.on = fill;
     m.side = fill ? THREE.DoubleSide : THREE.FrontSide;
     // The shadow map draws back faces, as it does for any solid part.
     m.shadowSide = fill ? THREE.BackSide : null;
     // In front of the floor and its grid where the inside of a part's bottom
-    // face lies in the floor's plane.
+    // face lies in the floor's plane. A fixed offset only, not one that grows
+    // with the face's slope: edge lines (edges.js) lie on these faces and are
+    // drawn a fixed hair nearer, which a slope-scaled offset would beat.
     m.polygonOffset = fill;
-    m.polygonOffsetFactor = fill ? -1 : 0;
-    m.polygonOffsetUnits = fill ? -4 : 0;
+    m.polygonOffsetFactor = 0;
+    m.polygonOffsetUnits = fill ? -16 : 0;
     if (fill !== was) m.needsUpdate = true;
   }
 
@@ -324,8 +328,17 @@ const BLACK = new THREE.Color(0, 0, 0);
 // do not overlap. The one exception is the floor, which the bottom of a part
 // standing on it touches; the material's polygon offset keeps the part in
 // front of it (see cut).
+// Over the fill, a fine hatch at 45 degrees in screen space, one way or the
+// other by part (capHatch), darker on light parts and lighter on dark ones.
 const CAP = /* glsl */ `#include <opaque_fragment>
-  if (!gl_FrontFacing) gl_FragColor = vec4(capColor, diffuseColor.a);`;
+  if (!gl_FrontFacing) {
+    float along = (gl_FragCoord.x + capHatch * gl_FragCoord.y) * 0.70711;
+    float off = abs(fract(along / 7.0) - 0.5) * 7.0;
+    float line = 1.0 - smoothstep(0.4, 1.2, off);
+    float light = dot(capColor, vec3(0.2126, 0.7152, 0.0722));
+    vec3 ink = light > 0.12 ? capColor * 0.5 : mix(capColor, vec3(1.0), 0.3);
+    gl_FragColor = vec4(mix(capColor, ink, 0.8 * line), diffuseColor.a);
+  }`;
 
 // Adds the cut face to a part's material: where the inside of the mesh
 // shows, it is drawn flat in the cap colour. Kept apart from the plain
@@ -333,13 +346,15 @@ const CAP = /* glsl */ `#include <opaque_fragment>
 function capShader(m) {
   m.userData.capped = true;
   m.userData.cap = { value: new THREE.Color(), on: false };
+  m.userData.hatch = { value: 1 };
   const before = m.onBeforeCompile;
   const key = m.customProgramCacheKey;
   m.onBeforeCompile = function (shader, renderer) {
     before.call(this, shader, renderer);
     if (!m.userData.cap.on) return;
     shader.uniforms.capColor = m.userData.cap;
-    shader.fragmentShader = "uniform vec3 capColor;\n" + shader.fragmentShader.replace("#include <opaque_fragment>", CAP);
+    shader.uniforms.capHatch = m.userData.hatch;
+    shader.fragmentShader = "uniform vec3 capColor;\nuniform float capHatch;\n" + shader.fragmentShader.replace("#include <opaque_fragment>", CAP);
   };
   m.customProgramCacheKey = function () {
     return key.call(this) + (m.userData.cap.on ? "|cap" : "");

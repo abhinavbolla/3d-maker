@@ -471,7 +471,8 @@ test("a part can name its material", () => {
   assert.equal(r.error, undefined);
   assert.equal(r.parts[0].material, "rubber");
   assert.equal(r.parts[1].material, null);
-  assert.match(runScript('part("A", sphere(10), { material: "wood" });').error, /material must be one of metal, paint, plastic, rubber, glass/);
+  assert.equal(runScript('part("A", sphere(10), { material: "brushed" }); part("B", sphere(10), { material: "anodised" });').parts.map((p) => p.material).join(), "brushed,anodised");
+  assert.match(runScript('part("A", sphere(10), { material: "wood" });').error, /material must be one of metal, brushed, anodised, paint, plastic, rubber, glass/);
 });
 
 test("tube takes smooth as a radius, or true and false as sweep does", () => {
