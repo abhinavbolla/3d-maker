@@ -1,0 +1,12 @@
+{
+  "name": "draftsman",
+  "description": "Draftsman, CAD you talk to, for Claude Code.",
+  "owner": { "name": "Abhinav Bolla" },
+  "plugins": [
+    {
+      "name": "draftsman",
+      "source": "./plugins/draftsman",
+      "description": "Model parts and machines in the Draftsman app from Claude Code: its MCP server, and a skill with the way to work in it."
+    }
+  ]
+}

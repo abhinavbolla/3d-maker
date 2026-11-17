@@ -5,6 +5,7 @@
 ```bash
 npm test                                  # kernel, window routing, plan tools (needs Chrome); CI runs this
 npm run licenses                          # every npm package carries an accepted license; CI runs this
+node test/tools.test.mjs [--list]         # the MCP tool list follows its rules and stays within its size budget (in npm test)
 node test/check-stl.mjs model.stl         # checks an STL is well formed and closed
 node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, every part closed
 node test/check-step.mjs model.step       # checks a STEP file: entities, assembly, closed solids, geometry, volumes
@@ -24,7 +25,20 @@ node test/kernel.test.mjs drawing         # only the kernel tests with "drawing"
 cd src-tauri && cargo test                # the desktop app's Rust side
 ```
 
-`npm test` checks the kernel's volumes and sizes against exact answers, drawings by measuring their views and sections, window routing over the bridge, and the app's commands in headless Chrome.
+`npm test` checks the kernel's volumes and sizes against exact answers, drawings by measuring their views and sections, window routing over the bridge, the tool list, and the app's commands in headless Chrome.
+
+### The tool list
+
+Every Claude client reads all of Draftsman's tools and the server instructions at the start of every conversation, so `test/tools.test.mjs` starts the real server, lists the tools as a client does, and checks:
+
+- names are snake_case, at most 32 characters, and none is another tool's name with a suffix (`screenshot_v2` should be an argument of `screenshot`);
+- every tool has a description whose first sentence says what it does, in plain words, without capitals that give orders (MUST, NEVER) or advertising;
+- every argument, nested ones included, has a description, and an argument that picks one of a few things is an enum (unless it also takes a name, such as a saved view's). A field is described once: inside an argument that says it takes "set_camera's arguments" or is "as for preview_shots", a field takes that tool's description of it;
+- the plugin's skill (`plugins/draftsman/skills/draftsman/SKILL.md`) names only tools, arguments and script functions that exist, and in a bullet about a tool only that tool's arguments;
+- the instructions, the descriptions and the reference text name only tools that exist, and the instructions send the model to `reference` and stay under the 4096 characters Claude Code shows;
+- the size budget: the tool list and instructions together stay under a ceiling (`BUDGET_BYTES`), printed with an estimate in tokens at four characters each. Raise it only in the PR that adds the words, and say there what they buy.
+
+Problems that exist today are listed in `KNOWN` at the top of the test, one line each. The list may only shrink: fixing one makes the test fail until its entry is removed. `node test/tools.test.mjs other-server.mjs` runs the same checks on another server file.
 
 ## With your Claude Code
 
