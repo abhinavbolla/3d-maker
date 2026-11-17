@@ -31,7 +31,7 @@ function claudeEndpoint() {
             res.statusCode = 400;
             return res.end("Bad request");
           }
-          const cwd = join(tmpdir(), "3d-maker-claude");
+          const cwd = join(tmpdir(), "draftsman-claude");
           mkdirSync(cwd, { recursive: true });
           res.setHeader("content-type", "application/x-ndjson");
           const child = spawn("claude", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });

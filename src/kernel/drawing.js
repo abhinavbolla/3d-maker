@@ -1218,7 +1218,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   };
 
   const out = [];
-  out.push(`<?xml version="1.0" encoding="UTF-8"?>\n<!-- Made with 3D Maker -->\n<svg xmlns="http://www.w3.org/2000/svg" width="${SHEET.w}mm" height="${SHEET.h}mm" viewBox="0 0 ${SHEET.w} ${SHEET.h}" data-scale="${scaleText(scale)}" data-projection="${first ? "first-angle" : "third-angle"}">\n`);
+  out.push(`<?xml version="1.0" encoding="UTF-8"?>\n<!-- Made with Draftsman -->\n<svg xmlns="http://www.w3.org/2000/svg" width="${SHEET.w}mm" height="${SHEET.h}mm" viewBox="0 0 ${SHEET.w} ${SHEET.h}" data-scale="${scaleText(scale)}" data-projection="${first ? "first-angle" : "third-angle"}">\n`);
   out.push(`<title>${xml(f.title)}</title>\n`);
   // The title block's facts for programs that read SVG metadata (Dublin Core).
   const dc = [["title", [f.title, f.subtitle].filter(Boolean).join(" – ")], ["identifier", f.number], ["date", f.date], ["type", f.type], ["creator", f.createdBy], ["rights", f.owner]];
@@ -1314,7 +1314,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
 
   out.push(titleBlock(f, scaleText(scale), first));
   // Credit where it belongs: in the filing margin, outside the frame.
-  out.push(text(10, SHEET.bottom, 1.8, "Made with 3D Maker", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
+  out.push(text(10, SHEET.bottom, 1.8, "Made with Draftsman", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
   out.push("</g>\n</svg>\n");
   return { svg: out.join(""), scale: scaleText(scale), iso: Boolean(iso), titles: { title, subtitle, shortened } };
 }

@@ -1,4 +1,4 @@
-// Made by Claude in 3D Maker (npm run try) from the prompt: "A Black Hawk-style
+// Made by Claude in Draftsman (npm run try) from the prompt: "A Black Hawk-style
 // main rotor head ... It works like the real one: the rotor turns, cyclic and
 // collective sliders tilt and raise the swashplate, and the pitch links pitch
 // each blade as it goes round." Kept as a test: 47 parts, 29 joints.
