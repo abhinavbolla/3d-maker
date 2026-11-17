@@ -292,10 +292,12 @@ function renderAll() {
 store.subscribe(renderAll);
 
 // The invitation and examples show only on an empty window, and go as soon
-// as you type.
+// as you type. A document with a script is not empty even before it is
+// built: a saved model being restored at start keeps them hidden.
 function renderStart() {
   const count = store.state.result?.parts.length ?? 0;
-  $("start").hidden = Boolean(count) || Boolean(working) || Boolean(opening) || !$("reply").hidden || Boolean($("input").value.trim());
+  const hasModel = Boolean(count) || Boolean(store.state.doc.script.trim());
+  $("start").hidden = hasModel || Boolean(working) || Boolean(opening) || !$("reply").hidden || Boolean($("input").value.trim());
 }
 
 // ---- examples: a ready model, opened without Claude ----
@@ -310,8 +312,9 @@ async function openExample(ex) {
   try {
     const script = await exampleScript(ex.id);
     viewport.resetFit();
-    // Not a step in the undo history, so undo never goes back to the empty window.
-    await store.commit({ ...emptyDoc(), script }, { history: false });
+    // On an empty window it is not a step in the undo history, so undo never
+    // goes back to the empty window; over a model, undo brings that model back.
+    await store.commit({ ...emptyDoc(), script }, { history: Boolean(store.state.doc.script.trim()) });
     example = { ex, script };
     viewport.fitIfNew();
     // Unless the first-model hint has taken the status line meanwhile.

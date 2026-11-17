@@ -1075,6 +1075,48 @@ joint("Rod", "Piston", top);` });
   check(times.length === 12 && times.every((t, n) => Math.abs(t - n / 30) < 1e-9), `over two shots, frame n is posed at n/30 s into the motion (${times.slice(6, 9).map((t) => t.toFixed(4))})`);
   const recOff = Math.max(...(tracked.result?.tracked ?? [[NaN]]).map(hubOff));
   check(liveOff < 0.1 && recOff < 0.1, `a fast rotor's hub stays on its axis: ${liveOff.toFixed(4)} mm off in the view between samples, ${recOff.toFixed(4)} mm in recorded frames`);
+
+  // A saved model being restored at start: the examples never show, from
+  // first paint until it is built. With nothing saved they show at once.
+  // The page samples whether the examples are on screen every 100 ms.
+  {
+    const { sleep: nap } = await import("./harness.mjs");
+    const sampler = (saved) => `(() => {
+      ${saved ? `localStorage.setItem("draftsman:autosave", ${JSON.stringify(JSON.stringify({ version: 2, script: saved, values: {}, session: null, plan: null, drawing: {} }))});` : `localStorage.removeItem("draftsman:autosave");`}
+      localStorage.removeItem("3d-" + "maker:autosave");
+      window.__startSamples = [];
+      const shown = () => { const s = document.getElementById("start"); return Boolean(s && !s.hidden && s.offsetParent !== null && document.querySelector("#ideas [data-example]")); };
+      const parts = () => window.__draftsman?.state().parts.length ?? 0;
+      const tick = () => window.__startSamples.push({ t: performance.now(), shown: shown(), parts: parts() });
+      document.addEventListener("DOMContentLoaded", () => { tick(); setInterval(tick, 100); });
+    })()`;
+    const paint = (win) => win(`performance.getEntriesByType("paint").find((p) => p.name === "first-paint")?.startTime ?? 0`);
+    const saved = readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8");
+    const r = await h.openWindow({ preload: sampler(saved) });
+    for (let i = 0; i < 600 && !(await r("window.__draftsman.state().parts.length")); i++) await nap(100);
+    await nap(800);
+    const rs = await r("window.__startSamples");
+    const up = rs.find((s) => s.parts > 0);
+    const shownWhileRestoring = rs.filter((s) => s.shown).length;
+    check(up && shownWhileRestoring === 0, `with a saved 47-part model, the examples never show: ${shownWhileRestoring} of ${rs.length} samples every 100 ms from page load until the model was up at ${up ? Math.round(up.t) : "never"} ms (first paint at ${Math.round(await paint(r))} ms)`);
+    check(!(await r("window.__draftsman.history().undo")), "restoring a saved model leaves nothing to undo");
+    const n = await h.openWindow({ preload: sampler(null) });
+    for (let i = 0; i < 100 && !(await n("window.__startSamples.some((s) => s.shown)")); i++) await nap(100);
+    const ns = await n("window.__startSamples");
+    const firstShown = ns.find((s) => s.shown);
+    const fp = await paint(n);
+    check(firstShown && firstShown.t - fp < 1500, `with nothing saved the examples are up at ${firstShown ? Math.round(firstShown.t) : "never"} ms after navigation, first paint at ${Math.round(fp)} ms`);
+    // An example opened over a model is one undo step away from it.
+    await n(`window.__draftsman.call("set_model", { script: 'part("Block", box(20, 20, 20).at(0, 0, 10));' })`);
+    await n(`window.__draftsman.call("set_model", { script: 'part("Block", box(30, 20, 20).at(0, 0, 10));' })`);
+    const before = await n("window.__draftsman.history().undo");
+    await n(`document.querySelector('#ideas [data-example="mug"]').click()`);
+    for (let i = 0; i < 100 && (await n("window.__draftsman.state().title")) !== "Coffee mug"; i++) await nap(100);
+    const overUndo = await n("window.__draftsman.history().undo");
+    await n(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }))`);
+    for (let i = 0; i < 100 && (await n("window.__draftsman.state().parts.join()")) !== "Block"; i++) await nap(100);
+    check(overUndo === before + 1 && (await n("window.__draftsman.state().parts.join()")) === "Block", `an example opened over a model is one undo step from it (${before} → ${overUndo} steps; undo shows ${await n("window.__draftsman.state().parts.join()")})`);
+  }
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);
