@@ -15,6 +15,8 @@ node test/export-run.mjs runs/x/model.js  # loads a saved script and times its S
 node test/check-meshfile.mjs model.glb    # checks a GLB, OBJ (with its MTL) or PLY: names, sizes, every part closed
 node test/meshfile-run.mjs model.js [dir]  # exports a script as GLB, OBJ and PLY, times and checks them, and loads the GLB with three.js
 node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
+node test/drawing-run.mjs model.js out.pdf "" "" '{"format":"pdf"}'  # the same as PDF (or DXF)
+node test/check-dxf.mjs file.dxf [look.svg]  # reads a DXF on its own, checks it, draws what it holds
 node test/example-pictures.mjs            # draws the examples' small pictures again (src/examples/*.webp)
 node test/kernel.test.mjs drawing         # only the kernel tests with "drawing" in their name
 cd src-tauri && cargo test                # the desktop app's Rust side

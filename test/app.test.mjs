@@ -179,12 +179,42 @@ try {
   check(across.result?.section.axis === "z" && across.result.section.parts_cut.join() === "Peg" && Math.abs(across.result.section.cut_area_mm2 - Math.PI * 25) < 0.1, `a section can be put anywhere (${JSON.stringify(across.result?.section ?? across.error)})`);
   check(/misses the model/.test((await call("export_drawing", { axis: "z", offset: 60 })).error ?? ""), "a section that misses the model is refused");
 
+  // The same sheet as PDF and as DXF, and one outline alone at 1:1.
+  const bytesOf = (r) => Buffer.from(r.result?.base64 ?? "", "base64");
+  const pdf = await call("export_drawing", { format: "pdf" });
+  const pdfText = bytesOf(pdf).toString("latin1");
+  const xrefAt = Number(/startxref\n(\d+)/.exec(pdfText)?.[1]);
+  check(pdf.result?.format === "pdf" && pdfText.startsWith("%PDF-1.4") && pdfText.trimEnd().endsWith("%%EOF") && /\/MediaBox \[0 0 1190\.551 841\.89\]/.test(pdfText) && pdfText.slice(xrefAt, xrefAt + 4) === "xref" && /\/BaseFont \/Helvetica/.test(pdfText) && pdf.result.bytes < 60000, `the sheet as PDF: A3 in points, a sound cross-reference table, Helvetica, ${pdf.result?.bytes ?? pdf.error} bytes`);
+  const a4 = await call("export_drawing", { format: "pdf", sheet: "A4" });
+  check(/\/MediaBox \[0 0 595\.276 841\.89\]/.test(bytesOf(a4).toString("latin1")) && / on A4\./.test(a4.result?.line ?? ""), `and on A4, upright (${a4.result?.line ?? a4.error})`);
+  const { readDXF } = await import("./check-dxf.mjs");
+  const dxf = await call("export_drawing", { format: "dxf" });
+  const dx = readDXF(bytesOf(dxf).toString("utf8"));
+  check(dxf.result?.format === "dxf" && !dx.problems.length && dx.version === "AC1009" && dx.bounds[0] >= 0 && dx.bounds[2] <= 420 && dx.bounds[3] <= 297 && ["VISIBLE", "SECTION", "HATCH", "DIMENSIONS", "FRAME", "TITLE"].every((l) => dx.byLayer[l] > 0), `the sheet as DXF: well formed, on the A3 sheet, on named layers (${JSON.stringify(dx.byLayer)} ${dx.problems.slice(0, 3)})`);
+  const cutOut = await call("export_drawing", { outline: "section", format: "dxf" });
+  const co = readDXF(bytesOf(cutOut).toString("utf8"));
+  const circle = co.entities.find((e) => e.type === "CIRCLE");
+  check(!co.problems.length && co.counts.CIRCLE === 1 && Math.abs(circle.r - 5) < 0.01 && cutOut.result?.section.axis === "z" && cutOut.result.size_mm.join() === "10,10", `an outline across the thinnest side cuts the peg: one true circle, r ${circle?.r} (${cutOut.result?.line ?? cutOut.error})`);
+  const baseOut = readDXF(bytesOf(await call("export_drawing", { outline: "section", format: "dxf", axis: "z", offset: 0 })).toString("utf8"));
+  const loop = baseOut.entities.find((e) => e.type === "POLYLINE");
+  check(baseOut.counts.POLYLINE === 1 && loop.closed && baseOut.bounds.map((v) => Math.round(v * 100) / 100).join() === "-20,-20,20,20", `and through the base: one closed 40 x 40 mm outline (${baseOut.bounds})`);
+  const svgOut = await call("export_drawing", { outline: "top" });
+  check(svgOut.result?.format === "svg" && /width="4[12](\.\d+)?mm"/.test(bytesOf(svgOut).toString()) && svgOut.result.circles === 1 && svgOut.result.closed_outlines === 1 && /PDF/.test((await call("export_drawing", { outline: "top", format: "pdf" })).error ?? ""), `a view's outline as SVG at true size, and no PDF of an outline (${svgOut.result?.line ?? svgOut.error})`);
+  check((await w('[...document.querySelectorAll("#export-menu [data-export]")].map((b) => b.dataset.export).join()')).includes("svg,pdf,dxf,outline"), "the Export menu offers the drawing as SVG, PDF and DXF, and the outline");
+  // Holes, sized from the script by the app's workers, and hidden edges on request.
+  await call("set_model", { script: readFileSync(new URL("./models/bracket.js", import.meta.url), "utf8") });
+  const holes = await call("export_drawing", { hidden_edges: true });
+  const holeSvg = bytesOf(holes).toString();
+  const sizes = holes.result?.holes?.holes.map((x) => x.text).sort().join(", ");
+  check(sizes === "2× ⌀6.6, 4× ⌀9, ⌀12, ⌀20, ⌀28" && holes.result.holes.positions === 8 && holes.result.holes.sizes === 3 && holes.result.section.axis === "y" && holes.result.section.offset_mm === 0 && /Holes .* sized from the script's own values\./.test(holes.result.line) && /<g class="hidden" data-layer="HIDDEN"/.test(holeSvg) && /id="centre-lines"/.test(holeSvg), `the bracket's holes are sized and placed, with centre lines and dashed hidden edges (${sizes}; ${holes.result?.line ?? holes.error})`);
+  await call("set_model", { script: 'part("Base", box(40, 40, 10), { color: "#4f7cac" });\npart("Peg", cylinder(5, 20).at(0, 0, 12), { color: "#d9a441" });' });
+
   // The title block with nothing said: honest and complete. A number is
   // made up once for the document; nobody's name is filled in; the date of
   // issue is today.
   const f0 = sheet.fields;
   const today = await w('(() => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); })()');
-  check(/^3DM-[0-9A-HJKMNP-TV-Z]{6}$/.test(f0.number) && f0.date === today && f0["document-type"] === "Assembly drawing", `the title block has a made-up number, today's date and the document type (${JSON.stringify(f0)})`);
+  check(/^DFT-[0-9A-HJKMNP-TV-Z]{6}$/.test(f0.number) && f0.date === today && f0["document-type"] === "Assembly drawing", `the title block has a made-up number, today's date and the document type (${JSON.stringify(f0)})`);
   check(!f0["created-by"] && !f0["approved-by"] && !f0.owner && !f0.revision, `and no name, owner, approver or revision that nobody gave (${JSON.stringify(f0)})`);
   check(/Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude, e\.g\. "drawn by …, owner …"\.$/.test(dr.result?.line ?? ""), `the line says what is blank and how to fill it (${dr.result?.line})`);
   check(dr.result?.isometric_view === true, "and says the isometric view was drawn");
@@ -265,7 +295,7 @@ try {
   await undo();
   await undo();
   const back = await numberNow();
-  check(rewritten === "BRK-0042" && /^3DM-/.test(fresh) && back === "BRK-0042", `the number stays through set_model, New starts afresh, and undo brings the old number back (${rewritten}, ${fresh}, ${back})`);
+  check(rewritten === "BRK-0042" && /^DFT-/.test(fresh) && back === "BRK-0042", `the number stays through set_model, New starts afresh, and undo brings the old number back (${rewritten}, ${fresh}, ${back})`);
   // Open a file with a number of its own, then undo and redo across it.
   const file = JSON.stringify({ version: 2, script: 'part("Opened", box(25, 25, 25));', values: {}, drawing: { number: "FILE-0001", revision: "B" } });
   await w(`(() => {
@@ -310,7 +340,7 @@ try {
     for (let i = 0; i < 300 && !/Exported/.test(document.getElementById("status").textContent); i++) await new Promise((r) => setTimeout(r, 100));
     return document.getElementById("status").textContent;
   })()`);
-  check(/^Exported \S+\.svg\. Drawing 3DM-\w{6}, \w+ angle( \(from your region\))?, [\d:]+\. Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude/.test(status), `Export > Drawing says what went on the sheet (${status})`);
+  check(/^Exported \S+\.svg\. Drawing DFT-\w{6}, \w+ angle( \(from your region\))?, [\d:]+\. Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude/.test(status), `Export > Drawing says what went on the sheet (${status})`);
 
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.
