@@ -4,18 +4,18 @@ The [README](../README.md) gets you to a first model. This page is the full guid
 
 ## Install
 
-Download the installer for your system from the [releases page](https://github.com/abhinavbolla/3d-maker/releases): a `.dmg` for macOS (`aarch64` for Apple silicon, `x64` for Intel), an `.msi` or `-setup.exe` for Windows, and a `.deb`, `.rpm` or `.AppImage` for Linux.
+Download the installer for your system from the [releases page](https://github.com/abhinavbolla/draftsman/releases): a `.dmg` for macOS (`aarch64` for Apple silicon, `x64` for Intel), an `.msi` or `-setup.exe` for Windows, and a `.deb`, `.rpm` or `.AppImage` for Linux.
 
-Before 3D Maker can draw, you need two things it does not install for you:
+Before Draftsman can draw, you need two things it does not install for you:
 
-- **[Claude Code](https://claude.com/claude-code)**, installed and logged in: run `claude` once in a terminal and log in. 3D Maker runs it for every prompt, on your own Claude plan; there is no API key to enter.
+- **[Claude Code](https://claude.com/claude-code)**, installed and logged in: run `claude` once in a terminal and log in. Draftsman runs it for every prompt, on your own Claude plan; there is no API key to enter.
 - **[Node.js](https://nodejs.org) 20 or newer.** It runs the small server that connects Claude Code to the app window.
 
 Without them the app still opens, shows the examples and opens and exports files, and the prompt box says which one is missing.
 
 The installers are not signed yet, so your system warns you the first time:
 
-- **macOS** says it cannot check the app, or that it is damaged. Open it once, then in System Settings, Privacy & Security, click **Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/3D Maker.app"` in Terminal.
+- **macOS** says it cannot check the app, or that it is damaged. Open it once, then in System Settings, Privacy & Security, click **Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Draftsman.app"` in Terminal.
 - **Windows** says "Windows protected your PC". Click **More info**, then **Run anyway**.
 
 To run it from the source instead, see the [README](../README.md#run-it).

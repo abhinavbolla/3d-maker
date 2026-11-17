@@ -10,9 +10,9 @@ The desktop app is built for macOS (Apple silicon and Intel), Windows and Linux 
 
    | Build | Files |
    |---|---|
-   | macOS, Apple silicon | `3D Maker_<version>_aarch64.dmg` |
-   | macOS, Intel | `3D Maker_<version>_x64.dmg` |
-   | Windows | `3D Maker_<version>_x64_en-US.msi` and `3D Maker_<version>_x64-setup.exe` |
+   | macOS, Apple silicon | `Draftsman_<version>_aarch64.dmg` |
+   | macOS, Intel | `Draftsman_<version>_x64.dmg` |
+   | Windows | `Draftsman_<version>_x64_en-US.msi` and `Draftsman_<version>_x64-setup.exe` |
    | Linux | `.deb`, `.rpm` and `.AppImage` |
 
    Each build's log also prints the SHA-256 of every file.
@@ -58,7 +58,7 @@ The `.deb`, `.rpm` and `.AppImage` are not signed. People can check them against
 
 Until the secrets above exist, the installers are unsigned (on macOS, signed "ad hoc", which Apple silicon needs to run the app at all). They work, but the system warns whoever opens them:
 
-- **macOS** says it cannot check "3D Maker" for malicious software, or that it "is damaged and can't be opened". To open it anyway, open it once, then go to System Settings, Privacy & Security, and click **Open Anyway** next to the message about 3D Maker. Or, in Terminal, after moving the app to Applications: `xattr -dr com.apple.quarantine "/Applications/3D Maker.app"`.
+- **macOS** says it cannot check "Draftsman" for malicious software, or that it "is damaged and can't be opened". To open it anyway, open it once, then go to System Settings, Privacy & Security, and click **Open Anyway** next to the message about Draftsman. Or, in Terminal, after moving the app to Applications: `xattr -dr com.apple.quarantine "/Applications/Draftsman.app"`.
 - **Windows** SmartScreen says "Windows protected your PC". Click **More info**, then **Run anyway**. The browser may also warn that the file is not commonly downloaded.
 - **Linux** shows no warning. An AppImage needs to be made executable first: `chmod +x 3D*.AppImage`.
 

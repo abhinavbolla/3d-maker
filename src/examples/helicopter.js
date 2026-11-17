@@ -1,5 +1,5 @@
 // Example: a light helicopter, about 11 m long, whose main and tail rotors
-// spin. Made from two prompts in 3D Maker (test/models/claude-helicopter.js).
+// spin. Made from two prompts in Draftsman (test/models/claude-helicopter.js).
 // Here the tail rotor turns at the main rotor's speed: at 1200 rpm the view,
 // which plays motion from 60 poses a second, drew it away from the fin.
 title("Helicopter");

@@ -61,8 +61,8 @@ struct ShellEnv {
 }
 
 const CLAUDE_MISSING: &str =
-    "Claude Code was not found. 3D Maker uses your own Claude Code to draw: install it from claude.com/claude-code, run `claude` once in a terminal to log in, then try again.";
-const NODE_MISSING: &str = "Node.js was not found. 3D Maker needs Node.js 20 or newer to connect Claude Code to this window: install it from nodejs.org, then try again.";
+    "Claude Code was not found. Draftsman uses your own Claude Code to draw: install it from claude.com/claude-code, run `claude` once in a terminal to log in, then try again.";
+const NODE_MISSING: &str = "Node.js was not found. Draftsman needs Node.js 20 or newer to connect Claude Code to this window: install it from nodejs.org, then try again.";
 
 #[cfg(not(windows))]
 fn shell_env() -> &'static ShellEnv {

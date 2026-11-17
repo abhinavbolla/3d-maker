@@ -20,8 +20,8 @@ try {
     const set = await h.command(w, "set_model", { script: readFileSync(join(root, `${ex.id}.js`), "utf8") });
     if (set.error) throw new Error(`${ex.id}: ${set.error}`);
     await h.command(w, "screenshot", { width: 64, height: 64 }); // waits for the fine mesh
-    await w(`window.__3dmaker.fit("iso")`);
-    const { png } = await w("window.__3dmaker.picture({ width: 900 })");
+    await w(`window.__draftsman.fit("iso")`);
+    const { png } = await w("window.__draftsman.picture({ width: 900 })");
     if (look) writeFileSync(join(look, `${ex.id}.png`), Buffer.from(png, "base64"));
     // Cut the middle out at 10:7 and scale it down in the page's own canvas.
     const webp = await w(`(async () => {

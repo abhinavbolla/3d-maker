@@ -57,7 +57,7 @@ jobs:
             echo "Release $TAG exists; the builds add to it."
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-              --title "3D Maker ${TAG#v}" \
+              --title "Draftsman ${TAG#v}" \
               --notes "Installers for macOS, Windows and Linux. See CHANGELOG.md for what changed, and docs/using.md#install for how to install and what you need first."
           fi
 

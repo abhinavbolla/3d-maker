@@ -1,7 +1,7 @@
 // Example: a helicopter's main rotor head that works like the real one. The
 // rotor turns, the collective and cyclic sliders raise and tilt the
 // swashplate, and the pitch links pitch each blade as it goes round.
-// 47 parts and 29 joints, made from a prompt in 3D Maker; the same script as
+// 47 parts and 29 joints, made from a prompt in Draftsman; the same script as
 // test/models/claude-rotor-head.js.
 
 title("Black Hawk-style main rotor head");

@@ -1,13 +1,13 @@
-# 3D Maker
+# Draftsman
 
-[![CI](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml)
+[![CI](https://github.com/abhinavbolla/draftsman/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinavbolla/draftsman/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **CAD you talk to.** Describe a part or a whole machine, and Claude draws it in 3D, in real dimensions, with parts that move. Look around it, click a part to change it, and export a picture or a file for other apps.
 
-![A helicopter rotor head made in 3D Maker: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
+![A helicopter rotor head made in Draftsman: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
 
-> **3D Maker is in early development.** From the first [release](https://github.com/abhinavbolla/3d-maker/releases) on, each comes with installers for macOS, Windows and Linux, not signed yet. Until then it runs from a clone of this repository.
+> **Draftsman is in early development.** From the first [release](https://github.com/abhinavbolla/draftsman/releases) on, each comes with installers for macOS, Windows and Linux, not signed yet. Until then it runs from a clone of this repository.
 
 ## What works today
 
@@ -26,7 +26,7 @@ The [roadmap](docs/roadmap.md) has the plan.
 
 ## Install
 
-Download the installer for your system from the [releases page](https://github.com/abhinavbolla/3d-maker/releases). You also need [Claude Code](https://claude.com/claude-code), installed and logged in, and [Node.js](https://nodejs.org) 20 or newer. The [guide](docs/using.md#install) says what to do when your system warns about an unsigned app.
+Download the installer for your system from the [releases page](https://github.com/abhinavbolla/draftsman/releases). You also need [Claude Code](https://claude.com/claude-code), installed and logged in, and [Node.js](https://nodejs.org) 20 or newer. The [guide](docs/using.md#install) says what to do when your system warns about an unsigned app.
 
 ## Run it
 
@@ -50,7 +50,7 @@ npm start          # or in your browser, at http://localhost:5173
 
 The [guide](docs/using.md) has every gesture and key, and what Claude can draw.
 
-## Why 3D Maker
+## Why Draftsman
 
 - **You describe; Claude draws.** There are no tool palettes to learn. It runs on the Claude Code you already have, with no API key.
 - **It is a model, not a picture.** Real millimetres, separate named parts, and mechanisms that are checked as they move.

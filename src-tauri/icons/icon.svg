@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- 3D Maker's app icon: a solid seen from a corner, on a dark tile.
+  <!-- Draftsman's app icon: a solid seen from a corner, on a dark tile.
        The icon set in this folder is made from it with `npx tauri icon src-tauri/icons/icon.svg`. -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
