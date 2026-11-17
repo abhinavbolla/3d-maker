@@ -14,7 +14,7 @@
 //   next sheet has an empty line to sign.
 import { LIMITS, today } from "../kernel/drawing.js";
 
-const KEY = "3d-maker:drawing";
+const KEY = "draftsman:drawing";
 // export_drawing's names for the fields the user can set, and the title
 // block's (see LIMITS in kernel/drawing.js).
 const FIELDS = { drawn_by: "createdBy", owner: "owner", approved_by: "approvedBy", number: "number", revision: "revision", subtitle: "subtitle", tolerances: "tolerances" };

@@ -1,4 +1,4 @@
-// Made by Claude in 3D Maker from the prompt "A helicopter. The main rotor and tail
+// Made by Claude in Draftsman from the prompt "A helicopter. The main rotor and tail
 // rotor should spin. Model the whole top properly: rotor head, mast, engine cowling
 // and exhausts.", then, with the fuselage selected, "Make this dark blue, and fix
 // the engine intake so it sits on top of the cowling instead of sinking into the body."
