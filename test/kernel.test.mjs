@@ -1299,6 +1299,10 @@ test("drawing: hidden edges can be drawn dashed, and never over a visible line",
     const ys = hid.filter(([x]) => Math.sign(x) === s).map(([, y]) => y);
     assert.ok(Math.max(...ys) - Math.min(...ys) > 39, `the hidden side at x = ${s * 10} runs ${Math.min(...ys)} to ${Math.max(...ys)}`);
   }
+  // Each side is one line, not overlapping pieces: dashes laid on dashes
+  // (or restarted on every short piece) would look like a solid line.
+  const sides = v.parts[0].hidden.filter((L) => Math.hypot(L[0] - L[L.length - 2], L[1] - L[L.length - 1]) > 1);
+  assert.equal(sides.length, 2, `the hole's hidden sides come in ${sides.length} pieces`);
   // On the sheet: narrow and dashed, on their own layer.
   const { svg } = drawingSVG(block, { hidden: true });
   assert.match(svg, /<g class="hidden" data-layer="HIDDEN" stroke-width="0\.25" stroke-dasharray="3 0\.75"/);

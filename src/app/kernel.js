@@ -3,7 +3,7 @@
 import { worldBox, boxesMeet } from "../kernel/fit.js";
 import { toSTL } from "../kernel/mesh.js";
 import { to3MF } from "../kernel/threemf.js";
-import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox } from "../kernel/drawing.js";
+import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox, joinLines } from "../kernel/drawing.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
 const RUN_TIMEOUT_MS = 30000;
@@ -268,7 +268,8 @@ export function createKernel() {
     const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the outline took too long.");
     if (view) {
       const v = await draw({ view });
-      return { view, loops: [], lines: v.parts.flatMap((p) => p.lines) };
+      // Pieces of one outline that meet end to end are joined, so loops close.
+      return { view, loops: [], lines: joinLines(v.parts.flatMap((p) => p.lines), v.pixel * 2, 90), fromMesh: true };
     }
     const bounds = modelBounds(meshes);
     const size = [0, 1, 2].map((a) => bounds[a + 3] - bounds[a]);

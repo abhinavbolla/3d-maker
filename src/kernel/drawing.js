@@ -429,6 +429,7 @@ function hiddenLines(parts, { u0, v0, px, nx, ny }) {
           for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (x + dx >= 0 && y + dy >= 0 && x + dx < nx && y + dy < ny) mask[(y + dy) * nx + x + dx] = 1;
         }
       }
+  const drawn = new Uint8Array(nx * ny);
   for (const p of parts) {
     if (!p.raw) continue;
     const [hka, hkb, hpts, nv] = p.raw;
@@ -438,10 +439,17 @@ function hiddenLines(parts, { u0, v0, px, nx, ny }) {
       const xa = (ua - u0) / px, ya = (va - v0) / px, xb = (ub - u0) / px, yb = (vb - v0) / px;
       const n = max(1, ceil(hypot(xb - xa, yb - ya) / 0.5));
       let start = -1;
+      const marks = [];
       for (let k = 0; k <= n; k++) {
         const t = (k + 0.5) / n;
         const x = floor(xa + t * (xb - xa)), y = floor(ya + t * (yb - ya));
-        const free = k < n && !(x >= 0 && y >= 0 && x < nx && y < ny && mask[y * nx + x]);
+        const inside = x >= 0 && y >= 0 && x < nx && y < ny;
+        // Away from its own ends, a stretch already drawn hidden (the same
+        // edge seen twice, or another part's) is not drawn again: two
+        // dashed lines on one another look like one solid line.
+        const nearEnd = min(k, n - k) * 0.5 < 2;
+        const free = k < n && !(inside && mask[y * nx + x]) && !(inside && !nearEnd && drawn[y * nx + x]);
+        if (free && inside) marks.push(y * nx + x);
         if (free && start < 0) start = k;
         else if (!free && start >= 0) {
           const s0 = start / n, s1 = k / n;
@@ -451,9 +459,69 @@ function hiddenLines(parts, { u0, v0, px, nx, ny }) {
           start = -1;
         }
       }
+      for (const m of marks) drawn[m] = 1;
     }
-    p.hidden = chain(ka, kb, pts, nv, 4 * px, 0.2 * px);
+    p.hidden = joinLines(chain(ka, kb, pts, nv, 4 * px, 0.2 * px), 1.5 * px);
   }
+}
+
+// Joins polylines whose ends meet (within tol) and run on in nearly the same
+// direction (within 30°), so a dashed line's pattern runs on along it: where
+// a line is made of many short pieces, each piece would start its own dash,
+// and a dashed line would look solid.
+export function joinLines(lines, tol, turn = 30) {
+  const key = (x, y) => `${Math.round(x / tol)},${Math.round(y / tol)}`;
+  const at = new Map();
+  const ends = (L) => [[L[0], L[1]], [L[L.length - 2], L[L.length - 1]]];
+  const live = lines.map((L) => Array.from(L));
+  const add = (i) => {
+    for (const [x, y] of ends(live[i])) {
+      const k = key(x, y);
+      if (!at.has(k)) at.set(k, new Set());
+      at.get(k).add(i);
+    }
+  };
+  const drop = (i) => {
+    for (const [x, y] of ends(live[i])) at.get(key(x, y))?.delete(i);
+  };
+  live.forEach((_, i) => add(i));
+  const dir = (ax, ay, bx, by) => {
+    const l = hypot(bx - ax, by - ay) || 1;
+    return [(bx - ax) / l, (by - ay) / l];
+  };
+  for (let i = 0; i < live.length; i++) {
+    if (!live[i]) continue;
+    for (let grew = true; grew; ) {
+      grew = false;
+      const L = live[i];
+      const n = L.length;
+      const [ex, ey] = [L[n - 2], L[n - 1]];
+      const out = dir(L[n - 4], L[n - 3], ex, ey);
+      const near = [];
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const j of at.get(`${Math.round(ex / tol) + dx},${Math.round(ey / tol) + dy}`) ?? []) near.push(j);
+      for (const j of near) {
+        if (j === i || !live[j]) continue;
+        let M = live[j];
+        const m = M.length;
+        if (hypot(M[m - 2] - ex, M[m - 1] - ey) <= tol && hypot(M[0] - ex, M[1] - ey) > tol) {
+          const r = [];
+          for (let q = m - 2; q >= 0; q -= 2) r.push(M[q], M[q + 1]);
+          M = r;
+        }
+        if (hypot(M[0] - ex, M[1] - ey) > tol) continue;
+        const on = dir(M[0], M[1], M[2], M[3]);
+        if (out[0] * on[0] + out[1] * on[1] < cos((turn * PI) / 180)) continue;
+        drop(i);
+        drop(j);
+        live[i] = [...L, ...M.slice(2)];
+        live[j] = null;
+        add(i);
+        grew = true;
+        break;
+      }
+    }
+  }
+  return live.filter(Boolean).map((L) => Float64Array.from(L));
 }
 
 // Joins pieces end to end into polylines. Pieces shorter than minLen that
@@ -1865,16 +1933,28 @@ function detailView({ views, at, map, names, scale, wide, narrow, taken, spec })
     if (!spot) continue;
     // The letter on the parent view, just outside its circle, where it is free.
     let letter = null;
-    for (const an of [-45, -135, 45, 135, -90, 0, 180, 90]) {
-      const a = (an * PI) / 180, lx = cx + cos(a) * (Rk + 4), ly = cy + sin(a) * (Rk + 4) + 1.8;
-      const box = [lx - 3, ly - 5, lx + 3, ly + 1];
-      // It may sit on its own view, but on nothing else.
-      const own = at[k];
-      if (free(box) || (box[0] >= SHEET.left + 2 && !taken.some((t) => meets(t, box) && !(t[0] === own.x - 1 && t[1] === own.y - 1)))) {
-        letter = { lx, ly, box };
-        break;
+    // It may sit over its own view, but on as few of its lines as can be,
+    // and on nothing else.
+    const own = at[k];
+    const { tx: px, ty: py } = map(k);
+    const onLines = (box) => {
+      let n = 0;
+      for (const p of views[k].parts)
+        for (const L of p.lines)
+          for (let i = 0; i < L.length; i += 2) {
+            const x = px(L[i]), y = py(L[i + 1]);
+            if (x > box[0] && x < box[2] && y > box[1] && y < box[3]) n++;
+          }
+      return n;
+    };
+    for (const off of [4, 8, 12])
+      for (const an of [-45, -135, 45, 135, -90, 0, 180, 90]) {
+        const a = (an * PI) / 180, lx = cx + cos(a) * (Rk + off), ly = cy + sin(a) * (Rk + off) + 1.8;
+        const box = [lx - 3, ly - 5, lx + 3, ly + 1];
+        if (!(box[0] >= SHEET.left + 2 && box[1] >= SHEET.top + 2 && !taken.some((t) => meets(t, box) && !(t[0] === own.x - 1 && t[1] === own.y - 1)))) continue;
+        const cost = onLines(box) * 10 + off;
+        if (!letter || cost < letter.cost) letter = { lx, ly, box, cost };
       }
-    }
     if (!letter) continue;
     taken.push(spot.box, letter.box, [cx - Rk - 0.5, cy - Rk - 0.5, cx + Rk + 0.5, cy + Rk + 0.5]);
     const { tx, ty } = map(k);

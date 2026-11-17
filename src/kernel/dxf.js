@@ -205,6 +205,9 @@ export function fitCircle(pts, tolOf = (r) => max(0.01, r * 0.004), { whole = tr
   const cx = mx + uc, cy = my + vc, r = sqrt(uc * uc + vc * vc + (suu + svv) / n);
   let error = 0;
   for (let i = 0; i < n; i++) error = max(error, abs(hypot(pts[i * 2] - cx, pts[i * 2 + 1] - cy) - r));
+  // The lines between the points must follow it too: a rectangle's four
+  // corners lie on a circle, but its sides do not.
+  for (let i = 0; i + 1 < n; i++) error = max(error, abs(hypot((pts[i * 2] + pts[i * 2 + 2]) / 2 - cx, (pts[i * 2 + 1] + pts[i * 2 + 3]) / 2 - cy) - r));
   // The points must go all the way round, not bunch on one side.
   let turned = 0;
   for (let i = 0; i < n && whole; i++) {
@@ -220,18 +223,29 @@ export function fitCircle(pts, tolOf = (r) => max(0.01, r * 0.004), { whole = tr
 
 // What an outline export holds: closed loops and open lines, in mm, y up.
 // Loops that are circles become circles. Returns { loops, lines, circles, box }.
-function outlineShapes({ loops = [], lines = [] }) {
+// fromMesh: the lines are a view's, drawn from a mesh: circles are taken to 1.5% of
+// their radius, and open specks shorter than 1/50 of the outline are dropped.
+function outlineShapes({ loops = [], lines = [], fromMesh = false }) {
   const circles = [], rest = [];
   // A line that ends where it starts is a loop.
   const open = [];
   for (const L of lines) {
     const n = L.length;
-    if (n >= 8 && hypot(L[0] - L[n - 2], L[1] - L[n - 1]) < 1e-6 * (1 + abs(L[0]) + abs(L[1]))) loops = [...loops, L.slice(0, n - 2)];
+    // Within 1/500 of its own size: a view's lines join to a pixel or so.
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < n; i += 2) (x0 = min(x0, L[i])), (x1 = max(x1, L[i])), (y0 = min(y0, L[i + 1])), (y1 = max(y1, L[i + 1]));
+    const gap = hypot(L[0] - L[n - 2], L[1] - L[n - 1]);
+    if (n >= 8 && gap < max(1e-6 * (1 + abs(L[0]) + abs(L[1])), 0.002 * hypot(x1 - x0, y1 - y0))) loops = [...loops, gap < 1e-9 ? L.slice(0, n - 2) : L];
     else open.push(L);
   }
   lines = open;
+  if (fromMesh) {
+    let size = 0;
+    for (const L of [...loops, ...lines]) for (let i = 2; i < L.length; i += 2) size = max(size, abs(L[i] - L[0]), abs(L[i + 1] - L[1]));
+    lines = lines.filter((L) => { let len = 0; for (let i = 2; i < L.length; i += 2) len += hypot(L[i] - L[i - 2], L[i + 1] - L[i - 1]); return len > size / 50; });
+  }
   for (const L of loops) {
-    const c = fitCircle(L);
+    const c = fromMesh ? fitCircle(L, (r) => max(0.02, r * 0.015)) : fitCircle(L);
     if (c) circles.push(c);
     else rest.push(L);
   }
