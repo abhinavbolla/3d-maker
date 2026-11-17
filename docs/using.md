@@ -92,6 +92,8 @@ Ask Claude for the shot you want: "give me a hero shot of the rotor head", "show
 
 For a video, describe it: "a ten second turntable with the rotor spinning", "start wide, move in on the swashplate, then follow one blade round". Claude plans it as shots (a held camera, a turn, a move from one camera to another, following a moving part, with the motion at any speed), looks at a few frames of each, then records it. Each frame is drawn finished at the video's size, and its camera and motion are worked out from its number alone, so the video is smooth however long a frame takes to draw. The window can be any size meanwhile.
 
+A video or picture shows the model as the view does: what you have hidden stays hidden, a section stays cut with its faces hatched, an exploded view stays exploded, and every frame has the shading in the creases. Ask for the whole model first ("show everything") if that is what you want filmed.
+
 While a video is recorded, a line under the prompt box counts the frames; Cancel (or Esc) stops it and nothing is saved. Videos are H.264 in an MP4 file, which every player opens. Where the browser has no H.264 encoder they are VP9 (or VP8) in a WebM file, and the app says so. Sound, motion blur and titles are not part of it yet.
 
 ### The drawing

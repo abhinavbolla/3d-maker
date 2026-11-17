@@ -385,7 +385,7 @@ tool(
 
 tool(
   "save_picture",
-  "Save a studio picture (PNG, light backdrop, shadows and the floor's reflection, no grid) from a camera, at a chosen size. For \"give me a hero shot of the rotor head\": a low camera (elevation 10-20), a longer lens (70-100 mm), framed on the parts that matter, a little off the side (azimuth 30-60). Look at the returned preview and try again if the framing is wrong. at: pose moving parts at that many seconds into the motion (default: as the view shows them now). path defaults to ~/Downloads/<title>.png. Only do this when the user asks for a picture.",
+  "Save a studio picture (PNG, light backdrop, shadows and the floor's reflection, no grid) from a camera, at a chosen size. For \"give me a hero shot of the rotor head\": a low camera (elevation 10-20), a longer lens (70-100 mm), framed on the parts that matter, a little off the side (azimuth 30-60). Look at the returned preview and try again if the framing is wrong. at: pose moving parts at that many seconds into the motion (default: as the view shows them now). It shows the model as the view does (hidden parts, a section, an exploded view, the crease shading). path defaults to ~/Downloads/<title>.png. Only do this when the user asks for a picture.",
   {
     camera: CAMERA.optional(),
     width: z.number().int().min(64).max(8192).optional().describe("Default 1920."),
@@ -419,6 +419,9 @@ const SHOTS = z
   .min(1)
   .max(50);
 
+// Pictures and films show the view as the user sees it.
+const FILMS_SHOW_VIEW = "Pictures and films show the model as the view does: hidden parts stay hidden, a section stays cut with its faces hatched, an exploded view stays exploded, and the crease shading and any edge lines are drawn in every frame. Call clear_view first for the whole model.";
+
 const SHOT_GUIDE =
   "Plan a film as a few shots, each one idea, 2 to 6 s long: an establishing shot of the whole model (a slow orbit, elevation 15-30), then moves in to the parts that matter (move, to: { parts: [...], lens_mm: 70 }), then a shot that shows the motion (follow a moving part, or hold while it plays). A shot starts where the last one ended unless it names a camera, so moves join up smoothly; ease in-out between holds, linear for turns. Slow motion (speed 0.25-0.5) makes fast rotors readable. Frame on part names from get_model. Motion time runs on from shot to shot (start_at sets where it starts).";
 
@@ -441,7 +444,7 @@ tool(
 
 tool(
   "record_video",
-  `Record a video of the model from planned shots, frame by frame, so it plays smoothly however long each frame takes, and save it. MP4 (H.264) where the app can encode it, else WebM (VP9 or VP8): the result says which (format), and so should your reply. The user sees a progress line and can cancel; then nothing is saved. Default 1920 x 1080 at 30 frames a second. Recording takes a while (about a second for each second of film, longer for big models), so keep films short unless asked. path defaults to ~/Downloads/<title>.mp4. Only do this when the user asks for a video. Returns the path, format, frames, seconds and pictures of the first, middle and last frame: check them. ${SHOT_GUIDE}`,
+  `Record a video of the model from planned shots, frame by frame, so it plays smoothly however long each frame takes, and save it. MP4 (H.264) where the app can encode it, else WebM (VP9 or VP8): the result says which (format), and so should your reply. The user sees a progress line and can cancel; then nothing is saved. Default 1920 x 1080 at 30 frames a second. Recording takes a while (about a second for each second of film, longer for big models), so keep films short unless asked. path defaults to ~/Downloads/<title>.mp4. Only do this when the user asks for a video. Returns the path, format, frames, seconds and pictures of the first, middle and last frame: check them. ${FILMS_SHOW_VIEW} ${SHOT_GUIDE}`,
   {
     shots: SHOTS,
     width: z.number().int().min(64).max(3840).optional().describe("Even number; default 1920."),

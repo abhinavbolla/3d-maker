@@ -76,7 +76,9 @@ Notable changes to Draftsman. The format follows
   Each frame's camera and motion come from its number, so the film is smooth however slowly
   frames draw. The file is H.264 in MP4, or VP9 or VP8 in WebM where the browser has no H.264
   encoder, written by our own code with the browser's WebCodecs encoder. A line shows the
-  progress, with Cancel.
+  progress, with Cancel. Every frame has the crease shading, worked out for that frame, and a
+  film shows the view as it is: hidden parts stay hidden, a section stays cut with its faces
+  hatched, an exploded view stays exploded.
 - A camera Claude can direct: `set_camera` places the view (a direction, a position and a
   target, or framed on chosen parts) with a lens in millimetres, and keeps named views with
   the model; `save_picture` saves a studio picture from any camera at any size.

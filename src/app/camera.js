@@ -58,10 +58,14 @@ const number = (v, what, min, max) => {
 // world coordinates: some of each part's vertices.
 export function partPoints(parts, names) {
   const out = [];
-  for (const [name, { matrix, points }] of parts) {
+  for (const [name, { matrix, points, clip }] of parts) {
     if (names && !names.includes(name)) continue;
     const p = points();
-    for (let i = 0; i < p.length; i += 3) out.push(new THREE.Vector3(p[i], p[i + 1], p[i + 2]).applyMatrix4(matrix));
+    for (let i = 0; i < p.length; i += 3) {
+      const v = new THREE.Vector3(p[i], p[i + 1], p[i + 2]).applyMatrix4(matrix);
+      // A section takes away what is on the negative side of its plane.
+      if (!clip || clip.distanceToPoint(v) >= 0) out.push(v);
+    }
   }
   return out;
 }
@@ -158,7 +162,10 @@ export function resolveCamera(spec, ctx) {
   } else if (dir || names || spec.target !== undefined || spec.fill !== undefined) {
     // Framed: on the parts (or the whole model), from the direction asked
     // for or the starting camera's.
-    const box = ctx.box(names);
+    // Framed on the parts' own points where there are any (what a section
+    // leaves of them), else on their boxes.
+    const shown = ctx.points?.(names);
+    const box = shown?.length ? new THREE.Box3().setFromPoints(shown) : ctx.box(names);
     dir = (dir ?? (base ? base.position.clone().sub(base.target) : new THREE.Vector3(...VIEWS.iso))).normalize();
     target = spec.target !== undefined ? vec(spec.target, "target") : box ? box.getCenter(new THREE.Vector3()) : base?.target.clone() ?? new THREE.Vector3();
     let d = box ? 0 : (base?.position.distanceTo(base.target) ?? 500);
@@ -167,7 +174,7 @@ export function resolveCamera(spec, ctx) {
       const sweep = Math.min(Math.abs(ctx.sweep ?? 0), 360);
       const { az, el } = angles(dir);
       const steps = sweep ? Math.ceil(sweep / 15) : 0;
-      const points = ctx.points?.(names) ?? corners(box);
+      const points = shown?.length ? shown : corners(box);
       for (let i = 0; i <= steps; i++) d = Math.max(d, fitDistance(points, target, steps ? direction(az + (Math.sign(ctx.sweep) * sweep * i) / steps, el) : dir, lens, ctx.aspect, fill));
     }
     position = target.clone().addScaledVector(dir, d * distance);

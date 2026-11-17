@@ -900,12 +900,18 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // While a film studio is open the live view draws nothing, whatever the window
   // does, and the canvas shows each finished frame as it is made.
   let recording = false;
-  function filmStudio(W, H) {
+  // creases: lay the crease shading over each frame (look.js), worked out
+  // afresh for that frame's pose and camera at the film's size.
+  function filmStudio(W, H, { creases = true } = {}) {
     if (recording) throw new Error("A recording is already being made.");
     recording = true;
     cancelAnimationFrame(frame);
     frame = 0;
     stopTurning();
+    // The view as it is shown (hidden parts, the section, the exploded view)
+    // is what is filmed; an explosion still under way is finished first.
+    inspect.settle();
+    look.hide();
     const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, guides: guides.visible, fit: renderer.domElement.style.objectFit };
     selected = null;
     highlight();
@@ -919,13 +925,15 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     const gl = renderer.getContext();
     let small = null;
     return {
-      // One finished frame at the film's size, posed at motion time t. The
-      // whole frame is drawn here; this is the call to swap for a fuller
-      // one (crease shading) without touching the recorder.
+      // One finished frame at the film's size, posed at motion time t: the
+      // full meshes, the shadow map drawn again for this pose, the floor's
+      // mirror, and the crease shading worked out for this frame (the same
+      // steps as picture()).
       draw(cam, t) {
         pose(t);
         content.updateMatrixWorld(true);
         renderer.render(scene, cam);
+        if (creases) look.paint(cam, W, H, null);
         return renderer.domElement;
       },
       // The frame just drawn, as RGBA rows from the bottom up.
@@ -969,14 +977,17 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     }
     return samples.get(mesh);
   };
-  // Where each shown part is at motion time t: its pose, its own bounds and
-  // some of its own vertices.
+  // Where each shown part is at motion time t (exploded, if the view is):
+  // its pose, its own bounds and some of its own vertices. Hidden parts are
+  // left out, so a camera frames what is shown.
   function partsAt(t) {
     pose(t);
     const out = new Map();
-    for (const [name, { object, part }] of parts) {
-      const b = part.mesh.bounds;
-      if (b) out.set(name, { matrix: object.matrix.clone(), bounds: new THREE.Box3(new THREE.Vector3(b[0], b[1], b[2]), new THREE.Vector3(b[3], b[4], b[5])), points: () => sampled(part.mesh) });
+    for (const [name, { object, mesh, part }] of parts) {
+      const b = object.visible && part.mesh.bounds;
+      // clip: the section's plane through this part (what is kept is on its
+      // positive side), so a camera frames what is left of a cut part.
+      if (b) out.set(name, { matrix: object.matrix.clone(), bounds: new THREE.Box3(new THREE.Vector3(b[0], b[1], b[2]), new THREE.Vector3(b[3], b[4], b[5])), points: () => sampled(part.mesh), clip: mesh.material.clippingPlanes?.[0]?.clone() ?? null });
     }
     pose(time);
     return out;

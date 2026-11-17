@@ -75,7 +75,8 @@ export class Cancelled extends Error {
 // test: { hashes: true } returns each frame's pixel hash; { slowMs } waits
 // that long after each frame, to show that slow frames change nothing;
 // { track: part } returns that part's pose matrix in each frame.
-export async function record({ viewport, shots, width = 1920, height = 1080, fps = 30, format = "mp4", startAt = 0, ctx, onFrame = () => {}, signal, stills = [], test = {} }) {
+// creases: crease shading on every frame (on unless turned off).
+export async function record({ viewport, shots, width = 1920, height = 1080, fps = 30, format = "mp4", startAt = 0, ctx, onFrame = () => {}, signal, stills = [], test = {}, creases = true }) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 64 || height < 64 || width > MAX_SIDE || height > MAX_SIDE) throw new Error(`width and height must be whole numbers from 64 to ${MAX_SIDE}.`);
   if (width % 2 || height % 2) throw new Error("width and height must be even numbers (video encoders need them so).");
   if (!FPS.includes(fps)) throw new Error(`fps must be one of ${FPS.join(", ")}.`);
@@ -108,7 +109,7 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
   // Every frame's pose from the motion itself, at exactly its time.
   const times = [...new Set(Array.from({ length: plan.frames }, (_, n) => plan.timeAt(n)))];
   const exact = ctx.posesAt ? await ctx.posesAt(times) : null;
-  const studio = viewport.studio(width, height);
+  const studio = viewport.studio(width, height, { creases });
   if (exact) viewport.useExactPoses(exact);
   const cam = toThree(plan.at(0).camera, width / height, size);
   const hashes = [];

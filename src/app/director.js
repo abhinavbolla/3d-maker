@@ -124,6 +124,7 @@ export function createDirector({ store, viewport, kernel, onRecording = () => {}
         signal: controller.signal,
         stills: args.stills ?? [],
         test: args.test ?? {},
+        creases: args.creases ?? true,
         onFrame: (done, total) => onRecording({ done, total }),
       });
     } finally {

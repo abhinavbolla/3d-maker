@@ -1031,6 +1031,17 @@ joint("Rod", "Piston", top);` });
   check((await v('document.getElementById("recording").hidden')) && JSON.stringify(await canvasSize()) === JSON.stringify(sizeBefore), "the progress line goes and the view is back at the window's size");
   check(/no longer here/.test((await vc("video_part", { id: (slow.result.id ?? 0) + 3, index: 0 })).error ?? ""), "nothing is left to fetch after a cancel");
   check(await v('Boolean(document.querySelector("[data-export=video]"))'), "the Export menu has Video (turntable)");
+  // A film shows the view as it is: with the arm hidden, or the model cut,
+  // its frames differ from the whole model's, and the view keeps that state.
+  const oneFrame = async () => (await vc("record_video", { shots: [{ seconds: 0.1, camera: { view: "iso" }, motion: false }], width: 160, height: 90, test: { hashes: true } })).result?.hashes?.[0];
+  const wholeFrame = await oneFrame();
+  await vc("hide_parts", { hide: ["Arm"] });
+  const armHidden = await oneFrame();
+  await vc("clear_view");
+  await vc("section_view", { axis: "x", offset: 0 });
+  const cutOpen = await oneFrame();
+  await vc("clear_view");
+  check(wholeFrame && armHidden && cutOpen && new Set([wholeFrame, armHidden, cutOpen]).size === 3 && (await oneFrame()) === wholeFrame, `a film shows hidden parts hidden and a section cut, and the same frame again once the view is clear`);
   // A rotor at 1200 rpm (120 degrees between the kernel's motion samples)
   // about an axis 3 m from the origin: its hub stays on that axis between
   // samples in the view, and in recorded frames, which take exact poses.

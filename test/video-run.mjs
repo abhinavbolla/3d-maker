@@ -1,7 +1,8 @@
 // Loads a model script into a fresh app window (headless Chrome, no Claude),
 // records a video the way record_video does, and saves it.
 // Usage: node test/video-run.mjs model.js out.mp4 [shots.json | turntable] [width] [height] [fps]
-// shots.json: { "shots": [...], ...other record_video settings }.
+// shots.json: { "shots": [...], ...other record_video settings, "before": [[command, args], ...] }:
+// before runs app commands first, such as ["section_view", { "axis": "y" }], so the film shows that view.
 import { startHarness } from "./harness.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -18,7 +19,12 @@ try {
   const set = await h.command(w, "set_model", { script: readFileSync(file, "utf8") });
   if (set.error) throw new Error(set.error);
   const t = Date.now();
-  const r = await h.command(w, "record_video", { width: Number(width), height: Number(height), fps: Number(fps), ...args });
+  const { before = [], ...settings } = args;
+  for (const [name, a] of before) {
+    const b = await h.command(w, name, a);
+    if (b.error) throw new Error(`${name}: ${b.error}`);
+  }
+  const r = await h.command(w, "record_video", { width: Number(width), height: Number(height), fps: Number(fps), ...settings });
   if (r.error) throw new Error(r.error);
   const pieces = [];
   for (let i = 0; i < r.result.pieces; i++) pieces.push(Buffer.from((await h.command(w, "video_part", { id: r.result.id, index: i })).result.base64, "base64"));
