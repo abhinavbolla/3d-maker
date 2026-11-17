@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compile, threadRoot } from "../src/kernel/sdf.js";
 import { checkPairs } from "../src/kernel/fit.js";
-import { meshSDF, meshVolume, meshBounds, openEdges, toSTL, displayMesh, lightMesh } from "../src/kernel/mesh.js";
+import { meshSDF, meshVolume, meshArea, meshBounds, openEdges, toSTL, displayMesh, lightMesh } from "../src/kernel/mesh.js";
 import { runScript } from "../src/kernel/script.js";
 import { to3MF } from "../src/kernel/threemf.js";
 import { meshPart, splitPieces } from "../src/kernel/pieces.js";
@@ -664,6 +664,31 @@ test("a cell cap never gives an empty or open mesh", () => {
   assert.ok(m.indices.length > 0, "mesh is empty");
   assert.equal(m.incomplete, false);
   assert.equal(openEdges(m), 0);
+});
+
+test("a big mesh far from the origin is closed and true to size, the same every time, and closed at every cell cap", () => {
+  // Enough cells for the mesher's tables to grow many times over.
+  const { f, box } = compile({ t: "move", v: [-700, 400, -900], c: { t: "sphere", r: 50 } });
+  const m = meshSDF(f, box, { budget: 400000 });
+  assert.ok(m.indices.length / 3 > 100000, `only ${m.indices.length / 3} triangles`);
+  assert.equal(m.incomplete, false);
+  assert.equal(openEdges(m), 0);
+  const volume = Math.abs(meshVolume(m) / ((4 / 3) * Math.PI * 50 ** 3) - 1), area = Math.abs(meshArea(m) / (4 * Math.PI * 50 ** 2) - 1);
+  assert.ok(volume < 1e-4, `volume off by ${(volume * 100).toFixed(4)}%`);
+  assert.ok(area < 2e-4, `area off by ${(area * 100).toFixed(4)}%`);
+  meshBounds(m).forEach((v, i) => assert.ok(Math.abs(v - ([-700, 400, -900][i % 3] + (i < 3 ? -50 : 50))) < 0.01, `bounds ${i} at ${v}`));
+  const again = meshSDF(f, box, { budget: 400000 });
+  assert.ok(Buffer.from(m.positions.buffer).equals(Buffer.from(again.positions.buffer)) && Buffer.from(m.indices.buffer).equals(Buffer.from(again.indices.buffer)), "two runs gave different meshes");
+  console.log(`    ${m.indices.length / 3} triangles, volume off by ${(volume * 100).toFixed(4)}%, area by ${(area * 100).toFixed(4)}%`);
+  // Stopped early by the cap, a mesh is coarser but still whole.
+  const ring = compile({ t: "torus", R: 40, r: 12 });
+  for (const [maxCells, within] of [[500, 0.12], [2000, 0.03], [8000, 0.01], [30000, 0.002]]) {
+    const c = meshSDF(ring.f, ring.box, { budget: 400000, maxCells });
+    assert.equal(c.incomplete, false, `cap ${maxCells}`);
+    assert.equal(openEdges(c), 0, `cap ${maxCells}: open edges`);
+    const err = Math.abs(meshVolume(c) / (2 * Math.PI ** 2 * 40 * 12 ** 2) - 1);
+    assert.ok(err < within, `cap ${maxCells}: volume off by ${(err * 100).toFixed(2)}%`);
+  }
 });
 
 test("thin parts are not lost", () => {
@@ -1491,6 +1516,30 @@ test("drawing: the sheet as DXF has its lines and text on named layers, in paper
   const texts = d.entities.filter((e) => e.type === "TEXT").map((e) => e.text);
   for (const t of ["100", "60", "40", "Block", "A\\U+2013A", "1:1"]) assert.ok(texts.includes(t), `no text ${t}`);
   assert.equal(texts.length, sheetMarks(svg).filter((m) => m.kind === "text").length);
+});
+
+test("drawing: the sheet's arrowheads are in the DXF as outlines too, for readers that skip SOLIDs", () => {
+  // FreeCAD's DXF importer skips SOLID entities, so a sheet's arrowheads
+  // were lost there: 948 of the bracket's 1023 straight edges came in.
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block", date: "2026-01-31", hidden: true });
+  const d = readDXF(sheetDXF(svg));
+  assert.deepEqual(d.problems, []);
+  const solids = d.entities.filter((e) => e.type === "SOLID");
+  assert.ok(solids.length >= 6, `${solids.length} arrowheads`);
+  // Each SOLID has a closed polyline on its layer through the same corners.
+  const key = (pts) => [...new Set(Array.from({ length: pts.length / 2 }, (_, i) => `${pts[i * 2].toFixed(3)},${pts[i * 2 + 1].toFixed(3)}`))].sort().join(" ");
+  const outlines = new Map();
+  for (const e of d.entities) if (e.type === "POLYLINE" && e.closed) outlines.set(`${e.layer} ${key(e.pts)}`, (outlines.get(`${e.layer} ${key(e.pts)}`) ?? 0) + 1);
+  const bare = solids.filter((s) => !outlines.get(`${s.layer} ${key(s.pts)}`));
+  assert.equal(bare.length, 0, `${bare.length} of ${solids.length} arrowheads have no outline`);
+  // A reader of lines and polylines only sees every edge of the sheet's marks.
+  let edges = 0, want = 0;
+  for (const e of d.entities) if (e.type === "LINE") edges++;
+  else if (e.type === "POLYLINE") edges += e.pts.length / 2 - (e.closed ? 0 : 1);
+  for (const m of sheetMarks(svg)) if (m.kind === "line") want += m.pts.length / 2 - (m.closed ? 0 : 1);
+  else if (m.kind === "fill") want += m.pts.length / 2;
+  assert.equal(edges, want, `${edges} straight edges without SOLIDs, the marks have ${want}`);
 });
 
 test("drawing: an outline at 1:1 has the plate's size, and its holes as true circles", () => {
