@@ -381,7 +381,7 @@ const actions = {
   },
   // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
   // "step", "svg", "pdf" or "dxf" (a drawing sheet), "outline" (a section
-  // alone at 1:1, DXF), "png" (a studio picture of the view), "glb", "obj" or "ply".
+  // alone at 1:1, DXF), "png" (a studio picture of the view), "glb", "html", "obj" or "ply".
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
     if (kind === "video") return exportVideo();
@@ -395,8 +395,8 @@ const actions = {
       const where = await saveBytes(Uint8Array.from(atob(png), (c) => c.charCodeAt(0)), `${fileName()}.png`, "png");
       return say(where ? `Saved ${where.split("/").pop()}` : "");
     }
-    // glTF with its motion, OBJ with its MTL beside it, or PLY.
-    if (kind === "glb" || kind === "obj" || kind === "ply") {
+    // glTF with its motion, one HTML file, OBJ with its MTL beside it, or PLY.
+    if (["glb", "html", "obj", "ply"].includes(kind)) {
       say("Exporting", 0);
       try {
         const { parts, title } = store.state.result;
@@ -406,7 +406,7 @@ const actions = {
           const enc = new TextEncoder();
           where = await saveOBJ((mtl) => enc.encode(objWithMtl(r.obj, mtl)), enc.encode(r.mtl), `${fileName()}.obj`);
         } else {
-          const r = kind === "glb" ? await kernel.exportGLB(store.state.result) : await kernel.exportPLY(parts, title);
+          const r = kind === "glb" ? await kernel.exportGLB(store.state.result) : kind === "html" ? await kernel.exportHTML(store.state.result) : await kernel.exportPLY(parts, title);
           where = await saveBytes(r.bytes, `${fileName()}.${kind}`, kind);
         }
         return say(where ? `Exported ${where.split("/").pop()}` : "");

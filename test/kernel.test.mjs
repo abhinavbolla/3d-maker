@@ -22,7 +22,8 @@ import { toGLB, lookOf } from "../src/kernel/gltf.js";
 import { toOBJ, objWithMtl, mtlFileName } from "../src/kernel/obj.js";
 import { toPLY } from "../src/kernel/ply.js";
 import { apply } from "../src/kernel/motion.js";
-import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
+import { checkGLB, checkOBJ, checkPLY, checkHTML } from "./check-meshfile.mjs";
+import { toHTML } from "../src/kernel/htmlfile.js";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { exactSolids } from "../src/kernel/brep.js";
@@ -1822,6 +1823,59 @@ test("OBJ and MTL: one object per part with normals, in mm with Y up; PLY: one c
     const b = meshBounds(plain[i]);
     p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3));
   }
+});
+
+// One HTML file: read back by test/check-meshfile.mjs (not the writer), the
+// same triangles, bounds within a quantisation step, volumes within 0.1%,
+// the poses as sampled, and nothing in the page that reaches outside it.
+test("HTML file: the bracket and the rotor head, packed small, read back whole, with nothing fetched", () => {
+  for (const [file, budget] of [["bracket.js", 30000], ["claude-rotor-head.js", 4000]]) {
+    const r = runScript(readFileSync(new URL(`./models/${file}`, import.meta.url), "utf8"), {});
+    assert.equal(r.error, undefined);
+    const parts = r.parts.map((p) => ({ name: p.name, color: p.color, material: p.material, frames: p.frames, ...displayMesh(meshPart(p.node, { budget, normals: true })) }));
+    const html = toHTML(parts, { title: r.title, motion: r.motion });
+    const glb = toGLB(parts, { title: r.title, motion: r.motion });
+    const c = checkHTML(new TextDecoder().decode(html));
+    assert.deepEqual(c.problems, []);
+    assert.equal(c.title, r.title);
+    assert.deepEqual(c.parts.map((p) => [p.name, p.triangles]), parts.map((p) => [p.name, p.indices.length / 3]));
+    let worstBound = 0, worstStep = Math.max(...c.step), vol = 0, want = 0, worstNormal = 1;
+    for (const [i, p] of c.parts.entries()) {
+      const b = meshBounds(parts[i]);
+      p.bounds.forEach((v, k) => (worstBound = Math.max(worstBound, Math.abs(v - b[k]))));
+      const v0 = meshVolume(parts[i]);
+      assert.ok(Math.abs(p.volume / v0 - 1) < 0.001, `${p.name}: volume ${p.volume} vs ${v0}`);
+      (vol += p.volume), (want += v0);
+      for (let k = 0; k < p.normals.length; k += 3) {
+        const N = parts[i].normals, l = Math.hypot(N[k], N[k + 1], N[k + 2]);
+        worstNormal = Math.min(worstNormal, (p.normals[k] * N[k] + p.normals[k + 1] * N[k + 1] + p.normals[k + 2] * N[k + 2]) / l);
+      }
+    }
+    assert.ok(worstBound <= worstStep / 2 + 1e-6, `bounds off by ${worstBound} mm, step ${worstStep} mm`);
+    assert.ok(worstNormal > Math.cos((1.5 * Math.PI) / 180), `a normal off by ${((Math.acos(worstNormal) * 180) / Math.PI).toFixed(2)} degrees`);
+    // The poses, exactly as the kernel sampled them, for the parts that move.
+    const moving = r.parts.filter((p) => p.frames?.length);
+    assert.equal(c.parts.filter((p) => p.frames).length, r.motion ? moving.length : 0);
+    for (const [i, p] of c.parts.entries()) if (p.frames) assert.deepEqual(Array.from(p.frames), Array.from(Float32Array.from(r.parts[i].frames)));
+    if (r.motion) assert.equal(c.loop, r.motion.loop);
+    const tris = parts.reduce((s, p) => s + p.indices.length / 3, 0);
+    console.log(`    ${file}: ${parts.length} parts, ${tris} triangles: HTML ${(html.length / 1024).toFixed(0)} kB, GLB ${(glb.length / 1024).toFixed(0)} kB; step ${worstStep.toFixed(4)} mm, bounds within ${worstBound.toFixed(4)} mm, volume ${((vol / want - 1) * 100).toFixed(4)}%${c.frames ? `, ${c.frames} poses over ${c.loop} s` : ""}`);
+  }
+  // A name cannot end the data early, and the title is escaped.
+  const odd = toHTML([{ name: "</script><b>", color: "#d9a441", positions: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1), indices: Uint32Array.of(0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3) }], { title: "A & <B>" });
+  const text = new TextDecoder().decode(odd);
+  const o = checkHTML(text);
+  assert.deepEqual(o.problems, []);
+  assert.deepEqual([o.title, o.parts[0].name, o.parts[0].closed], ["A & <B>", "</script><b>", true]);
+  assert.ok(text.includes("<title>A &amp; &lt;B&gt;</title>"));
+  // A part of more than 65536 vertices goes in pieces with 16-bit indices,
+  // and comes back whole and closed.
+  const ball = { name: "Ball", color: "#4f7cac", ...displayMesh(meshPart({ t: "sphere", r: 20 }, { budget: 200000, normals: true })) };
+  assert.ok(ball.positions.length / 3 > 65536, `${ball.positions.length / 3} vertices`);
+  const b = checkHTML(new TextDecoder().decode(toHTML([ball])));
+  assert.deepEqual(b.problems, []);
+  assert.ok(b.parts[0].pieces > 1 && b.parts[0].closed && b.parts[0].triangles === ball.indices.length / 3, `${b.parts[0].pieces} pieces, ${b.parts[0].triangles} triangles`);
+  assert.ok(Math.abs(b.parts[0].volume / meshVolume(ball) - 1) < 0.001);
 });
 
 test("measure: volume, centre of mass and nearest points from the distance functions", async () => {

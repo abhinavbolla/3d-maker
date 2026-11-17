@@ -24,7 +24,7 @@ const BUDGET_BYTES = 32000;
 const KNOWN = {};
 
 // Abbreviations that are written in capitals and are not shouting.
-const ACRONYMS = new Set(["STL", "STEP", "PNG", "SVG", "PDF", "DXF", "OBJ", "MTL", "PLY", "GLB", "ISO", "AP214", "3MF", "CAD", "XYZ", "A-A", "US", "JSON", "PLA", "ABS", "PETG"]);
+const ACRONYMS = new Set(["STL", "STEP", "PNG", "SVG", "PDF", "DXF", "OBJ", "MTL", "HTML", "PLY", "GLB", "ISO", "AP214", "3MF", "CAD", "XYZ", "A-A", "US", "JSON", "PLA", "ABS", "PETG"]);
 const SHOUTING = /\b(IMPORTANT|MUST|NEVER|ALWAYS|CRITICAL|NOTE|WARNING|DO NOT|ONLY)\b/;
 const ADVERTISING = /\b(best|powerful|amazing|seamless(ly)?|state[- ]of[- ]the[- ]art|blazing|ultimate|revolutionary|world[- ]class|cutting[- ]edge|robust|effortless(ly)?|magic(al)?|incredible)\b|!/i;
 // Words a user of a CAD app would not use for what a tool does.

@@ -6,6 +6,7 @@ import { choosePlane } from "../kernel/holes.js";
 import { to3MF } from "../kernel/threemf.js";
 import { exactParts, facetDetail, partsToSTEP } from "../kernel/step.js";
 import { toGLB } from "../kernel/gltf.js";
+import { toHTML } from "../kernel/htmlfile.js";
 import { toOBJ } from "../kernel/obj.js";
 import { toPLY } from "../kernel/ply.js";
 import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox, joinLines } from "../kernel/drawing.js";
@@ -273,6 +274,15 @@ export function createKernel() {
     return { bytes, triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length, ...(animated && result.motion ? { animated_parts: animated, loop_seconds: result.motion.loop } : {}) };
   }
 
+  // One HTML file with the parts, their looks and motion, and a viewer of
+  // its own, to open in any browser. result: the build.
+  async function exportHTML(result) {
+    const meshes = await exportMeshes(result.parts, { normals: true });
+    const bytes = toHTML(meshes, { title: result.title, motion: result.motion });
+    const moving = result.motion && meshes.some((m) => m.frames);
+    return { bytes, triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length, ...(moving ? { loop_seconds: result.motion.loop } : {}) };
+  }
+
   // OBJ and its MTL, as text: one object per visible part, with normals.
   async function exportOBJ(parts, title) {
     const meshes = await exportMeshes(parts, { normals: true });
@@ -410,5 +420,5 @@ export function createKernel() {
   const measureSolids = (parts) => Promise.all(parts.map((p) => job({ type: "measure", what: "solid", node: p.node }, FIT_TIMEOUT_MS, `Measuring part "${p.name}" took too long.`)));
   const measureGap = (a, b) => job({ type: "measure", what: "gap", a: a.node, b: b.node }, FIT_TIMEOUT_MS, "Measuring the distance took too long.");
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportFloorPlan, exportOutline, checkFit, exportGLB, exportOBJ, exportPLY, measureSolids, measureGap, posesAt };
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportFloorPlan, exportOutline, checkFit, exportGLB, exportHTML, exportOBJ, exportPLY, measureSolids, measureGap, posesAt };
 }

@@ -40,7 +40,7 @@ Houses, cabins and offices of one storey are built with the reference's building
 
 Export only when the user asks. Each export writes to `~/Downloads/<title>.<ext>` unless you pass `path`.
 
-- `export_stl` (3D printing; `solid: true` joins every part), `export_3mf` (slicers), `export_step` (CAD programs; tell the user which parts came out faceted or were left out), `export_glb` (Blender, games, the web, with the motion), `export_obj`, `export_ply`.
+- `export_stl` (3D printing; `solid: true` joins every part), `export_3mf` (slicers), `export_step` (CAD programs; tell the user which parts came out faceted or were left out), `export_glb` (Blender, games, the web, with the motion), `export_html` (one file to send to someone with nothing installed), `export_obj`, `export_ply`.
 - `export_drawing` makes a 2D sheet as `format` svg, pdf or dxf. Pass only title-block values the user gave in this conversation (`drawn_by`, `owner`, `approved_by`, `number`, `revision`, `subtitle`, `tolerances`); never guess a name or a company. `sheet`, `hidden_edges`, `detail`, `projection`, and `axis` with `offset` for the section, are there when the user asks. `outline` gives a single outline at 1:1 for a laser or water-jet cutter. Reply with the path and the `line` it returns, nothing more.
 - The view shades the creases between parts by itself. `set_look` with `edges: true` adds sharp edges as thin dark lines, when the user asks for edges; `edges: false` turns them off.
 

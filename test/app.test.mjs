@@ -2,12 +2,13 @@
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
 import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER, sleep } from "./harness.mjs";
-import { writeFileSync, rmSync, readFileSync } from "node:fs";
+import { writeFileSync, rmSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { check3MF } from "./check-3mf.mjs";
-import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
+import { checkGLB, checkOBJ, checkPLY, checkHTML } from "./check-meshfile.mjs";
+import { lookAtHTML } from "./htmlfile-run.mjs";
 import { checkStep } from "./check-step.mjs";
 
 const { check, fail, done } = checks();
@@ -136,15 +137,30 @@ try {
   const pl = await call("export_ply");
   const rp = pl.result ? checkPLY(Buffer.from(pl.result.base64, "base64")) : { problems: [pl.error], parts: [] };
   check(!rp.problems.length && rp.parts.map((p) => `${p.name} ${p.colors}`).join(", ") === "Base #4f7cac, Peg #d9a441", `PLY has both parts, coloured per vertex (${rp.parts.map((p) => `${p.name} ${p.colors}`).join(", ") || rp.problems})`);
+  // One HTML file, read back, then opened from disk in its own window: drawn,
+  // turned by a drag, also on dark, with no request out and no errors.
+  const ht = await call("export_html");
+  const rh = ht.result ? checkHTML(Buffer.from(ht.result.base64, "base64").toString()) : { problems: [ht.error], parts: [] };
+  check(!rh.problems.length && rh.parts.map((p) => `${p.name} ${p.closed}`).join(", ") === "Base true, Peg true" && rh.size.join(" x ") === "40 x 40 x 27", `the HTML file has both parts, closed, 40 x 40 x 27 mm (${rh.problems.join("; ") || rh.size})`);
+  if (ht.result) {
+    const dir = join(new URL("..", import.meta.url).pathname, "runs", "app-test");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "peg.html");
+    writeFileSync(path, Buffer.from(ht.result.base64, "base64"));
+    const v = await lookAtHTML(h, w, path);
+    const pct = (x) => `${(x * 100).toFixed(1)}%`;
+    check(v.drew && v.first.share > 0.03 && v.dark.share > 0.03 && v.turned.share > 0.01, `opened from file://, the model is drawn (${pct(v.first.share)} of the window, ${pct(v.dark.share)} on dark) and a drag turns it (${pct(v.turned.share)} of pixels change)`);
+    check(!v.requests.length && !v.errors.length, `and nothing is fetched and nothing goes wrong (${[...v.requests, ...v.errors].slice(0, 3).join("; ") || "none"})`);
+  }
   // The same from the Export menu: each saves its file (an OBJ also its MTL).
   await w(`(() => { window.__saved = []; HTMLAnchorElement.prototype.click = function () { window.__saved.push(this.download); }; return true; })()`);
-  for (const kind of ["glb", "obj", "ply"]) {
+  for (const kind of ["glb", "html", "obj", "ply"]) {
     await w(`document.querySelector('#export-menu [data-export="${kind}"]').click(), true`);
     for (let i = 0; i < 100 && !/^Exported/.test(await w('document.getElementById("status").textContent')); i++) await sleep(100);
     await w(`document.getElementById("status").textContent = "", true`);
   }
   const saved = await w("window.__saved");
-  check(saved.join(", ") === "model.glb, model.obj, model.mtl, model.ply", `the Export menu saves glTF, OBJ with its MTL, and PLY (${saved.join(", ")})`);
+  check(saved.join(", ") === "model.glb, model.html, model.obj, model.mtl, model.ply", `the Export menu saves glTF, the HTML file, OBJ with its MTL, and PLY (${saved.join(", ")})`);
 
   // The same model as a drawing: a well-formed SVG sheet with three views,
   // a section through both parts, and the overall sizes (40 x 40, and 27
