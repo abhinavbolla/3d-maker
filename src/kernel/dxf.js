@@ -225,7 +225,7 @@ export function fitCircle(pts, tolOf = (r) => max(0.01, r * 0.004), { whole = tr
 // Loops that are circles become circles. Returns { loops, lines, circles, box }.
 // fromMesh: the lines are a view's, drawn from a mesh: circles are taken to 1.5% of
 // their radius, and open specks shorter than 1/50 of the outline are dropped.
-function outlineShapes({ loops = [], lines = [], fromMesh = false }) {
+function outlineShapes({ loops = [], lines = [], fromMesh = false, closeWithin = 0 }) {
   const circles = [], rest = [];
   // A line that ends where it starts is a loop.
   const open = [];
@@ -235,7 +235,7 @@ function outlineShapes({ loops = [], lines = [], fromMesh = false }) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (let i = 0; i < n; i += 2) (x0 = min(x0, L[i])), (x1 = max(x1, L[i])), (y0 = min(y0, L[i + 1])), (y1 = max(y1, L[i + 1]));
     const gap = hypot(L[0] - L[n - 2], L[1] - L[n - 1]);
-    if (n >= 8 && gap < max(1e-6 * (1 + abs(L[0]) + abs(L[1])), 0.002 * hypot(x1 - x0, y1 - y0))) loops = [...loops, gap < 1e-9 ? L.slice(0, n - 2) : L];
+    if (n >= 8 && gap < max(1e-6 * (1 + abs(L[0]) + abs(L[1])), 0.002 * hypot(x1 - x0, y1 - y0), closeWithin)) loops = [...loops, gap < 1e-9 ? L.slice(0, n - 2) : L];
     else open.push(L);
   }
   lines = open;

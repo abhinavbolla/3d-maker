@@ -269,7 +269,7 @@ export function createKernel() {
     if (view) {
       const v = await draw({ view });
       // Pieces of one outline that meet end to end are joined, so loops close.
-      return { view, loops: [], lines: joinLines(v.parts.flatMap((p) => p.lines), v.pixel * 2, 90), fromMesh: true };
+      return { view, loops: [], lines: joinLines(v.parts.flatMap((p) => p.lines), v.pixel * 4, 90), fromMesh: true, closeWithin: v.pixel * 4 };
     }
     const bounds = modelBounds(meshes);
     const size = [0, 1, 2].map((a) => bounds[a + 3] - bounds[a]);
