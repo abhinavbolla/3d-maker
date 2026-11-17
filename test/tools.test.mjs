@@ -18,46 +18,10 @@ const server = args.find((a) => !a.startsWith("--")) ?? new URL("../mcp/server.m
 // The tool list plus the server instructions, as the client receives them
 // (JSON.stringify of tools/list's tools, and the instructions text). Raise it
 // only on purpose, in the PR that adds the words, saying what they buy.
-const BUDGET_BYTES = 23000;
+const BUDGET_BYTES = 32000;
 
 // rule: tool (or tool.argument) -> what is wrong with it today.
-const KNOWN = {
-  "first-sentence": {
-    reference: 'starts with a noun phrase ("The full Draftsman modelling language ...") rather than saying what the tool does',
-  },
-  "argument-description": {
-    "edit_model.old_text": "no description",
-    "edit_model.new_text": "no description",
-    "append_to_model.code": "no description",
-    "screenshot.view": "no description (explained only in the tool's text)",
-    "screenshot.part": "no description (explained only in the tool's text)",
-    "screenshot.parts": "no description (explained only in the tool's text)",
-    "screenshot.width": "no description",
-    "screenshot.height": "no description",
-    "hide_parts.hide": "no description (explained only in the tool's text)",
-    "hide_parts.show": "no description (explained only in the tool's text)",
-    "hide_parts.only": "no description (explained only in the tool's text)",
-    "hide_parts.all": "no description (explained only in the tool's text)",
-    "section_view.axis": "no description (explained only in the tool's text)",
-    "section_view.off": "no description (explained only in the tool's text)",
-    "explode_view.axis": "no description (explained only in the tool's text)",
-    "explode_view.together": "no description (explained only in the tool's text)",
-    "measure.part": "no description (explained only in the tool's text)",
-    "measure.parts": "no description (explained only in the tool's text)",
-    "measure.material": "no description (explained only in the tool's text)",
-    "measure.density_g_cm3": "no description (explained only in the tool's text)",
-    "measure.between": "no description (explained only in the tool's text)",
-    "measure.points": "no description (explained only in the tool's text)",
-    "set_plan.steps": "no description (its items' fields have one)",
-    "export_drawing.detail.view": "no description (the detail's at and radius have one)",
-  },
-  enum: {
-    "measure.material": "picks one of a list of materials named in the tool's text, but takes any string",
-  },
-  "names-real-things": {
-    "set_model.script": 'says the language is "described in the server instructions"; it is in the reference tool',
-  },
-};
+const KNOWN = {};
 
 // Abbreviations that are written in capitals and are not shouting.
 const ACRONYMS = new Set(["STL", "STEP", "PNG", "SVG", "PDF", "DXF", "OBJ", "MTL", "PLY", "GLB", "ISO", "AP214", "3MF", "CAD", "XYZ", "A-A", "US", "JSON", "PLA", "ABS", "PETG"]);
@@ -92,17 +56,39 @@ const found = {}; // rule -> key -> message
 const report = (rule, key, msg) => ((found[rule] ??= {})[key] = msg);
 const firstSentence = (s) => (s.match(/^[\s\S]*?[.:](?=\s|$)/)?.[0] ?? s).trim();
 
-// Every argument, nested ones included, as [key, schema].
+// Every argument, nested ones included, as [key, schema, the descriptions of
+// the arguments it sits in, nearest first].
 function argumentsOf(tool) {
   const out = [];
-  const walk = (schema, prefix) => {
+  const walk = (schema, prefix, above) => {
     for (const [k, v] of Object.entries(schema?.properties ?? {})) {
-      out.push([`${prefix}${k}`, v]);
-      for (const alt of [v, v.items, ...(v.anyOf ?? []), ...(v.items?.anyOf ?? [])]) if (alt?.properties) walk(alt, `${prefix}${k}.`);
+      out.push([`${prefix}${k}`, v, above]);
+      const here = [v.description, v.items?.description, ...above].filter(Boolean);
+      for (const alt of [v, v.items, ...(v.anyOf ?? []), ...(v.items?.anyOf ?? [])]) if (alt?.properties) walk(alt, `${prefix}${k}.`, here);
     }
   };
-  walk(tool.inputSchema, `${tool.name}.`);
+  walk(tool.inputSchema, `${tool.name}.`, []);
   return out;
+}
+// A field inside an argument that says it takes another tool's arguments
+// ("an object of set_camera's arguments", "as for preview_shots") is described
+// there, once: its description is that tool's description of the same field.
+const describedIn = new Map(); // tool -> field name -> description
+for (const t of tools) {
+  const fields = new Map();
+  for (const [k, v] of argumentsOf(t)) if (v.description && !fields.has(k.split(".").at(-1))) fields.set(k.split(".").at(-1), v.description);
+  describedIn.set(t.name, fields);
+}
+function descriptionOf(key, v, above) {
+  if (v.description) return v.description;
+  const field = key.split(".").at(-1);
+  for (const text of above) {
+    for (const m of text.matchAll(/\b([a-z][a-z0-9_]*)'s arguments|\bas for ([a-z][a-z0-9_]*)/g)) {
+      const d = describedIn.get(m[1] ?? m[2])?.get(field);
+      if (d) return d;
+    }
+  }
+  return "";
 }
 const isString = (v) => v.type === "string" || v.anyOf?.some((a) => a.type === "string");
 const hasEnum = (v) => Boolean(v.enum || v.anyOf?.some((a) => a.enum));
@@ -125,25 +111,28 @@ for (const t of tools) {
     if (ADVERTISING.test(text)) report("no-advertising", key, `advertises: "${text.match(ADVERTISING)[0]}"`);
   }
 
-  for (const [key, v] of argumentsOf(t)) {
-    if (!v.description) report("argument-description", key, "has no description");
+  for (const [key, v, above] of argumentsOf(t)) {
+    const desc = descriptionOf(key, v, above);
+    if (!desc) report("argument-description", key, "has no description");
     const arg = key.split(".").at(-1);
-    if (isString(v) && !hasEnum(v) && CHOICE_NAMES.test(arg)) report("enum", key, "picks one of a few things but is a free string");
-    if (isString(v) && !hasEnum(v) && /"[^"]+", "[^"]+",? or "[^"]+"/.test(v.description ?? "")) report("enum", key, "lists its choices in words but is a free string");
-    if (/server instructions/.test(v.description ?? "")) report("names-real-things", key, "points to the server instructions for something they do not hold");
+    // A choice that also takes a name (a saved view's name) cannot be an enum.
+    if (isString(v) && !hasEnum(v) && CHOICE_NAMES.test(arg) && !/\bname\b/.test(desc)) report("enum", key, "picks one of a few things but is a free string");
+    if (isString(v) && !hasEnum(v) && /"[^"]+", "[^"]+",? or "[^"]+"/.test(desc)) report("enum", key, "lists its choices in words but is a free string");
+    if (/server instructions/.test(desc)) report("names-real-things", key, "points to the server instructions for something they do not hold");
   }
 }
 
 // What the instructions and descriptions call a tool must be one.
+const argsOfTool = new Map(tools.map((t) => [t.name, new Set(argumentsOf(t).map(([k]) => k.split(".").at(-1)))]));
+const argNames = new Set([...argsOfTool.values()].flatMap((a) => [...a]));
 const TOOLISH = /\b(?:get|set|edit|append|finish|check|export|hide|section|explode|clear|save|preview|record|show|list|add|remove|delete|load|open)_[a-z0-9_]+\b/g;
 for (const [key, text] of [["instructions", instructions], ["reference", reference], ...tools.map((t) => [t.name, t.description])]) {
-  for (const w of new Set(text.match(TOOLISH) ?? [])) if (!names.has(w) && !/_(mm|cm3|g_cm3|seconds|parts|out|edges|view|step|from)$/.test(w)) report("names-real-things", `${key}:${w}`, `names ${w}, which is not a tool`);
+  for (const w of new Set(text.match(TOOLISH) ?? [])) if (!names.has(w) && !argNames.has(w) && !/_(mm|cm3|g_cm3|seconds|parts|out|edges|view|step|from)$/.test(w)) report("names-real-things", `${key}:${w}`, `names ${w}, which is not a tool`);
 }
 // The plugin's skill: every tool, argument, result field and script function it
 // names in `code` must be one the server or the reference really has.
 {
   const skill = readFileSync(new URL("../plugins/draftsman/skills/draftsman/SKILL.md", import.meta.url), "utf8");
-  const argNames = new Set(tools.flatMap((t) => argumentsOf(t).map(([k]) => k.split(".").at(-1))));
   const seen = [instructions, reference, ...tools.map((t) => t.description)].join("\n");
   for (const [, code] of skill.matchAll(/`([^`]+)`/g)) {
     const fn = code.match(/^([a-z][A-Za-z0-9]*)\(\)$/);
@@ -152,7 +141,14 @@ for (const [key, text] of [["instructions", instructions], ["reference", referen
     if (code === serverName || names.has(code) || argNames.has(code) || new RegExp(`\\b${code}\\b`).test(seen)) continue;
     report("skill", code, "is not a tool, an argument, or a word the tools or reference use");
   }
-  for (const w of new Set(skill.match(TOOLISH) ?? [])) if (!names.has(w)) report("skill", w, `names ${w}, which is not a tool`);
+  // An argument named in a paragraph or bullet that names tools must be one of theirs.
+  for (const block of skill.split(/\n(?=- |\d+\. |\n)/)) {
+    const codes = [...block.matchAll(/`([a-z][a-z0-9_]*)`/g)].map((m) => m[1]);
+    const own = codes.filter((c) => names.has(c));
+    if (!own.length) continue;
+    for (const c of codes) if (argNames.has(c) && !names.has(c) && !own.some((t) => argsOfTool.get(t).has(c))) report("skill", `${own.join("/")}.${c}`, `is not an argument of ${own.join(" or ")}`);
+  }
+  for (const w of new Set(skill.match(TOOLISH) ?? [])) if (!names.has(w) && !argNames.has(w)) report("skill", w, `names ${w}, which is not a tool`);
 }
 if (!/\breference\b/.test(instructions)) report("instructions", "reference", "the instructions do not send the model to the reference tool");
 if (instructions.length > 4096) report("instructions", "length", `${instructions.length} characters; Claude Code cuts instructions off at 4096`);

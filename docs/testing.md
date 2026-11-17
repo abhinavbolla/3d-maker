@@ -33,7 +33,8 @@ Every Claude client reads all of Draftsman's tools and the server instructions a
 
 - names are snake_case, at most 32 characters, and none is another tool's name with a suffix (`screenshot_v2` should be an argument of `screenshot`);
 - every tool has a description whose first sentence says what it does, in plain words, without capitals that give orders (MUST, NEVER) or advertising;
-- every argument, nested ones included, has a description, and an argument that picks one of a few things is an enum;
+- every argument, nested ones included, has a description, and an argument that picks one of a few things is an enum (unless it also takes a name, such as a saved view's). A field is described once: inside an argument that says it takes "set_camera's arguments" or is "as for preview_shots", a field takes that tool's description of it;
+- the plugin's skill (`plugins/draftsman/skills/draftsman/SKILL.md`) names only tools, arguments and script functions that exist, and in a bullet about a tool only that tool's arguments;
 - the instructions, the descriptions and the reference text name only tools that exist, and the instructions send the model to `reference` and stay under the 4096 characters Claude Code shows;
 - the size budget: the tool list and instructions together stay under a ceiling (`BUDGET_BYTES`), printed with an estimate in tokens at four characters each. Raise it only in the PR that adds the words, and say there what they buy.
 
