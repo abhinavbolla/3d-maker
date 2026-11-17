@@ -206,7 +206,7 @@ export function writeSTEP(parts, { title = "", file = "model.step", time = new D
     "ISO-10303-21;",
     "HEADER;",
     `FILE_DESCRIPTION((${S(`${title || "Model"}, ${parts.length} part${parts.length === 1 ? "" : "s"}`)}),'2;1');`,
-    `FILE_NAME(${S(file)},${S(time)},(''),(''),'3D Maker','3D Maker','');`,
+    `FILE_NAME(${S(file)},${S(time)},(''),(''),'Draftsman','Draftsman','');`,
     `FILE_SCHEMA(('${SCHEMA}'));`,
     "ENDSEC;",
     "DATA;",
