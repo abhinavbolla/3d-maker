@@ -482,12 +482,27 @@ button {
   gap: 6px;
 }
 #ideas button {
-  padding: 5px 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px 3px 3px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 9px;
   background: color-mix(in srgb, var(--surface) 60%, transparent);
   color: var(--text);
   font-size: 13px;
+}
+#ideas img {
+  display: block;
+  width: 40px;
+  height: 28px;
+  border-radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  /* The pictures are studio shots on white; dim them to sit in the dark. */
+  #ideas img {
+    filter: brightness(0.82);
+  }
 }
 #ideas button:hover {
   background: var(--surface);

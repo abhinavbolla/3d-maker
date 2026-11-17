@@ -58,6 +58,15 @@ Notable changes to Draftsman. The format follows
   and extrusions and revolves of outlines made of lines and arcs (holes included) come out with
   exact planes, cylinders, cones, spheres and tori; every other part comes out as a closed solid of
   flat faces made from its mesh. `node test/check-step.mjs` checks a STEP file on its own.
+- Examples on the empty window: a coffee mug, an angle bracket with bolts, a rotor head that
+  moves and a helicopter. One click opens a ready model without Claude, with sliders, a clean
+  undo history, and two prompts to try on it in the prompt box.
+- Installers: a release workflow builds the desktop app for macOS (Apple silicon and Intel),
+  Windows and Linux when a version tag is pushed and attaches them to a draft release. It signs
+  when the certificates are added as secrets ([docs/releasing.md](docs/releasing.md)). The
+  installed app carries its own MCP server and runs it with the user's Node.js; it says when
+  Claude Code or Node.js is missing and where to get them.
+- An app icon of our own.
 - Looking inside and checking a model, by prompt: ask Claude to hide or isolate parts, cut the
   model open with a section (its cut faces filled, so solids look solid), or explode it, and a
   line above the prompt box says what the view leaves out (a click or Esc shows the whole model
