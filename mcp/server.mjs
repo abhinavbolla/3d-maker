@@ -380,7 +380,7 @@ const CAMERA_FIELDS = {
 };
 const CAMERA = z
   .union([z.string(), z.looseObject({})])
-  .describe('A camera: a view\'s name (saved or standard) or "current", or an object of set_camera\'s arguments.');
+  .describe('A camera: a view\'s name (saved or standard) or "current", or an object of set_camera\'s arguments (view, from, azimuth, elevation, position, target, parts, lens_mm, distance, fill; no others).');
 
 const images = (list) => list.map((jpeg) => ({ type: "image", data: jpeg, mimeType: "image/jpeg" }));
 
