@@ -1,0 +1,18 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "version": "../package.json",
+  "bundle": {
+    "targets": "all",
+    "category": "GraphicsAndDesign",
+    "shortDescription": "CAD you talk to",
+    "longDescription": "Describe a part or a whole machine, and your own Claude Code draws it in 3D, in real dimensions, with parts that move.",
+    "copyright": "Copyright (c) 2026 Abhinav Bolla",
+    "license": "MIT",
+    "resources": {
+      "../dist-mcp/server.mjs": "mcp/server.mjs"
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

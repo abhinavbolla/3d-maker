@@ -7,8 +7,10 @@ import { createCommands } from "./app/commands.js";
 import { startBridge } from "./app/bridge.js";
 import { createClaude } from "./app/claude.js";
 import { loadAutosave } from "./app/autosave.js";
-import { saveBytes, openText } from "./app/files.js";
+import { saveBytes, openText, saveOBJ } from "./app/files.js";
+import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
+import { showExamples, exampleScript, tryText } from "./app/examples.js";
 
 const $ = (id) => document.getElementById(id);
 const kernel = createKernel();
@@ -144,7 +146,7 @@ function fitInput() {
   t.style.overflowY = t.scrollHeight > 160 ? "auto" : "hidden";
   renderSend();
 }
-$("input").addEventListener("input", fitInput);
+$("input").addEventListener("input", () => (fitInput(), renderStart()));
 
 // ---- part card: the selected part's sliders ----
 let cardKey = "";
@@ -254,12 +256,14 @@ function renderAll() {
   $("facts").textContent = size ? `${count} ${count === 1 ? "part" : "parts"}, ${size.map((v) => Math.round(v)).join(" × ")} mm` : "";
   $("views").hidden = !count;
   $("viewcube").hidden = !count;
-  $("start").hidden = Boolean(count) || Boolean(working) || !$("reply").hidden;
+  renderStart();
   if (count) moveHint();
   document.title = title ? `${title} · Draftsman` : "Draftsman";
   $("chip").hidden = !selected;
   $("chip-name").textContent = selected ?? "";
-  $("input").placeholder = selected ? `Change ${selected}` : result?.parts.length ? "Describe a change" : "Describe what to make";
+  // An example suggests what to try until its script is changed.
+  const tryNext = example && store.state.doc.script === example.script ? tryText(example.ex) : "";
+  $("input").placeholder = selected ? `Change ${selected}` : tryNext || (result?.parts.length ? "Describe a change" : "Describe what to make");
   const motion = viewport.hasMotion();
   $("play").hidden = $("play-rule").hidden = !motion;
   $("play").textContent = viewport.isPlaying() ? "Pause" : "Play";
@@ -269,6 +273,41 @@ function renderAll() {
   renderProgress();
 }
 store.subscribe(renderAll);
+
+// The invitation and examples show only on an empty window, and go as soon
+// as you type.
+function renderStart() {
+  const count = store.state.result?.parts.length ?? 0;
+  $("start").hidden = Boolean(count) || Boolean(working) || Boolean(opening) || !$("reply").hidden || Boolean($("input").value.trim());
+}
+
+// ---- examples: a ready model, opened without Claude ----
+let example = null; // { ex, script } of the example opened last
+let opening = null; // the example being opened
+async function openExample(ex) {
+  if (opening || working) return;
+  opening = ex;
+  renderStart();
+  const saying = `Opening the ${ex.name.toLowerCase()}`;
+  say(saying, 0);
+  try {
+    const script = await exampleScript(ex.id);
+    viewport.resetFit();
+    // Not a step in the undo history, so undo never goes back to the empty window.
+    await store.commit({ ...emptyDoc(), script }, { history: false });
+    example = { ex, script };
+    viewport.fitIfNew();
+    // Unless the first-model hint has taken the status line meanwhile.
+    if (note === saying) say("");
+  } catch (err) {
+    say(err.message, 8000);
+  } finally {
+    opening = null;
+    renderAll();
+    $("input").focus();
+  }
+}
+showExamples($("ideas"), openExample);
 
 // Said once, the first time a model is on screen.
 function moveHint() {
@@ -282,13 +321,6 @@ function moveHint() {
 }
 
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => viewport.fit(b.dataset.view === "fit" ? "iso" : b.dataset.view)));
-document.querySelectorAll("#ideas button").forEach((b) =>
-  b.addEventListener("click", () => {
-    $("input").value = b.textContent;
-    fitInput();
-    $("input").focus();
-  }),
-);
 
 $("play").addEventListener("click", () => {
   viewport.setPlaying(!viewport.isPlaying());
@@ -326,8 +358,8 @@ const actions = {
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
   // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
-  // "svg", "pdf" or "dxf" (a drawing sheet), "outline" (a section alone at
-  // 1:1, DXF) or "png" (a studio picture of the view).
+  // "step", "svg", "pdf" or "dxf" (a drawing sheet), "outline" (a section
+  // alone at 1:1, DXF), "png" (a studio picture of the view), "glb", "obj" or "ply".
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
     if (kind === "png") {
@@ -335,14 +367,33 @@ const actions = {
       const where = await saveBytes(Uint8Array.from(atob(png), (c) => c.charCodeAt(0)), `${fileName()}.png`, "png");
       return say(where ? `Saved ${where.split("/").pop()}` : "");
     }
+    // glTF with its motion, OBJ with its MTL beside it, or PLY.
+    if (kind === "glb" || kind === "obj" || kind === "ply") {
+      say("Exporting", 0);
+      try {
+        const { parts, title } = store.state.result;
+        let where;
+        if (kind === "obj") {
+          const r = await kernel.exportOBJ(parts, title);
+          const enc = new TextEncoder();
+          where = await saveOBJ((mtl) => enc.encode(objWithMtl(r.obj, mtl)), enc.encode(r.mtl), `${fileName()}.obj`);
+        } else {
+          const r = kind === "glb" ? await kernel.exportGLB(store.state.result) : await kernel.exportPLY(parts, title);
+          where = await saveBytes(r.bytes, `${fileName()}.${kind}`, kind);
+        }
+        return say(where ? `Exported ${where.split("/").pop()}` : "");
+      } catch (err) {
+        return say(err.message, 8000);
+      }
+    }
     // Drawings: the sheet as SVG, PDF or DXF, or the section alone at 1:1 for cutting.
     const sheet = { svg: {}, pdf: { format: "pdf" }, dxf: { format: "dxf" }, outline: { format: "dxf", outline: "section" } }[kind];
     say(kind === "solid" ? "Joining the parts into one solid" : sheet ? "Making the drawing" : "Exporting", 0);
     try {
       const { parts, title } = store.state.result;
       const drawing = sheet ? await makeDrawing({ store, kernel }, sheet) : null;
-      const r = drawing ? drawing.result : kind === "3mf" ? await kernel.export3MF(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
-      const ext = sheet ? r.format : kind === "3mf" ? kind : "stl";
+      const r = drawing ? drawing.result : kind === "3mf" ? await kernel.export3MF(parts, title) : kind === "step" ? await kernel.exportSTEP(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
+      const ext = sheet ? r.format : kind === "3mf" || kind === "step" ? kind : "stl";
       const where = await saveBytes(r.bytes, `${fileName()}${kind === "outline" ? "-outline" : ""}.${ext}`, ext);
       // A drawing whose save was cancelled leaves nothing remembered.
       if (where) drawing?.keep();
@@ -418,6 +469,7 @@ if (import.meta.env.DEV) {
     screenPosition: (name) => viewport.screenPosition(name),
     turningPoint: () => viewport.turningPoint(),
     call: (name, args = {}) => commands[name](args),
+    history: () => ({ undo: store.state.past.length, redo: store.state.future.length }),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
   };
 }

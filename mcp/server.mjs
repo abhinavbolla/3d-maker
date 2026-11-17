@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { z } from "zod";
 import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve, extname } from "node:path";
+import { dirname, resolve, extname, basename, join } from "node:path";
 import { REFERENCE } from "./reference.mjs";
 
 const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
@@ -211,6 +211,13 @@ tool(
 );
 
 tool(
+  "export_step",
+  "Export all visible parts as a STEP file (AP214) for other CAD programs: an assembly of named, coloured solids in mm. Parts that are a box, cylinder, cone, sphere, torus, capsule, or an extrude or revolve of an outline of lines and arcs (holes in the outline included), moved, turned or mirrored, or several of these that do not touch, come out with exact surfaces; any part with a cut, join, smooth blend or other shape comes out as flat faces from its mesh. path defaults to ~/Downloads/<title>.step. Only do this when the user asks. Returns the path, exact_parts, faceted_parts and left_out (part names; left_out: too thin to mesh) and line; tell the user which parts are faceted or left out.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_step"), path, "step"),
+);
+
+tool(
   "export_drawing",
   "Export a 2D drawing of all visible parts as an SVG, PDF or DXF (format): an A3 sheet (or A4 to A0, sheet; ISO 5457) with the front, top and side views (hidden edges left out, or dashed with hidden_edges), an isometric view where there is room, a section A-A with its cut faces hatched, the overall width, depth and height in mm, centre lines of holes and turned parts, on a drawing of up to 3 parts the sizes needed to make it (holes' diameters, depths and positions, bosses, step heights and wall thicknesses, from the script's own values), a detail view where asked, and an ISO 7200 title block. The title is the model's title() (change that to change it); a long one continues in the supplementary title, and one too long for the block is shortened on the sheet with …. The app fills in the date of issue, the scale, the document type and a drawing number made once per model. The fields below are what the user tells you: pass only what they said in this conversation, never a name or company you guessed, and leave the rest out. The app remembers each value it is given (who draws, the owner and the projection for this user; the number, revision, supplementary title and tolerances with the model, saved in its file) and uses it on later drawings, except approved_by, which is never remembered. \"\" forgets a remembered value; for number, the app then makes a new one. A value longer than its limit is refused with a message; nothing is cut short. The section plane stands square across axis at offset mm along it; by default it goes through the axes of the most holes (on a drawing of up to 3 parts), else across the model's longest axis at its middle; a plane within a hole's radius of its axis is moved onto it, and the line says so. Parts are drawn as the script places them, not posed by their motion. With outline, the file is instead one outline alone at true size (1:1, mm, no sheet) as SVG or DXF, for laser and water-jet cutters: \"section\" (the cut faces of the section plane; with no axis it cuts across the model's thinnest side, so through a plate) or a view's visible lines (\"top\" and so on); round holes come out as true circles. path defaults to ~/Downloads/<title>.<format>. Only do this when the user asks. Returns the path, the scale, isometric_view (whether there was room for it), the section, sheet (each title block field: names that were remembered rather than given now show only as filled in) and line: one sentence on what went on the sheet and how to change it. Reply with the path and that line, nothing more.",
   {
@@ -235,6 +242,34 @@ tool(
     const r = await call("export_drawing", args);
     return save(r, path, r.format ?? "svg");
   },
+);
+
+tool(
+  "export_glb",
+  "Export all visible parts as a glTF binary file (.glb) for Blender, game engines and web viewers: one named node per part with its colour and material (metal, paint, plastic, rubber, glass), in metres with Y up as glTF requires, and the model's motion as an animation that loops. path defaults to ~/Downloads/<title>.glb. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_glb"), path, "glb"),
+);
+
+tool(
+  "export_obj",
+  "Export all visible parts as an OBJ file, one object per part with normals, in millimetres with Y up, and its colours and materials in an MTL file of the same name beside it. Parts are at rest, without motion. path defaults to ~/Downloads/<title>.obj. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => {
+    const r = await call("export_obj", { mtl: path ? basename(path) : "" });
+    const { mtl_name, mtl_base64, ...rest } = r;
+    const out = JSON.parse((await save(rest, path, "obj")).content[0].text);
+    const mtlPath = join(dirname(out.path), mtl_name);
+    await writeFile(mtlPath, Buffer.from(mtl_base64, "base64"));
+    return json({ ...out, mtl_path: mtlPath });
+  },
+);
+
+tool(
+  "export_ply",
+  "Export all visible parts as a binary PLY file: one mesh, each vertex coloured with its part's colour, in millimetres with Z up. Parts are at rest. path defaults to ~/Downloads/<title>.ply. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_ply"), path, "ply"),
 );
 
 await listen();

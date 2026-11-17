@@ -25,6 +25,9 @@ Notable changes to Draftsman. The format follows
 - Plans for big models: Claude lists the sub-assemblies and their parts, then builds and checks
   them one step at a time, with progress shown above the prompt.
 - Export as STL (each part its own shell), STL as one solid, and 3MF with named, coloured parts.
+- Export as glTF (.glb) with a named node, colour and material per part and the motion as an
+  animation; OBJ with an MTL; and binary PLY coloured per vertex. From the Export menu, and for
+  Claude as `export_glb`, `export_obj` and `export_ply`.
 - A studio view: a key light that casts shadows, a floor with a soft shadow and a faint
   reflection, and parts drawn as metal, paint, plastic, rubber or glass. Scripts can name a
   part's material.
@@ -57,6 +60,20 @@ Notable changes to Draftsman. The format follows
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
+- STEP export (AP214). Export > STEP, or the `export_step` tool, saves an assembly of named,
+  coloured solids in mm for other CAD programs. Boxes, cylinders, cones, spheres, tori, capsules,
+  and extrusions and revolves of outlines made of lines and arcs (holes included) come out with
+  exact planes, cylinders, cones, spheres and tori; every other part comes out as a closed solid of
+  flat faces made from its mesh. `node test/check-step.mjs` checks a STEP file on its own.
+- Examples on the empty window: a coffee mug, an angle bracket with bolts, a rotor head that
+  moves and a helicopter. One click opens a ready model without Claude, with sliders, a clean
+  undo history, and two prompts to try on it in the prompt box.
+- Installers: a release workflow builds the desktop app for macOS (Apple silicon and Intel),
+  Windows and Linux when a version tag is pushed and attaches them to a draft release. It signs
+  when the certificates are added as secrets ([docs/releasing.md](docs/releasing.md)). The
+  installed app carries its own MCP server and runs it with the user's Node.js; it says when
+  Claude Code or Node.js is missing and where to get them.
+- An app icon of our own.
 
 ### Changed
 
@@ -70,3 +87,14 @@ Notable changes to Draftsman. The format follows
 - The view's shadow and floor reflection cost the GPU much less. Both are drawn before the view
   instead of in the middle of it, from a lighter copy of each part with about a ninth of its
   triangles. Pictures and screenshots still use the full meshes.
+- Thin walls no longer go missing from meshes. A 200 x 120 x 1 mm plate at a small budget used to
+  mesh to nothing, because every grid point fell outside it; the mesher now finds walls hidden
+  between grid points, meshes flat plates, discs and blades stretched through their thickness, and
+  refines for thin tubes and shells. A wall too thin for any cell the budget allows is drawn a
+  little more than a cell thick instead of in shreds.
+- Export meshes no longer have edges shared by four triangles where a part repeats a piece onto
+  itself (a centred bar in `radial(6)`) or has small pieces with the same box: the rotor head's
+  mast now exports closed for slicers.
+- Smoother metal. Small fillets and tight curves are shaded round instead of in facets, and sharp
+  edges stay crisp: the view asks the distance function whether each fold in the mesh is a sharp
+  edge or a curve, and takes its normals from it.

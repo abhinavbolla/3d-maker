@@ -1,12 +1,14 @@
 // The app's commands in a real app window (headless Chrome), without Claude:
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
-import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER } from "./harness.mjs";
+import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER, sleep } from "./harness.mjs";
 import { writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { check3MF } from "./check-3mf.mjs";
+import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
+import { checkStep } from "./check-step.mjs";
 
 const { check, fail, done } = checks();
 const h = await startHarness({ port: 5179 });
@@ -118,6 +120,31 @@ try {
   const m3 = await call("export_3mf");
   const r3 = m3.result ? check3MF(Buffer.from(m3.result.base64, "base64")) : { problems: [m3.error], objects: [] };
   check(!r3.problems.length && r3.objects.map((o) => `${o.name} ${o.color}`).join(", ") === "Base #4F7CACFF, Peg #D9A441FF", `3MF has both parts, named, coloured and closed (${r3.objects.map((o) => `${o.name} ${o.color} ${o.triangles}`).join(", ") || r3.problems})`);
+  // As STEP: both parts named, coloured, closed solids, and exact (a box and a cylinder).
+  const st = await call("export_step");
+  const rs = st.result ? checkStep(Buffer.from(st.result.base64, "base64").toString("latin1")) : { problems: [st.error], parts: [] };
+  const stepParts = rs.parts.map((p) => `${p.name} ${p.colour?.map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("")} ${Object.keys(p.surfaces).sort().join("+")} ${Math.round(p.volume)}`).join(", ");
+  check(!rs.problems.length && st.result.exact_parts.join() === "Base,Peg" && stepParts === `Base 4f7cac plane 16000, Peg d9a441 cylinder+plane ${Math.round(Math.PI * 25 * 20)}`, `STEP has both parts as exact, named, coloured solids (${stepParts || rs.problems.slice(0, 3)})`);
+
+  // glTF, OBJ (with its MTL) and PLY, read back by test/check-meshfile.mjs.
+  const glb = await call("export_glb");
+  const rg = glb.result ? checkGLB(Buffer.from(glb.result.base64, "base64")) : { problems: [glb.error], parts: [] };
+  check(!rg.problems.length && rg.parts.map((p) => `${p.name} ${Math.round(p.bounds[5] - p.bounds[2])}`).join(", ") === "Base 10, Peg 20" && !rg.animations.length, `GLB has both parts, named, closed, sized in mm (${rg.parts.map((p) => `${p.name} ${p.triangles}`).join(", ") || rg.problems})`);
+  const ob = await call("export_obj", { mtl: "peg.obj" });
+  const ro = ob.result ? checkOBJ(Buffer.from(ob.result.base64, "base64").toString(), Buffer.from(ob.result.mtl_base64, "base64").toString()) : { problems: [ob.error], parts: [] };
+  check(!ro.problems.length && ro.mtllib === "peg.mtl" && ro.parts.map((p) => p.name).join(", ") === "Base, Peg", `OBJ and its MTL have both parts, with normals and materials (${ro.problems.join("; ") || ro.parts.map((p) => p.material?.name).join(", ")})`);
+  const pl = await call("export_ply");
+  const rp = pl.result ? checkPLY(Buffer.from(pl.result.base64, "base64")) : { problems: [pl.error], parts: [] };
+  check(!rp.problems.length && rp.parts.map((p) => `${p.name} ${p.colors}`).join(", ") === "Base #4f7cac, Peg #d9a441", `PLY has both parts, coloured per vertex (${rp.parts.map((p) => `${p.name} ${p.colors}`).join(", ") || rp.problems})`);
+  // The same from the Export menu: each saves its file (an OBJ also its MTL).
+  await w(`(() => { window.__saved = []; HTMLAnchorElement.prototype.click = function () { window.__saved.push(this.download); }; return true; })()`);
+  for (const kind of ["glb", "obj", "ply"]) {
+    await w(`document.querySelector('#export-menu [data-export="${kind}"]').click(), true`);
+    for (let i = 0; i < 100 && !/^Exported/.test(await w('document.getElementById("status").textContent')); i++) await sleep(100);
+    await w(`document.getElementById("status").textContent = "", true`);
+  }
+  const saved = await w("window.__saved");
+  check(saved.join(", ") === "model.glb, model.obj, model.mtl, model.ply", `the Export menu saves glTF, OBJ with its MTL, and PLY (${saved.join(", ")})`);
 
   // The same model as a drawing: a well-formed SVG sheet with three views,
   // a section through both parts, and the overall sizes (40 x 40, and 27
@@ -571,6 +598,56 @@ joint("Rod", "Piston", top);` });
   const hidden = await cost(`window.page(true, false); window.__frames.step(30)`);
   const shown = await cost(`window.page(false, true); window.__frames.step(30)`);
   check(hidden.draws === 0 && shown.frames >= 29, `a hidden page draws nothing, and motion goes on when it shows (${hidden.draws} draws hidden, ${shown.frames} of 30 frames back)`);
+
+  // An empty window offers the examples; one click opens a ready model
+  // without Claude, loaded only then, with a clean undo history and two
+  // prompts to try. They go when a model is there, or as soon as you type.
+  const { EXAMPLES } = await import("../src/examples/list.js");
+  const e = await h.openWindow({ preload: `localStorage.removeItem("draftsman:autosave")` });
+  const startShown = async () => !(await e('document.getElementById("start").hidden'));
+  const offered = await e(`[...document.querySelectorAll("#ideas [data-example]")].map((b) => b.dataset.example)`);
+  check((await startShown()) && offered.join() === EXAMPLES.map((x) => x.id).join() && offered.length >= 4, `an empty window offers ${offered.length} examples (${offered.join(", ")})`);
+  const pics = await e(`Promise.all([...document.querySelectorAll("#ideas img")].map((i) => i.decode().then(() => i.naturalWidth + "x" + i.naturalHeight, () => "broken")))`);
+  check(pics.length === EXAMPLES.length && pics.every((p) => p === "80x56"), `each has its picture (${pics.join(", ")})`);
+  const type = (text) => e(`(() => { const i = document.getElementById("input"); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event("input")); })()`);
+  await type("a lamp");
+  const hiddenWhileTyping = !(await startShown());
+  await type("");
+  check(hiddenWhileTyping && (await startShown()), "they go as soon as you type, and come back when the box is empty again");
+  const fetched = (id) => e(`performance.getEntriesByType("resource").some((r) => r.name.includes("/examples/${id}.js"))`);
+  check(!(await fetched("mug")), "no example script is loaded before one is chosen");
+  const openExample = async (id) => {
+    await e(`document.querySelector('#ideas [data-example="${id}"]').click()`);
+    for (let i = 0; i < 300 && !(await e("window.__draftsman.state().parts.length")); i++) await sleep(100);
+    return e("window.__draftsman.state()");
+  };
+  const mug = await openExample("mug");
+  check(mug.title === "Coffee mug" && mug.parts.join() === "Mug,Handle,Coaster" && (await fetched("mug")), `the mug opens with its parts (${mug.parts.join(", ")}), its script loaded only now`);
+  check(!(await startShown()), "the examples are gone once a model is there");
+  check(JSON.stringify(await e("window.__draftsman.history()")) === '{"undo":0,"redo":0}', "undo history starts clean");
+  check((await e('document.getElementById("input").placeholder')) === "Try “make it 120 mm tall” or “write COFFEE around the side”", "the prompt box suggests two prompts to try");
+  // It is a normal document: sliders, undo, and the suggestion lasts as long as the script is the example's.
+  await e(`window.__draftsman.setValue("Mug / Height", 120)`);
+  const tall = await e("window.__draftsman.summary()");
+  check(Math.abs(tall.overall.size[2] - 127) < 1.5 && JSON.stringify(await e("window.__draftsman.history()")) === '{"undo":1,"redo":0}', `its Height slider makes it 120 mm tall (${tall.overall.size[2]} mm with the coaster and lip) and can be undone`);
+  await e(`(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); })()`);
+  for (let i = 0; i < 100 && (await e("window.__draftsman.history().undo")); i++) await sleep(100);
+  check(JSON.stringify(await e("window.__draftsman.history()")) === '{"undo":0,"redo":1}' && !(await startShown()), "undo goes back to the example as it opened, not to an empty window");
+  // New brings the examples back; the biggest opens with every part.
+  await e(`document.querySelector('[data-action="new"]').click()`);
+  for (let i = 0; i < 100 && (await e("window.__draftsman.state().parts.length")); i++) await sleep(100);
+  check(await startShown(), "New brings the examples back");
+  for (const id of ["bracket", "rotor-head", "helicopter"]) {
+    await e(`document.querySelector('[data-action="new"]').click()`);
+    for (let i = 0; i < 100 && (await e("window.__draftsman.state().parts.length")); i++) await sleep(100);
+    const t = Date.now();
+    const s = await openExample(id);
+    const want = EXAMPLES.find((x) => x.id === id);
+    check(s.parts.length === want.parts && s.title, `the ${want.name.toLowerCase()} opens with ${s.parts.length} parts in ${((Date.now() - t) / 1000).toFixed(1)} s`);
+    if (id !== "bracket") continue;
+    const fit = await h.command(e, "check_fit");
+    check(fit.result?.overlaps.length === 0, `the bracket's bolts, washers and nuts fit without overlaps (${fit.result?.checked_pairs} pairs checked)`);
+  }
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

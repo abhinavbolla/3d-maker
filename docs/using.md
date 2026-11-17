@@ -2,7 +2,27 @@
 
 The [README](../README.md) gets you to a first model. This page is the full guide.
 
+## Install
+
+Download the installer for your system from the [releases page](https://github.com/abhinavbolla/draftsman/releases): a `.dmg` for macOS (`aarch64` for Apple silicon, `x64` for Intel), an `.msi` or `-setup.exe` for Windows, and a `.deb`, `.rpm` or `.AppImage` for Linux.
+
+Before Draftsman can draw, you need two things it does not install for you:
+
+- **[Claude Code](https://claude.com/claude-code)**, installed and logged in: run `claude` once in a terminal and log in. Draftsman runs it for every prompt, on your own Claude plan; there is no API key to enter.
+- **[Node.js](https://nodejs.org) 20 or newer.** It runs the small server that connects Claude Code to the app window.
+
+Without them the app still opens, shows the examples and opens and exports files, and the prompt box says which one is missing.
+
+The installers are not signed yet, so your system warns you the first time:
+
+- **macOS** says it cannot check the app, or that it is damaged. Open it once, then in System Settings, Privacy & Security, click **Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Draftsman.app"` in Terminal.
+- **Windows** says "Windows protected your PC". Click **More info**, then **Run anyway**.
+
+To run it from the source instead, see the [README](../README.md#run-it).
+
 ## Making things
+
+- On an empty window, a few examples sit above the prompt box: a mug, a bracket with bolts, a rotor head that moves and a helicopter. Choosing one opens it at once, without Claude, and it is then your model like any other. The prompt box suggests two changes to try on it.
 
 - Type what you want in the box at the bottom and press Enter: "a desk lamp with a weighted base", "a helicopter whose rotors spin". Claude writes the model, looks at it from a few angles, and fixes what looks wrong.
 - Big or mechanical things (a helicopter, a rotor head, an engine) are built with a plan. Claude lists the sub-assemblies and their parts, then builds and checks them one at a time. A line above the prompt shows progress, like "5 of 20 done · now: Stationary swashplate". A step only counts as done once all its parts exist and are solid.
@@ -35,12 +55,31 @@ The Export menu saves:
 - **Picture**: the view as a studio shot on a light backdrop, as a PNG.
 - **3MF**: one named, coloured object per part, for other 3D apps and slicers.
 - **STL**: each part its own closed shell, or all parts joined into one solid.
+- **STEP**: solids for CAD programs such as FreeCAD or Fusion, one named, coloured part each, in an assembly. See below for which parts come out exact.
 - **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
 - **Drawing, PDF**: the same sheet as a PDF at its real size, to print or send.
 - **Drawing, DXF**: the same sheet as a DXF for 2D CAD programs, on layers: VISIBLE, HIDDEN, CENTRE, SECTION, HATCH, DIMENSIONS, DETAIL, FRAME and TITLE.
 - **Outline, DXF**: one section alone at true size (1:1, in mm, no sheet), for a laser or water-jet cutter.
+- **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
+- **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
+- **PLY**: one mesh, each vertex coloured with its part's colour, in millimetres with Z up, like the STL. The part names are in comment lines in its header.
+
+Motion goes only into the glTF file; the other files hold the parts where the script puts them.
 
 Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
+
+### STEP
+
+A STEP file holds exact surfaces; our kernel holds distance fields, so a part comes out exact only where its script says exactly what it is, without any 3D cut or join:
+
+- a box (with square edges), cylinder (with or without rounded ends), cone, sphere, torus or capsule;
+- an extrusion of an outline made of lines and arcs: rects, circles, polygons, `path()` with `line`, `arc`, `radiusArc` and `tangentArc`, rounded corners, and holes cut wholly inside the outline with `.cut()` (no draft);
+- a revolve of such an outline, all the way round or part of the way;
+- any of these moved, turned, scaled the same in every direction or mirrored, `symmetric()` where the shape lies to one side, and several of them in one part (`union`, `radial`, `array`) where their boxes do not touch.
+
+Those come out as true planes, cylinders, cones, spheres and tori, bounded by lines and circles. Everything else (any `.cut()` or `union` in 3D where shapes meet, smooth blends, rounded boxes, sweeps, lofts, threads, text, twists) comes out as a closed solid of flat faces made from the part's mesh. Neighbouring flat triangles become one face, so flat parts stay light, but a curved faceted part is a few hundred to a few thousand faces. To keep files a sane size, faceted parts are meshed coarser than for STL: 1000 surface cells plus 400 per faceted part, at most 6000, over all of them, shared out by surface area, at least 150 per part. A part that the coarse cells break up (a thin tube whose volume comes out more than 8% short) is meshed again finer, up to about 4000 triangles. The 47-part rotor head (all faceted) comes to about 20 MB, the 21-part helicopter example (8 parts exact) about 13 MB. A visible part that the view itself could not mesh (a plate thinner than its cells) is left out unless it is exact, and named. After an export, the app says how many parts came out exact, and Claude tells you which.
+
+The files are checked by a STEP reader of our own (`node test/check-step.mjs`): every solid closed, every vertex on its curves and surfaces, volumes and sizes matching the model. They have not yet been opened in a CAD program; if one refuses a file, please open an issue with it.
 
 ### The drawing
 
@@ -98,11 +137,11 @@ claude mcp add --scope user draftsman -- node /path/to/draftsman/mcp/server.mjs
 
 ## Limitations
 
-- **No exact CAD surfaces yet.** Export is meshes (STL, 3MF), not STEP, and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
+- **Exact CAD surfaces only for simple parts.** STEP export writes exact surfaces for boxes, cylinders, cones, spheres, tori, capsules, and extrusions and revolves of line-and-arc outlines; a part with a 3D cut, a join of touching shapes, a smooth blend or a free-form shape is written as flat faces from its mesh. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
 - **Drawings are early.** One sheet per drawing, no parts list, and besides the overall sizes only holes, bosses, steps and wall thicknesses are dimensioned (no radii, angles, chamfers, counterbores or tolerances). Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
-- **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods.
+- **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods. A wall much thinner than the part's mesh cells (a 0.5 mm tube 400 mm long) is drawn a little more than a cell thick until the finer mesh comes in, so it is whole but too thick.
 - **Changes are prompts and sliders.** You can't drag parts around in the view.
 - **Collisions in motion** are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.
 - **Text** has one font and no accents yet.
-- **Packaging.** The app runs from this folder, so there is no installer, signing or real icon yet.
+- **Unsigned installers.** Until the builds are signed, macOS and Windows warn you the first time you open the app (see [Install](#install)). There are no automatic updates.
 - **Sharing the app.** Running your own `claude -p` from an app is fine for your own use. Check Anthropic's terms before giving the app to others.

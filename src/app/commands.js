@@ -1,5 +1,6 @@
 // What Claude can do in the app, called through the MCP bridge.
 import { makeDrawing } from "./sheet.js";
+import { objWithMtl, mtlFileName } from "../kernel/obj.js";
 
 const r1 = (v) => Math.round(v * 10) / 10;
 
@@ -158,6 +159,7 @@ export function createCommands({ store, viewport, kernel }) {
     screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
     export_stl: async ({ solid = false } = {}) => exported(await kernel.exportSTL(store.state.result?.parts ?? [], { solid: Boolean(solid) })),
     export_3mf: async () => exported(await kernel.export3MF(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
+    export_step: async () => exported(await kernel.exportSTEP(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
     // The MCP server writes the file once this returns, with no dialog to
     // cancel, so what was given is kept here.
     export_drawing: async (args = {}) => {
@@ -165,5 +167,15 @@ export function createCommands({ store, viewport, kernel }) {
       keep();
       return exported(result);
     },
+    export_glb: async () => exported(await kernel.exportGLB(store.state.result ?? { parts: [] })),
+    // mtl: the name of the MTL file the OBJ refers to; the MCP server writes
+    // both files.
+    export_obj: async ({ mtl } = {}) => {
+      const name = mtlFileName(mtl || `${store.state.result?.title || "model"}.obj`);
+      const { obj, mtl: text, ...facts } = await kernel.exportOBJ(store.state.result?.parts ?? [], store.state.result?.title ?? "");
+      const enc = new TextEncoder();
+      return { ...exported({ bytes: enc.encode(objWithMtl(obj, name)), ...facts }), mtl_name: name, mtl_base64: exported({ bytes: enc.encode(text) }).base64 };
+    },
+    export_ply: async () => exported(await kernel.exportPLY(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
   };
 }

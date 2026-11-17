@@ -1,9 +1,13 @@
 // Runs model scripts and meshes parts on a pool of workers, with a cache so
 // only parts that changed are meshed again.
 import { worldBox, boxesMeet } from "../kernel/fit.js";
-import { toSTL } from "../kernel/mesh.js";
+import { toSTL, meshVolume } from "../kernel/mesh.js";
 import { choosePlane } from "../kernel/holes.js";
 import { to3MF } from "../kernel/threemf.js";
+import { exactParts, facetDetail, partsToSTEP } from "../kernel/step.js";
+import { toGLB } from "../kernel/gltf.js";
+import { toOBJ } from "../kernel/obj.js";
+import { toPLY } from "../kernel/ply.js";
 import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox, joinLines } from "../kernel/drawing.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
@@ -189,14 +193,17 @@ export function createKernel() {
 
   // Closed meshes of every visible part, meshed in parallel at one cell size
   // for the whole model (see exportDetail): [{ name, color, positions, indices }].
-  async function exportMeshes(parts) {
+  // With normals, each also has normals, with its vertices split along sharp
+  // edges, and its material and motion frames.
+  async function exportMeshes(parts, { normals = false } = {}) {
     const shown = visible(parts);
     const { cell, budgets } = exportDetail(shown);
     return Promise.all(
       shown.map(async (p, i) => ({
         name: p.name,
         color: p.color,
-        ...(await job({ type: "export", node: p.node, budget: budgets[i], maxCell: cell, what: `Part "${p.name}"` }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
+        ...(normals ? { material: p.material, frames: p.frames } : {}),
+        ...(await job({ type: "export", node: p.node, budget: budgets[i], maxCell: cell, what: `Part "${p.name}"`, ...(normals ? { normals } : {}) }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
       })),
     );
   }
@@ -222,6 +229,61 @@ export function createKernel() {
   async function export3MF(parts, title) {
     const meshes = await exportMeshes(parts);
     return { bytes: await to3MF(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0) };
+  }
+
+  // STEP: one named, coloured solid per visible part, exact where the script
+  // says exactly what the shape is, else flat faces from a coarser mesh.
+  async function exportSTEP(parts, title) {
+    // An exact part goes out even where the view has no mesh of it (a plate
+    // too thin for its cells); any other part with no mesh is left out, as
+    // in STL and 3MF, and named.
+    const unhidden = parts.filter((p) => !p.hidden);
+    const solids = exactParts(unhidden);
+    const keep = unhidden.map((p, i) => Boolean(solids[i] || p.mesh?.indices.length));
+    const shown = unhidden.filter((_, i) => keep[i]), exact = solids.filter((_, i) => keep[i]);
+    const left = unhidden.filter((_, i) => !keep[i]).map((p) => p.name);
+    if (!shown.length) throw new Error("There is nothing to export.");
+    const { cell, budgets } = facetDetail(shown.map((p, i) => (exact[i] ? null : p)));
+    // Each part meshed whole (one closed surface, no pieces passing through
+    // each other). Where the coarse cells lose part of it (thin tubes break
+    // up: its volume is more than 8% off the view's mesh) or cannot close it,
+    // it is meshed again finer, up to five times or 4000 triangles.
+    const mesh = (p, budget, maxCell) => job({ type: "export", solid: true, node: p.node, budget, maxCell, what: `Part "${p.name}"` }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`);
+    const faceted = async (p, budget, maxCell) => {
+      for (let k = 0; ; k++, budget *= 2, maxCell /= Math.SQRT2) {
+        const m = await mesh(p, budget, maxCell).catch((err) => (k < 5 ? null : Promise.reject(err)));
+        const want = p.mesh?.volume;
+        if (m && (k >= 5 || m.indices.length > 3 * 4000 || !(want > 0) || Math.abs(meshVolume(m) - want) <= 0.08 * want)) return m;
+      }
+    };
+    const meshes = await Promise.all(shown.map((p, i) => !exact[i] && faceted(p, budgets[i], cell)));
+    const r = partsToSTEP(shown, exact, meshes, { title, file: `${(title || "model").replace(/[^\w.-]+/g, "-")}.step` });
+    const n = shown.length, e = r.exact.length;
+    let line = e === n ? (n === 1 ? "It has exact surfaces." : "Every part has exact surfaces.") : e ? `${e} of ${n} parts have exact surfaces; the others are flat faces from their mesh.` : n === 1 ? "It is flat faces from its mesh." : "Every part is flat faces from its mesh.";
+    if (left.length) line += ` Left out, as too thin to mesh: ${left.join(", ")}.`;
+    return { bytes: new TextEncoder().encode(r.text), exact_parts: r.exact, faceted_parts: r.faceted, left_out: left, faces: r.faces, line };
+  }
+
+  // glTF (.glb): a named node per visible part with its material, and the
+  // motion as an animation. result: the build (parts, title, motion).
+  async function exportGLB(result) {
+    const meshes = await exportMeshes(result.parts, { normals: true });
+    const animated = meshes.filter((m) => m.frames).length;
+    const bytes = toGLB(meshes, { title: result.title, motion: result.motion });
+    return { bytes, triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length, ...(animated && result.motion ? { animated_parts: animated, loop_seconds: result.motion.loop } : {}) };
+  }
+
+  // OBJ and its MTL, as text: one object per visible part, with normals.
+  async function exportOBJ(parts, title) {
+    const meshes = await exportMeshes(parts, { normals: true });
+    const { obj, mtl } = toOBJ(meshes, { title });
+    return { obj, mtl, triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length };
+  }
+
+  // Binary PLY: every visible part in one mesh, coloured per vertex.
+  async function exportPLY(parts, title) {
+    const meshes = await exportMeshes(parts);
+    return { bytes: toPLY(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length };
   }
 
   // A drawing sheet as SVG: front, top and side views, an isometric view, a
@@ -325,5 +387,5 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportDrawing, exportOutline, checkFit };
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportOutline, checkFit, exportGLB, exportOBJ, exportPLY };
 }

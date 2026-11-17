@@ -24,8 +24,9 @@ self.onmessage = ({ data: job }) => {
     } else if (job.type === "mesh") {
       const m = meshPart(job.node, { budget: job.budget, maxCell: job.maxCell, maxCells: job.maxCells, normals: true });
       // Volume and size from the closed mesh; the copy for drawing has
-      // vertices split along sharp edges.
-      const d = displayMesh(m);
+      // vertices split along sharp edges, found and shaded from the part's
+      // distance function.
+      const d = displayMesh(m, undefined, compile(job.node).f);
       const result = { ...d, cellSize: m.cellSize, volume: m.volume, area: meshArea(m), bounds: m.indices.length ? meshBounds(m) : null };
       const buffers = [d.positions.buffer, d.indices.buffer, d.normals.buffer];
       // A lighter copy for the view's shadow and reflection, where a mesh is
@@ -46,9 +47,15 @@ self.onmessage = ({ data: job }) => {
         if (job.solid) {
           const { f, box } = compile(job.node);
           m = meshSDF(f, box, { budget, maxCell });
-        } else m = meshPart(job.node, { budget, maxCell });
+        } else m = meshPart(job.node, { budget, maxCell, normals: Boolean(job.normals) });
         if (!m.incomplete && m.indices.length) break;
         if (budget < 1000) throw new Error(m.indices.length ? `${job.what} is too large to export as a closed mesh.` : "There is nothing to export.");
+      }
+      // With normals (glTF, OBJ): vertices split along sharp edges, as drawn in the view.
+      if (job.normals && !job.solid) {
+        const d = displayMesh(m);
+        self.postMessage({ id: job.id, ok: true, result: { ...d, cellSize: m.cellSize } }, [d.positions.buffer, d.indices.buffer, d.normals.buffer]);
+        return;
       }
       const { positions, indices } = m;
       self.postMessage({ id: job.id, ok: true, result: { positions, indices, cellSize: m.cellSize } }, [positions.buffer, indices.buffer]);

@@ -18,6 +18,17 @@ import { sheetDXF, outlineDXF, outlineSVG, fitCircle } from "../src/kernel/dxf.j
 import { readSheet } from "../src/kernel/svgread.js";
 import { partFeatures, featuresInView } from "../src/kernel/holes.js";
 import { inflateSync } from "node:zlib";
+import { toGLB, lookOf } from "../src/kernel/gltf.js";
+import { toOBJ, objWithMtl, mtlFileName } from "../src/kernel/obj.js";
+import { toPLY } from "../src/kernel/ply.js";
+import { apply } from "../src/kernel/motion.js";
+import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { exactSolids } from "../src/kernel/brep.js";
+import { facetedSolids } from "../src/kernel/facets.js";
+import { writeSTEP, exactParts } from "../src/kernel/step.js";
+import { checkStep } from "./check-step.mjs";
 
 const mesh = (node, budget = 40000) => {
   const { f, box } = compile(node);
@@ -135,6 +146,43 @@ test("sharp edges are drawn sharp, smooth surfaces smooth", () => {
   assert.equal(displayMesh(s).positions.length, s.positions.length);
 });
 
+test("with the distance function, small fillets are shaded round and sharp edges stay crisp", () => {
+  // [shape, budget, p99 before (deg), p99 now must be under]: the shading
+  // error without and with the distance function given to displayMesh.
+  const cases = [
+    // A 3 mm fillet at 2.6 mm cells: before, its faces were split apart and shaded flat.
+    [{ t: "box", s: [40, 30, 20], r: 3 }, 1500, 9],
+    [{ t: "torus", R: 20, r: 5 }, 1500, 3],
+    [{ t: "sphere", r: 20 }, 1500, 0.5],
+    [{ t: "cylinder", r: 10, h: 30 }, 6000, 1],
+    // Sharp edges: shaded flat to the edge.
+    [{ t: "subtract", a: { t: "union", c: [{ t: "box", s: [80, 60, 30] }, { t: "move", v: [0, 0, 20], c: { t: "cylinder", r: 15, h: 20 } }] }, b: [{ t: "cylinder", r: 8, h: 100 }] }, 6000, 1],
+  ];
+  for (const [node, budget, limit] of cases) {
+    const { f, box } = compile(node);
+    const m = meshSDF(f, box, { budget, normals: true });
+    const before = shadingError(f, displayMesh(m));
+    const d = displayMesh(m, undefined, f);
+    const after = shadingError(f, d);
+    const what = `${node.t} at budget ${budget}: p90 ${pct(before, 0.9).toFixed(1)} -> ${pct(after, 0.9).toFixed(1)}, p99 ${pct(before, 0.99).toFixed(1)} -> ${pct(after, 0.99).toFixed(1)} deg`;
+    assert.ok(pct(after, 0.99) < limit, what);
+    assert.ok(pct(after, 0.9) <= pct(before, 0.9) + 0.05, what);
+    // The same surface, and every triangle corner where it was.
+    assert.equal(d.indices.length, m.indices.length);
+    for (let n = 0; n < m.indices.length; n += 7) for (let a = 0; a < 3; a++) assert.equal(d.positions[d.indices[n] * 3 + a], m.positions[m.indices[n] * 3 + a]);
+  }
+  // The filleted block's 3 mm fillets were shaded in facets: p90 26 degrees.
+  const { f, box } = compile({ t: "box", s: [40, 30, 20], r: 3 });
+  const r = meshSDF(f, box, { budget: 1500, normals: true });
+  assert.ok(pct(shadingError(f, displayMesh(r, undefined, f)), 0.9) < 4);
+  // A box corner still gets three copies, each facing straight out of one face.
+  const b = compile({ t: "box", s: [40, 30, 20] });
+  const bd = displayMesh(meshSDF(b.f, b.box, { normals: true }), undefined, b.f);
+  const at = [];
+  for (let i = 0; i < bd.positions.length; i += 3) if (Math.hypot(bd.positions[i] - 20, bd.positions[i + 1] - 15, bd.positions[i + 2] - 10) < 0.5) at.push([...bd.normals.slice(i, i + 3)].map((v) => Math.round(v * 100) / 100));
+  assert.deepEqual(at.map(String).sort(), ["0,0,1", "0,1,0", "1,0,0"]);
+});
+
 test("the lighter copy of a mesh keeps its shape with far fewer triangles", () => {
   // Signed volume of a triangle mesh; it is only meaningful for a closed one.
   const volume = ({ positions: P, indices: I }) => {
@@ -209,6 +257,119 @@ test("3MF export: a valid zip with one named, coloured, closed object per part",
   assert.deepEqual(r.problems, []);
   assert.equal(r.title, "Test &lt;plate&gt;");
   assert.deepEqual(r.objects.map((o) => [o.name, o.color, o.triangles]), objects.map((o) => [o.name, `${o.color.toUpperCase()}FF`, o.indices.length / 3]));
+});
+
+test("STEP: exact solids have the exact volumes of boxes, cylinders, cones, spheres, tori, capsules, extrusions and revolves", () => {
+  const PI = Math.PI;
+  const holes = { t: "subtract2", a: { t: "rect2", w: 40, h: 30, r: 5 }, b: [{ t: "move2", v: [10, 0], c: { t: "circle2", r: 3 } }, { t: "move2", v: [-10, 0], c: { t: "circle2", r: 3 } }] };
+  const cases = [
+    [{ t: "box", s: [10, 20, 30], r: 0 }, 6000, { plane: 6 }],
+    [{ t: "cylinder", r: 5, h: 10, round: 0 }, PI * 250, { plane: 2, cylinder: 1 }],
+    [{ t: "cone", r1: 5, r2: 2, h: 10 }, ((PI * 10) / 3) * 39, { plane: 2, cone: 1 }],
+    [{ t: "cone", r1: 5, r2: 0, h: 10 }, ((PI * 10) / 3) * 25, { plane: 1, cone: 1 }],
+    [{ t: "sphere", r: 7 }, (4 / 3) * PI * 343, { sphere: 1 }],
+    [{ t: "torus", R: 10, r: 3 }, 2 * PI * PI * 10 * 9, { torus: 1 }],
+    [{ t: "capsule", a: [0, 0, 0], b: [10, 5, 3], r1: 2, r2: 2 }, PI * 4 * Math.hypot(10, 5, 3) + (4 / 3) * PI * 8, { sphere: 2, cylinder: 1 }],
+    [{ t: "rotate", deg: [10, 20, 30], c: { t: "move", v: [5, 0, 0], c: { t: "box", s: [10, 20, 30], r: 0 } } }, 6000, { plane: 6 }],
+    [{ t: "mirror", axis: 0, c: { t: "move", v: [5, 1, 2], c: { t: "cone", r1: 5, r2: 2, h: 10 } } }, ((PI * 10) / 3) * 39, { plane: 2, cone: 1 }],
+    [{ t: "extrude", p: holes, h: 5 }, (40 * 30 - (4 - PI) * 25 - 2 * PI * 9) * 5, { plane: 6, cylinder: 6 }],
+    [{ t: "revolve", p: { t: "move2", v: [7, 0], c: { t: "rect2", w: 4, h: 10 } } }, PI * (81 - 25) * 10, { plane: 2, cylinder: 2 }],
+    [{ t: "revolve", p: { t: "move2", v: [4, 0], c: { t: "rect2", w: 4, h: 6 } }, angle: 90 }, (PI / 4) * 32 * 6, { plane: 4, cylinder: 2 }],
+    [{ t: "revolve", p: { t: "subtract2", a: { t: "move2", v: [10, 0], c: { t: "rect2", w: 8, h: 8 } }, b: [{ t: "move2", v: [10, 0], c: { t: "circle2", r: 2 } }] } }, 2 * PI * 10 * (64 - PI * 4), { plane: 2, cylinder: 2, torus: 1 }],
+    [{ t: "symmetric", axis: 1, c: { t: "move", v: [0, 20, 0], c: { t: "sphere", r: 5 } } }, (8 / 3) * PI * 125, { sphere: 2 }],
+  ];
+  for (const [node, volume, surfaces] of cases) {
+    const solids = exactSolids(node);
+    assert.ok(solids, `${node.t} comes out exact`);
+    const r = checkStep(writeSTEP([{ name: node.t, color: "#4f7cac", solids }], { time: "2026-01-01T00:00:00" }).text, { tol: 1e-7 });
+    assert.deepEqual(r.problems, [], node.t);
+    const p = r.parts[0];
+    assert.deepEqual(p.surfaces, surfaces, `${node.t}: ${JSON.stringify(p.surfaces)}`);
+    assert.ok(Math.abs(p.volume - volume) < 1e-6 * volume, `${node.t}: volume ${p.volume}, exact ${volume}`);
+  }
+});
+
+test("STEP: script shapes come out exact where they can, and match the kernel's meshes", () => {
+  const r = runScript(`
+    part("Plate", extrude(rect(80, 40, 6).cut(circle(6).move(-25, 0), circle(6).move(25, 0)), 8).at(0, -150, 4));
+    part("Slot", extrude(path([0, 0]).line(40, 0).arc([50, 10], [40, 20]).line(0, 20).close(), 5).rotateX(30).at(10, 20, 30));
+    part("Cam", extrude(path([0, 0]).line(40, 0).tangentArc(40, 20).line(0, 20).radiusArc(0, 0, 10).close(), 2));
+    part("Lid", extrude(polygon([[0, 0], [60, 0], [60, 30], [20, 45], [0, 30]], 6), 4).at(100, 0, 0));
+    part("Bearing", revolve(rect(10, 8).cut(circle(2)).move(20, 0)));
+    part("Pin", cylinder(4, 30, 1).rotateY(90).at(0, 0, 50));
+    part("Knob", union(sphere(8).at(0, 0, 100), torus(20, 3).at(0, 0, 80), cone(10, 0, 20).at(50, 50, 50)));
+    part("Rod", capsule([0, 0, 0], [30, 10, 5], 4, 2).at(-50, 0, 0));
+    part("Feet", cylinder(3, 10).at(40, 0, 0).radial(6));
+    part("Block", box(20, 20, 20).cut(cylinder(5, 30)));
+    part("Blend", union(sphere(10), sphere(8).at(12, 0, 0), 4));
+    part("Rounded", box(20, 20, 20, 2));
+  `);
+  const exact = exactParts(r.parts);
+  assert.deepEqual(r.parts.filter((p, i) => !exact[i]).map((p) => p.name), ["Block", "Blend", "Rounded"]);
+  r.parts.forEach((p, i) => {
+    if (!exact[i]) return;
+    const { f, box } = compile(p.node);
+    const m = meshSDF(f, box, { budget: 30000 });
+    const c = checkStep(writeSTEP([{ name: p.name, color: p.color, solids: exact[i] }], { time: "x" }).text, { tol: 1e-6 });
+    assert.deepEqual(c.problems, [], p.name);
+    const q = c.parts[0], mv = meshVolume(m), mb = meshBounds(m);
+    assert.ok(Math.abs(q.volume - mv) < 0.005 * mv, `${p.name}: volume ${q.volume}, mesh ${mv}`);
+    q.bounds.forEach((x, k) => assert.ok(Math.abs(x - mb[k]) < m.cellSize, `${p.name}: box ${q.bounds}, mesh ${mb}`));
+  });
+  // The arcs the script drew are arcs in the file: the slot's end is one
+  // cylinder face, not 90 flat ones.
+  const slot = checkStep(writeSTEP([{ name: "Slot", solids: exact[1] }], { time: "x" }).text).parts[0];
+  assert.deepEqual(slot.surfaces, { plane: 5, cylinder: 1 });
+});
+
+test("STEP: a faceted part is a closed solid with its mesh's volume, and flat faces merge", () => {
+  const cases = [
+    // An L of two boxes that overlap: flat all over, so a few big faces (and
+    // slivers where the mesh rounds its corners a little).
+    ["L", { t: "union", c: [{ t: "box", s: [60, 40, 5], r: 0 }, { t: "move", v: [-27.5, 0, 15], c: { t: "box", s: [5, 40, 30], r: 0 } }] }, 0.04],
+    ["Blend", { t: "union", c: [{ t: "sphere", r: 10 }, { t: "move", v: [12, 0, 0], c: { t: "sphere", r: 8 } }], k: 4 }, null],
+    ["Two pieces", { t: "union", c: [{ t: "subtract", a: { t: "box", s: [10, 10, 10], r: 0 }, b: [{ t: "sphere", r: 6 }] }, { t: "move", v: [30, 0, 0], c: { t: "box", s: [10, 10, 10], r: 1 } }] }, null],
+  ];
+  for (const [name, node, maxFaces] of cases) {
+    const { f, box } = compile(node);
+    const m = meshSDF(f, box, { budget: 6000 });
+    const solids = facetedSolids(m);
+    const r = checkStep(writeSTEP([{ name, color: "#888", solids }], { time: "x" }).text);
+    assert.deepEqual(r.problems, [], name);
+    const p = r.parts[0], mv = meshVolume(m);
+    assert.ok(Math.abs(p.volume - mv) < 1e-6 * mv, `${name}: volume ${p.volume}, mesh ${mv}`);
+    assert.deepEqual(Object.keys(p.surfaces), ["plane"]);
+    if (maxFaces) assert.ok(p.faces <= maxFaces * m.indices.length / 3, `${name}: ${p.faces} faces from ${m.indices.length / 3} triangles`);
+    if (name === "Two pieces") assert.equal(p.solids.length, 2);
+  }
+});
+
+test("STEP: names, colours and the assembly read back, and the checker finds broken files", () => {
+  const parts = [
+    { name: "Base 'A' \\ Größe", color: "#4f7cac", solids: exactSolids({ t: "box", s: [40, 40, 10], r: 0 }) },
+    { name: "Peg", color: "#d9a441", solids: exactSolids({ t: "move", v: [0, 0, 12], c: { t: "cylinder", r: 5, h: 20, round: 0 } }) },
+  ];
+  const { text } = writeSTEP(parts, { title: "Peg & base", time: "2026-01-01T00:00:00" });
+  const r = checkStep(text);
+  assert.deepEqual(r.problems, []);
+  assert.equal(r.assembly, "Peg & base");
+  assert.deepEqual(r.parts.map((p) => p.name), ["Base 'A' \\ Größe", "Peg"]);
+  assert.match(text, /PRODUCT\('part 1','Base ''A'' \\\\ Gr\\X2\\00F600DF\\X0\\e'/);
+  assert.deepEqual(r.parts.map((p) => p.colour.map((c) => Math.round(c * 255))), [[0x4f, 0x7c, 0xac], [0xd9, 0xa4, 0x41]]);
+  // Broken on purpose: each of these must be found.
+  const breaks = [
+    [/ADVANCED_FACE\('',\((#\d+)\),(#\d+),\.T\.\)/, "ADVANCED_FACE('',($1),$2,.F.)", /volume|not positive|right way/],
+    [/ORIENTED_EDGE\('',\*,\*,(#\d+),\.T\.\)/, "ORIENTED_EDGE('',*,*,$1,.F.)", /not closed|once each way/],
+    [/CIRCLE\('',(#\d+),5\.\)/, "CIRCLE('',$1,5.1)", /off/],
+    [/VECTOR\('',(#\d+),([\d.]+)\)/, "VECTOR('',$1)", /arguments/],
+    [/#1=APPLICATION_CONTEXT/, "#1=APPLICATION_CONTEXT_X", /unknown entity/],
+    [/(EDGE_LOOP\('',\()#\d+,/, "$1#999999,", /not defined/],
+  ];
+  for (const [find, put, want] of breaks) {
+    assert.ok(find.test(text), String(find));
+    const b = checkStep(text.replace(find, put));
+    assert.ok(b.problems.some((p) => want.test(p)), `${find}: ${b.problems.slice(0, 3).join("; ") || "no problems found"}`);
+  }
 });
 
 test("small pieces of a big part keep their detail, and the volume stays right", () => {
@@ -506,6 +667,69 @@ test("thin parts are not lost", () => {
   const m = mesh({ t: "box", s: [5000, 300, 50] }, 6000);
   assert.ok(m.indices.length > 0 && openEdges(m) === 0);
   assert.ok(Math.abs(meshVolume(m) / (5000 * 300 * 50) - 1) < 0.05);
+});
+
+test("thin plates, tubes, blades and pins never mesh to nothing or lose a wall", () => {
+  // [shape, budget, exact volume, tolerance]. A 1 mm plate at 3.2 mm cells
+  // used to mesh to nothing: every grid corner and cell centre fell outside it.
+  const tube = (R, w, h) => ({ t: "subtract", a: { t: "cylinder", r: R, h }, b: [{ t: "cylinder", r: R - w, h: h + 2 }] });
+  const cases = [
+    [{ t: "box", s: [200, 120, 1] }, 1500, 24000, 0.01],
+    [{ t: "box", s: [200, 120, 1] }, 20000, 24000, 0.01],
+    [{ t: "box", s: [200, 120, 0.6] }, 6000, 14400, 0.01],
+    [{ t: "box", s: [200, 120, 0.8] }, 20000, 19200, 0.01],
+    [{ t: "box", s: [200, 120, 0.8] }, 40000, 19200, 0.01],
+    [{ t: "box", s: [500, 500, 2] }, 1500, 500000, 0.01],
+    [{ t: "move", v: [7, 3, 0.3], c: { t: "box", s: [300, 80, 1.5] } }, 1500, 36000, 0.01],
+    [{ t: "cylinder", r: 100, h: 1 }, 1500, Math.PI * 1e4, 0.01],
+    [{ t: "box", s: [600, 60, 1.2] }, 1500, 43200, 0.02],
+    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 20000, 900000, 0.01],
+    [tube(50, 1, 100), 20000, Math.PI * (2500 - 49 * 49) * 100, 0.01],
+    [{ t: "cylinder", r: 1, h: 40 }, 1500, Math.PI * 40, 0.05],
+    // A 1 mm rod at 0.8 mm cells comes out fat, never thin or broken.
+    [{ t: "rotate", deg: [0, 90, 0], c: { t: "cylinder", r: 0.5, h: 200 } }, 1500, Math.PI * 0.25 * 200, 0.35],
+  ];
+  for (const [node, budget, exact, tol] of cases) {
+    const m = mesh(node, budget);
+    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget} (cell ${m.cellSize.toFixed(2)} mm)`;
+    assert.ok(m.indices.length > 0, `${what} is empty`);
+    assert.equal(openEdges(m), 0, `${what} is not closed`);
+    assert.ok(Math.abs(meshVolume(m) / exact - 1) < tol, `${what}: volume ${meshVolume(m).toFixed(0)} of ${exact.toFixed(0)}`);
+    assert.equal(m.thickened, undefined, `${what} was drawn thicker`);
+  }
+  // Walls far thinner than any cell the budget allows (a 0.5 mm tube 400 mm
+  // long, a 0.8 mm shell, a tilted 3 mm sheet at a small budget) are drawn a
+  // little more than a cell thick, whole, instead of in shreds or not at all.
+  for (const [node, budget, exact, wall] of [
+    [tube(20, 0.5, 400), 1500, Math.PI * (400 - 19.5 ** 2) * 400, 0.5],
+    [tube(100, 0.8, 300), 1500, Math.PI * (100 ** 2 - 99.2 ** 2) * 300, 0.8],
+    [{ t: "shell", th: 0.8, c: { t: "box", s: [200, 150, 100] } }, 1500, 200 * 150 * 100 - 198.4 * 148.4 * 98.4, 0.8],
+    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 1500, 900000, 3],
+  ]) {
+    const m = mesh(node, budget);
+    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget}`;
+    assert.ok(m.thickened > 0, `${what} was not drawn thicker`);
+    assert.equal(openEdges(m), 0, `${what} is not closed`);
+    // Every wall is there: no less than the true volume, and no more than
+    // walls a cell and a half thick would hold.
+    const v = meshVolume(m);
+    assert.ok(v > exact && v < exact * ((1.5 * m.cellSize) / wall), `${what}: volume ${v.toFixed(0)} of ${exact.toFixed(0)}`);
+  }
+  // A part through meshPart, as the app meshes it, the same.
+  const p = meshPart({ t: "box", s: [200, 120, 1] }, { budget: 20000, normals: true });
+  assert.ok(p.indices.length > 1000 && Math.abs(p.volume / 24000 - 1) < 0.01, `plate part: ${p.indices.length / 3} triangles, volume ${p.volume.toFixed(0)}`);
+});
+
+test("pieces that are the same piece, or share a box, give no edge with four triangles", () => {
+  // The rotor head's mast: a centred bar in radial(6) is itself again turned
+  // by 180 degrees, and the three bars left share one box. Meshed one by one
+  // they made one surface twice, and their ends in one plane twice.
+  const r = runScript('part("Mast", cylinder(110, 450).move(0, 0, 455).add(box(12, 232, 150).move(0, 0, 790).radial(6, "z")));');
+  for (const [budget, maxCell] of [[9375, 19], [40000, 4]]) {
+    const m = meshPart(r.parts[0].node, { budget, maxCell });
+    assert.equal(openEdges(m), 0);
+    assert.ok(closedByPosition(m), `budget ${budget}: edges shared by more than two triangles`);
+  }
 });
 
 test("model scripts: example, test helicopter, Claude's helicopter", () => {
@@ -1502,6 +1726,99 @@ test("drawing: a detail view shows a crowded place at a larger scale, marked on 
   // At a given place too.
   const at = drawingSVG(parts, { section: { axis: "y", offset: 0 }, detail: { view: "front", at: [0, 0, 800], radius: 300 } });
   assert.equal(at.detail?.view, "front");
+});
+
+// ---- glTF, OBJ and PLY ----
+
+// A crank, a rod linked to it and a sliding piston: spin, follow, link and
+// slide, with a glass and a plastic part.
+const CRANK = `title("Crank & piston");
+loop(1);
+part("Base", box(120, 60, 8).at(0, 0, -60), { color: "#4f7cac" });
+part("Crank", cylinder(30, 10).rotateX(90).at(0, -10, 0), { color: "#8d939a", spin: { axis: "y", rpm: 60 } });
+part("Crank pin", sphere(5).at(0, -2, 25), { color: "#d9a441", material: "plastic", follow: "Crank" });
+const pin = [0, 0, 25], top = [0, 0, 125];
+part("Piston", cylinder(20, 30).at(0, 0, 135), { color: "#222222", motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
+part("Rod", capsule(pin, top, 5), { color: "#9aa3ad", motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
+part("Cover", box(40, 2, 40).at(60, 30, 100), { color: "#aaccee", material: "glass" });
+joint("Rod", "Crank", pin);
+joint("Rod", "Piston", top);`;
+const crankParts = () => {
+  const r = runScript(CRANK);
+  assert.equal(r.error, undefined);
+  return { r, parts: r.parts.map((p) => ({ name: p.name, color: p.color, material: p.material, frames: p.frames, ...displayMesh(meshPart(p.node, { budget: 3000, normals: true })) })) };
+};
+
+test("glTF: named parts in metres with Y up, materials, and the motion as an animation three.js plays", async () => {
+  const { r, parts } = crankParts();
+  const glb = toGLB(parts, { title: r.title, motion: r.motion });
+  const c = checkGLB(Buffer.from(glb));
+  assert.deepEqual(c.problems, []);
+  assert.deepEqual(c.parts.map((p) => [p.name, p.triangles]), parts.map((p) => [p.name, p.indices.length / 3]));
+  // Bounds back in our millimetres, Z up, as meshed.
+  for (const [i, p] of c.parts.entries()) {
+    const b = meshBounds(parts[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3, `${p.name} bound ${k}: ${v} vs ${b[k]}`));
+  }
+  const look = Object.fromEntries(c.parts.map((p) => [p.name, [p.material.metallic, p.material.roughness, p.material.alphaMode]]));
+  assert.deepEqual(look, { Base: [0, 0.46, "OPAQUE"], Crank: [0.92, 0.36, "OPAQUE"], "Crank pin": [0, 0.52, "OPAQUE"], Piston: [0, 0.93, "OPAQUE"], Rod: [0.92, 0.36, "OPAQUE"], Cover: [0, 0.05, "BLEND"] });
+  // The look without a material is picked as the view picks it.
+  for (const color of ["#4f7cac", "#8d939a", "#222222", "#2f3338", "#b8483e", "#9aa3ad", "#c8c8c0", "#3a3f2a"]) {
+    const hsl = new THREE.Color(color).getHSL({});
+    assert.equal(lookOf({ color }), hsl.s >= 0.16 ? "paint" : hsl.l < 0.16 ? "rubber" : "metal", color);
+  }
+  assert.equal(c.animations.length, 1);
+  assert.ok(Math.abs(c.animations[0].duration - 1) < 1e-6);
+  assert.equal(c.animations[0].parts, 4, "crank, pin, piston and rod move");
+
+  // three.js's own loader: the same parts, and poses at the keys where the
+  // kernel puts them.
+  const g = await new Promise((ok, fail) => new GLTFLoader().parse(glb.buffer, "", ok, fail));
+  const byName = (n) => g.scene.getObjectByName(THREE.PropertyBinding.sanitizeNodeName(n));
+  assert.ok(parts.every((p) => byName(p.name)?.isMesh));
+  const mixer = new THREE.AnimationMixer(g.scene);
+  mixer.clipAction(g.animations[0]).play();
+  const count = r.motion.frames;
+  let worst = 0;
+  for (const k of [7, 15, 30, 44, 59]) {
+    mixer.setTime((k / count) * r.motion.loop);
+    g.scene.updateMatrixWorld(true);
+    for (const p of r.parts.filter((x) => x.frames)) {
+      for (const at of [[0, 0, 25], [0, 0, 125], [30, -10, 0]]) {
+        const want = apply(Array.from(p.frames.subarray(k * 12, k * 12 + 12)), at);
+        const v = new THREE.Vector3(at[0] / 1000, at[2] / 1000, -at[1] / 1000).applyMatrix4(byName(p.name).matrixWorld);
+        worst = Math.max(worst, Math.hypot(v.x * 1000 - want[0], -v.z * 1000 - want[1], v.y * 1000 - want[2]));
+      }
+    }
+  }
+  assert.ok(worst < 0.01, `poses are off by up to ${worst} mm`);
+  // Without motion, no animation.
+  assert.equal(checkGLB(Buffer.from(toGLB(parts.map((p) => ({ ...p, frames: null }))))).animations.length, 0);
+});
+
+test("OBJ and MTL: one object per part with normals, in mm with Y up; PLY: one coloured mesh", () => {
+  const { r, parts } = crankParts();
+  const { obj, mtl } = toOBJ(parts, { title: r.title });
+  const o = checkOBJ(objWithMtl(obj, mtlFileName("Crank & piston.obj")), mtl);
+  assert.deepEqual(o.problems, []);
+  assert.equal(o.mtllib, "Crank-piston.mtl");
+  assert.deepEqual(o.parts.map((p) => [p.name, p.triangles]), parts.map((p) => [p.name, p.indices.length / 3]));
+  for (const [i, p] of o.parts.entries()) {
+    const b = meshBounds(parts[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3, `${p.name} bound ${k}: ${v} vs ${b[k]}`));
+  }
+  assert.deepEqual(o.parts[0].material.Kd, [0x4f / 255, 0x7c / 255, 0xac / 255].map((v) => +v.toFixed(4)));
+  assert.deepEqual(o.parts.map((p) => [p.material.Pm, p.material.Pr, p.material.d]).slice(-2), [[0.92, 0.36, 1], [0, 0.05, 0.36]]);
+
+  // PLY gets the closed meshes with shared vertices, as STL and 3MF do.
+  const plain = r.parts.map((p) => ({ name: p.name, color: p.color, ...meshPart(p.node, { budget: 3000 }) }));
+  const ply = checkPLY(Buffer.from(toPLY(plain, { title: r.title })));
+  assert.deepEqual(ply.problems, []);
+  assert.deepEqual(ply.parts.map((p) => [p.name, p.triangles, p.colors]), plain.map((p) => [p.name, p.indices.length / 3, [p.color]]));
+  for (const [i, p] of ply.parts.entries()) {
+    const b = meshBounds(plain[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3));
+  }
 });
 
 test("the app's Claude is allowed every tool the server offers", () => {

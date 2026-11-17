@@ -19,7 +19,8 @@ mkdirSync(out, { recursive: true });
 const h = await startHarness({ port: Number(process.env.PORT ?? 5180) });
 let code = 0;
 try {
-  const w = await h.openWindow();
+  // SCALE=2 renders as on a Retina screen.
+  const w = await h.openWindow({ scale: Number(process.env.SCALE) || undefined });
   const t = Date.now();
   const set = await h.command(w, "set_model", { script: readFileSync(file, "utf8") });
   if (set.error) throw new Error(set.error);
