@@ -143,11 +143,27 @@ export function createInspect({ onChange }) {
     }
   }
 
+  // Whether the plane passes through a part's box, where the part is now.
+  function crosses({ part }) {
+    const b = part.mesh.bounds;
+    if (!b) return false;
+    const plane = partPlane(part.name);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      const d = plane.distanceToPoint(new THREE.Vector3(i & 1 ? b[3] : b[0], i & 2 ? b[4] : b[1], i & 4 ? b[5] : b[2]));
+      lo = Math.min(lo, d);
+      hi = Math.max(hi, d);
+    }
+    return lo < 0 && hi > 0;
+  }
+
   function cut(entry, sec) {
     const m = entry.mesh.material;
     if (!m.userData.capped) capShader(m);
     // Glass is clipped but not filled: its inside should stay clear.
-    const fill = Boolean(sec) && !m.transparent;
+    // Only a part the plane passes through shows its inside; a moving part
+    // may pass through it at any time.
+    const fill = Boolean(sec) && !m.transparent && (Boolean(entry.part.frames) || crosses(entry));
     const was = m.userData.cap.on;
     if (sec) {
       m.clippingPlanes = [partPlane(entry.part.name)];
@@ -161,6 +177,11 @@ export function createInspect({ onChange }) {
     m.side = fill ? THREE.DoubleSide : THREE.FrontSide;
     // The shadow map draws back faces, as it does for any solid part.
     m.shadowSide = fill ? THREE.BackSide : null;
+    // In front of the floor and its grid where the inside of a part's bottom
+    // face lies in the floor's plane.
+    m.polygonOffset = fill;
+    m.polygonOffsetFactor = fill ? -1 : 0;
+    m.polygonOffsetUnits = fill ? -4 : 0;
     if (fill !== was) m.needsUpdate = true;
   }
 
@@ -293,30 +314,14 @@ export function createInspect({ onChange }) {
 
 const WHITE = new THREE.Color(1, 1, 1);
 
-// The inside of a cut part is drawn as its cut face: flat in the cap colour,
-// and at the depth of the cutting plane rather than of the far wall it is
-// really on, so whatever lies between the plane and that wall (the floor's
-// grid, another part) stays behind the cut face. vClipPosition is the
-// fragment's place in view space, negated; clippingPlanes[0] is the plane in
-// view space, and a point c is cut away where dot(c, plane.xyz) > plane.w.
+// The inside of a cut part is drawn as its cut face, flat in the cap colour.
+// It stays at the depth of the far wall it is really on: anything between
+// the plane and that wall would have to be inside the solid, and solid parts
+// do not overlap. The one exception is the floor, which the bottom of a part
+// standing on it touches; the material's polygon offset keeps the part in
+// front of it (see cut).
 const CAP = /* glsl */ `#include <opaque_fragment>
-  #if NUM_CLIPPING_PLANES > 0
-  if (!gl_FrontFacing) {
-    gl_FragColor = vec4(capColor, diffuseColor.a);
-    vec4 cutPlane = clippingPlanes[0];
-    vec3 onPlane = -vClipPosition;
-    if (isOrthographic) {
-      if (abs(cutPlane.z) > 1e-6) onPlane.z = -(cutPlane.w + onPlane.x * cutPlane.x + onPlane.y * cutPlane.y) / cutPlane.z;
-    } else {
-      float along = dot(vClipPosition, cutPlane.xyz);
-      if (abs(along) > 1e-9) onPlane = -vClipPosition * (cutPlane.w / along);
-    }
-    vec4 clipAt = projectionMatrix * vec4(onPlane, 1.0);
-    gl_FragDepth = clamp(0.5 * clipAt.z / clipAt.w + 0.5, 0.0, 1.0);
-  } else {
-    gl_FragDepth = gl_FragCoord.z;
-  }
-  #endif`;
+  if (!gl_FrontFacing) gl_FragColor = vec4(capColor, diffuseColor.a);`;
 
 // Adds the cut face to a part's material: where the inside of the mesh
 // shows, it is drawn flat in the cap colour. Kept apart from the plain
@@ -330,7 +335,7 @@ function capShader(m) {
     before.call(this, shader, renderer);
     if (!m.userData.cap.on) return;
     shader.uniforms.capColor = m.userData.cap;
-    shader.fragmentShader = "uniform vec3 capColor;\nuniform mat4 projectionMatrix;\n" + shader.fragmentShader.replace("#include <opaque_fragment>", CAP);
+    shader.fragmentShader = "uniform vec3 capColor;\n" + shader.fragmentShader.replace("#include <opaque_fragment>", CAP);
   };
   m.customProgramCacheKey = function () {
     return key.call(this) + (m.userData.cap.on ? "|cap" : "");
