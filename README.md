@@ -3,9 +3,14 @@
 [![CI](https://github.com/abhinavbolla/draftsman/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinavbolla/draftsman/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**CAD you talk to.** Describe a part or a whole machine, and Claude draws it in 3D, in real dimensions, with parts that move. Look around it, click a part to change it, and export a picture or a file for other apps.
+**CAD you talk to.** Describe a part, a machine or a house, and Claude draws it in 3D, in real dimensions, with parts that move. Look around it, cut it open, click a part to change it, and export a drawing, a film or a file for other apps.
 
 ![A helicopter rotor head made in Draftsman: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
+
+| | | |
+|---|---|---|
+| ![A short film of a helicopter: a wide orbit, then a move in on the rotor hub](docs/helicopter-film.gif) | ![The rotor head cut open, turning, with its cut faces hatched](docs/rotor-head-section.gif) | ![A floor plan of a two-bedroom house with room areas and dimension chains](docs/house-plan.png) |
+| A film of a helicopter, recorded in the app | The rotor head cut open | The floor plan of a house |
 
 > **Draftsman is in early development.** From the first [release](https://github.com/abhinavbolla/draftsman/releases) on, each comes with installers for macOS, Windows and Linux, not signed yet. Until then it runs from a clone of this repository.
 >
@@ -18,11 +23,14 @@
 | Models from a prompt, changed by prompt or by sliders on a part | ✅ |
 | Big models built from a plan, each step checked | ✅ |
 | Mechanisms that move, with joint and collision checks | ✅ |
-| A studio view with materials, and CAD-style navigation | ✅ |
+| A studio view with materials and shading in the creases, and CAD-style navigation | ✅ |
+| Looking inside: hide parts, cut the model open, explode it, and measure sizes, mass and distances | ✅ |
 | Export: PNG pictures; STL, 3MF, glTF, OBJ, PLY and STEP files | ✅ |
 | 2D drawings: views, a section, a detail, centre lines, overall sizes and hole dimensions, on A4 to A0, as SVG, PDF or DXF | ✅ |
 | Installers for macOS, Windows and Linux (unsigned), and examples to start from | ✅ |
-| Video, signed installers | Planned |
+| Films: a camera Claude directs, turntables and shot lists, recorded frame by frame | ✅ |
+| Houses: walls, doors, windows, rooms and a roof, with a floor plan sheet (first stage) | ✅ |
+| Signed installers | Planned |
 
 The [roadmap](docs/roadmap.md) has the plan.
 
