@@ -6,6 +6,7 @@ import { meshSDF, meshBounds, meshArea, displayMesh, lightMesh } from "./mesh.js
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
 import { viewOutline, sectionView } from "./drawing.js";
+import { floorPlanSVG } from "./floorplan.js";
 
 // A part with at least this many triangles gets a lighter copy, its vertices
 // merged over this many of its cells: about a ninth of the triangles.
@@ -63,6 +64,8 @@ self.onmessage = ({ data: job }) => {
       // their distance functions compiled here.
       const parts = job.parts.map((p) => ({ ...p, ...compile(p.node) }));
       self.postMessage({ id: job.id, ok: true, result: job.section ? sectionView(parts, job.section) : viewOutline(parts, job.view) });
+    } else if (job.type === "floorplan") {
+      self.postMessage({ id: job.id, ok: true, result: floorPlanSVG(job) });
     }
   } catch (err) {
     self.postMessage({ id: job.id, ok: false, error: String(err?.message ?? err) });

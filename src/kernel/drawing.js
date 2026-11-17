@@ -1344,3 +1344,6 @@ export function drawingSVG(parts, { title, date = today(), info = {}, section, p
   const sheet = sheetSVG({ info: { title, date, type: documentType(parts.length), ...info }, bounds, views, section: cut, projection });
   return { ...sheet, section: { axis: cut.axis, offset: cut.offset, area: cut.area } };
 }
+
+// For the other sheets (floorplan.js): the same frame and title block.
+export { frame as sheetFrame, titleBlock as sheetTitleBlock, SHEET, TITLE };
