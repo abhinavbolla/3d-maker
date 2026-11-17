@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to 3D Maker. The format follows
+Notable changes to Draftsman. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions will follow
 [Semantic Versioning](https://semver.org). There are no releases yet.
 
@@ -8,7 +8,7 @@ Notable changes to 3D Maker. The format follows
 
 ### Added
 
-- A prompt box that runs your own Claude Code with 3D Maker's MCP server, and follow-up prompts
+- A prompt box that runs your own Claude Code with Draftsman's MCP server, and follow-up prompts
   that continue the same conversation. A desktop app (Tauri) and the same app in a browser.
 - Click a part to get its sliders and talk to it from the prompt box. Undo and redo for every
   change, Claude's included, and autosave.
@@ -58,6 +58,9 @@ Notable changes to 3D Maker. The format follows
 
 ### Changed
 
+- The project is now called Draftsman; it was formerly 3D Maker. The MCP server and its tools are
+  named `draftsman`, formerly `3d-maker`, so re-add the server if you registered it yourself
+  (see [docs/using.md](docs/using.md)). A model autosaved under the old name still opens.
 - The view uses much less GPU: motion plays at up to 60 frames a second (30 while you work in
   another window, none while the window is hidden), the shadow map is kept while only the view
   moves, the floor's reflection draws an eighth of the samples on a Retina screen, and app updates

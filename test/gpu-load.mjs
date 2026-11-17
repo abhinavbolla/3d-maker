@@ -58,7 +58,7 @@ function gpuMs(pid) {
 }
 // The GPU's power in watts while fn runs, from test/gpu-power.c, built on
 // first use. NaN where it cannot be built or read.
-const powerTool = join(tmpdir(), "3d-maker-gpu-power");
+const powerTool = join(tmpdir(), "draftsman-gpu-power");
 let canReadPower = true;
 try {
   execFileSync("clang", ["-O1", "-o", powerTool, new URL("./gpu-power.c", import.meta.url).pathname, "-framework", "CoreFoundation"], { stdio: "pipe" });
@@ -125,7 +125,7 @@ const FLAT_OUT = `(() => {
 
 const vite = await createServer({ root, configFile: join(root, "vite.config.js"), server: { port: PORT, strictPort: true, hmr: false, watch: null }, logLevel: "warn" });
 await vite.listen();
-const profile = mkdtempSync(join(tmpdir(), "3d-maker-gpu-"));
+const profile = mkdtempSync(join(tmpdir(), "draftsman-gpu-"));
 const chrome = spawn(
   CHROME,
   [
@@ -175,18 +175,18 @@ try {
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result.value;
   };
-  for (let i = 0; i < 200 && !(await page("Boolean(window.__3dmaker)").catch(() => false)); i++) await sleep(100);
+  for (let i = 0; i < 200 && !(await page("Boolean(window.__draftsman)").catch(() => false)); i++) await sleep(100);
 
   const gpuPid = Number(execFileSync("pgrep", ["-f", `type=gpu-process.*${profile}`], { encoding: "utf8" }).trim().split("\n")[0]);
   // The page's own process is the renderer that has used the most CPU.
   const pagePid = (await send("SystemInfo.getProcessInfo")).processInfo.filter((p) => p.type === "renderer").sort((a, b) => b.cpuTime - a.cpuTime)[0]?.id;
 
-  await page(`window.__3dmaker.call("set_model", { script: ${JSON.stringify(readFileSync(modelPath, "utf8"))} }).then(() => true)`);
-  await page(`window.__3dmaker.call("screenshot", { width: 200, height: 150 }).then(() => true)`); // waits for the fine mesh
+  await page(`window.__draftsman.call("set_model", { script: ${JSON.stringify(readFileSync(modelPath, "utf8"))} }).then(() => true)`);
+  await page(`window.__draftsman.call("screenshot", { width: 200, height: 150 }).then(() => true)`); // waits for the fine mesh
   const about = await page(`(() => {
     const c = document.querySelector("#viewport canvas"), gl = c.getContext("webgl2");
     const ext = gl.getExtension("WEBGL_debug_renderer_info");
-    return { gpu: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER), canvas: [c.width, c.height], samples: gl.getParameter(gl.SAMPLES), ratio: devicePixelRatio, parts: window.__3dmaker.state().parts.length, motion: !document.getElementById("play").hidden };
+    return { gpu: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER), canvas: [c.width, c.height], samples: gl.getParameter(gl.SAMPLES), ratio: devicePixelRatio, parts: window.__draftsman.state().parts.length, motion: !document.getElementById("play").hidden };
   })()`);
   if (/swiftshader|llvmpipe|software/i.test(about.gpu)) throw new Error(`Chrome is drawing in software (${about.gpu}), so there is no GPU load to read.`);
   const setPlaying = (on) => page(`(() => { const b = document.getElementById("play"); if ((b.textContent === "Pause") !== ${on}) b.click(); return true; })()`);
