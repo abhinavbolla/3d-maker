@@ -1,6 +1,6 @@
 # Roadmap
 
-3D Maker's goal is an open-source CAD application that anyone can use by describing what they want, and that holds up next to professional tools such as Rhino: models that look right, drawings you can build from, and files other apps can open.
+Draftsman's goal is an open-source CAD application that anyone can use by describing what they want, and that holds up next to professional tools such as Rhino: models that look right, drawings you can build from, and files other apps can open.
 
 This page says where it stands against that goal and what comes next. The order within each section is the order we plan to work in.
 
@@ -51,7 +51,7 @@ Done so far: STL, 3MF, glTF (a named node per part, its colour and material, and
 What is left:
 
 1. **SVG and DXF** of single outlines and sections at 1:1, for laser cutters and 2D CAD. (The drawing sheet is already an SVG.)
-4. **STEP.** This is the hard one, and the main thing that separates 3D Maker from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. The plan is to write exact surfaces straight from the script where the shape allows it, because the script already says "this is an extrusion of that outline" or "this is a cylinder with a hole". Prisms, turned parts, plates with holes and their cuts and joins come first. Shapes with no exact form (smooth blends, lattices, twisted bodies) would go out as fitted surfaces or fine meshes inside the STEP file. This will take a long time, and it is the largest open question on this page.
+4. **STEP.** This is the hard one, and the main thing that separates Draftsman from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. The plan is to write exact surfaces straight from the script where the shape allows it, because the script already says "this is an extrusion of that outline" or "this is a cylinder with a hole". Prisms, turned parts, plates with holes and their cuts and joins come first. Shapes with no exact form (smooth blends, lattices, twisted bodies) would go out as fitted surfaces or fine meshes inside the STEP file. This will take a long time, and it is the largest open question on this page.
 5. **Import.** Open an STL or a STEP file as a reference to build around.
 
 ## Working with the model directly

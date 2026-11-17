@@ -175,7 +175,7 @@ export function toGLB(parts, { title = "", motion = null } = {}) {
 
   const data = bin.bytes();
   const gltf = {
-    asset: { version: "2.0", generator: "3D Maker" },
+    asset: { version: "2.0", generator: "Draftsman" },
     ...(materials.some((m) => m.extensions) ? { extensionsUsed: ["KHR_materials_clearcoat"] } : {}),
     scene: 0,
     scenes: [{ name: title || "Model", nodes: nodes.map((_, i) => i) }],

@@ -14,9 +14,9 @@ export const materialName = (s, i) => `m${i + 1}_${String(s).replace(/[^\w-]+/g,
 // parts: [{ name, color, material, positions, normals, indices }].
 // Returns { obj, mtl } as text; obj has no mtllib line yet.
 export function toOBJ(parts, { title = "" } = {}) {
-  const out = ["# 3D Maker", title ? `# ${oneLine(title)}` : null, "# Units: millimetres. Y is up."].filter(Boolean);
+  const out = ["# Draftsman", title ? `# ${oneLine(title)}` : null, "# Units: millimetres. Y is up."].filter(Boolean);
   out.push("");
-  const mtl = ["# 3D Maker materials", ""];
+  const mtl = ["# Draftsman materials", ""];
   let base = 1;
   parts.forEach((p, i) => {
     const P = p.positions, N = p.normals, I = p.indices;

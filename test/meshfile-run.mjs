@@ -21,7 +21,7 @@ if (!file) {
   process.exit(2);
 }
 const keep = process.argv[3];
-const dir = keep ?? mkdtempSync(join(tmpdir(), "3d-maker-meshfile-"));
+const dir = keep ?? mkdtempSync(join(tmpdir(), "draftsman-meshfile-"));
 mkdirSync(dir, { recursive: true });
 const name = basename(file, ".js");
 const script = readFileSync(file, "utf8");
@@ -49,7 +49,7 @@ try {
     // Timed in the page: meshing, writing and the base64 the MCP server
     // takes, not the trip through the test's DevTools connection.
     const args = JSON.stringify(kind === "obj" ? { mtl: `${name}.obj` } : {});
-    const r = await w(`(async () => { const t = performance.now(); try { const result = await window.__3dmaker.call("export_${kind}", ${args}); return { result, ms: performance.now() - t }; } catch (e) { return { error: String(e.message ?? e) }; } })()`);
+    const r = await w(`(async () => { const t = performance.now(); try { const result = await window.__draftsman.call("export_${kind}", ${args}); return { result, ms: performance.now() - t }; } catch (e) { return { error: String(e.message ?? e) }; } })()`);
     const ms = Math.round(r.ms);
     if (r.error) throw new Error(`export_${kind}: ${r.error}`);
     const path = join(dir, `${name}.${kind}`);

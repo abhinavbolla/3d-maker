@@ -9,7 +9,7 @@ export function toPLY(parts, { title = "" } = {}) {
   const nv = parts.reduce((s, p) => s + p.positions.length / 3, 0);
   const nf = parts.reduce((s, p) => s + p.indices.length / 3, 0);
   const line = (s) => String(s).replace(/[\r\n]+/g, " ");
-  const head = ["ply", "format binary_little_endian 1.0", "comment 3D Maker", ...(title ? [`comment title ${line(title)}`] : []), "comment units millimetres, Z up"];
+  const head = ["ply", "format binary_little_endian 1.0", "comment Draftsman", ...(title ? [`comment title ${line(title)}`] : []), "comment units millimetres, Z up"];
   let v0 = 0, f0 = 0;
   for (const p of parts) {
     const v = p.positions.length / 3, f = p.indices.length / 3;
