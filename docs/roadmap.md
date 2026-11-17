@@ -13,6 +13,7 @@ This page says where it stands against that goal and what comes next. The order 
 | Looking at the model | Studio view with shadows, a reflecting floor, shading in the creases and materials, and a "shaded with edges" look. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
 | Pictures | PNG studio shots of any view, and from cameras Claude places, with a chosen lens and size. |
 | 2D drawings | One sheet, A4 to A0, as SVG, PDF or DXF: front, top, side and isometric views, hidden edges left out or dashed, centre lines, a hatched section, a detail view, the overall sizes, hole diameters and positions, and an ISO title block. Single outlines at 1:1 as DXF or SVG. |
+| Buildings | One storey by prompt: walls, doors, windows, rooms with their areas, slab, roof, stair. A floor plan sheet with door swings, room areas and dimension chains. |
 | Files for other apps | STL, 3MF, OBJ, PLY, glTF with materials and motion, and STEP: exact solids for simple parts (primitives, extrusions and revolves of line-and-arc outlines), flat faces from the mesh for the rest. 2D: drawings as PDF and DXF, outlines at 1:1 as DXF and SVG. |
 | Exact surfaces | In STEP files, for parts the script describes exactly without 3D cuts or joins. Elsewhere surfaces are fine meshes of distance fields. |
 | Direct editing | Sliders and prompts. Hiding and isolating parts, sections, exploded views and measuring, by prompt. No dragging. |
@@ -44,6 +45,21 @@ What is left:
 3. **Dimensions.** Radii and angles, counterbore and countersink callouts, hole patterns on a pitch circle, chamfers, tolerances and surface finish.
 4. **Sheets.** Several sheets, and a parts list with balloons.
 5. **Drawings by prompt.** "Make a drawing of the bracket with a section through the holes": Claude choosing the views, the sections and what to dimension, and looking at the sheet it made.
+
+## Buildings
+
+Houses and floor plans, made the same way as everything else: you describe the building, Claude writes the script, the building is real solids in the view, and the floor plan comes out as a sheet an architect would recognise.
+
+Done so far (first stage): one-storey buildings in the script language. Outer walls from the outside corners of a footprint, named by the way each side faces; inner walls along their centre lines, joined at corners, bends and T-junctions with no overlaps or gaps; doors (lining, leaf and handles, opening in, out or into a named room) and windows (frame, mullions, glazing and an outside sill) placed along a named wall; a floor slab; a gable or flat roof whose gable ends are part of the walls; a straight stair; and rooms named by a point inside, with their areas worked out from the walls. Each piece is an ordinary part, so the view, the exports and the fit check work on a house unchanged. The floor plan sheet (Export menu and `export_floor_plan`): walls cut from their distance functions at 1200 mm, doors with swings, windows, room names, areas and inside sizes, outside dimension chains, the roof's edge, a north arrow, a scale bar and the ISO title block.
+
+What is left:
+
+1. **More than one storey**: floors, a stair that arrives somewhere, and a plan per floor.
+2. **Elevations and sections** of a building on their own sheets, with levels.
+3. **Walls**: curved walls, walls of layers (block, insulation, render) drawn with their own hatching, and wall joins drawn as one material or two.
+4. **Roofs**: hip roofs, roofs over outlines that are not rectangles, and fascia, gutters and tiles.
+5. **The plan**: furniture and fittings (kitchen, bathroom), door and window tags with a schedule, a room too small for its name labelled from outside with a leader, grid lines, and a level for the floor.
+6. **Rules**: room sizes, door widths and window areas checked against a building code the user names.
 
 ## Files for other apps
 

@@ -2179,3 +2179,8 @@ function detailView({ views, at, map, names, scale, wide, narrow, taken, spec })
   }
   return { left_out: "the detail view (no room on the sheet for it at twice the scale or more)" };
 }
+
+// For the other sheets (floorplan.js): the same frame and title block.
+export { frame as sheetFrame, titleBlock as sheetTitleBlock, TITLE };
+// Sets the sheet the frame and title block are drawn on, and returns it.
+export const useSheet = (size = "A3") => (SHEET = sheetOf(size));
