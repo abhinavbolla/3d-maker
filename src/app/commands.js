@@ -1,5 +1,6 @@
 // What Claude can do in the app, called through the MCP bridge.
 import { makeDrawing } from "./sheet.js";
+import { objWithMtl, mtlFileName } from "../kernel/obj.js";
 
 const r1 = (v) => Math.round(v * 10) / 10;
 
@@ -166,5 +167,15 @@ export function createCommands({ store, viewport, kernel }) {
       keep();
       return exported(result);
     },
+    export_glb: async () => exported(await kernel.exportGLB(store.state.result ?? { parts: [] })),
+    // mtl: the name of the MTL file the OBJ refers to; the MCP server writes
+    // both files.
+    export_obj: async ({ mtl } = {}) => {
+      const name = mtlFileName(mtl || `${store.state.result?.title || "model"}.obj`);
+      const { obj, mtl: text, ...facts } = await kernel.exportOBJ(store.state.result?.parts ?? [], store.state.result?.title ?? "");
+      const enc = new TextEncoder();
+      return { ...exported({ bytes: enc.encode(objWithMtl(obj, name)), ...facts }), mtl_name: name, mtl_base64: exported({ bytes: enc.encode(text) }).base64 };
+    },
+    export_ply: async () => exported(await kernel.exportPLY(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
   };
 }

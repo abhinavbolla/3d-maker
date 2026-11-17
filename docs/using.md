@@ -37,6 +37,11 @@ The Export menu saves:
 - **STL**: each part its own closed shell, or all parts joined into one solid.
 - **STEP**: solids for CAD programs such as FreeCAD or Fusion, one named, coloured part each, in an assembly. See below for which parts come out exact.
 - **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
+- **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
+- **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
+- **PLY**: one mesh, each vertex coloured with its part's colour, in millimetres with Z up, like the STL. The part names are in comment lines in its header.
+
+Motion goes only into the glTF file; the other files hold the parts where the script puts them.
 
 Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
 

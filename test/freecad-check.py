@@ -3,7 +3,7 @@
 # as an outside program to check our files against a real CAD kernel; it is
 # not a dependency of Draftsman and none of its code is in this repository.
 # Run by .github/workflows/step-freecad.yml:
-#   STEP_DIR=out freecadcmd test/freecad-check.py
+#   STEP_DIR=out freecad.cmd test/freecad-check.py
 import json
 import os
 import sys

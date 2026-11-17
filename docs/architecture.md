@@ -63,6 +63,8 @@ Everything in [src/kernel](../src/kernel) is our own code with no dependencies.
 | [hull.js](../src/kernel/hull.js) | 3D convex hulls, built one point at a time. |
 | [font.js](../src/kernel/font.js) | A single-stroke font in the style of technical drawing lettering. |
 | [threemf.js](../src/kernel/threemf.js) | 3MF export, including its own zip writer. |
+| [gltf.js](../src/kernel/gltf.js) | glTF binary (.glb) export: a node, mesh and PBR material per part, turned into metres with Y up, and the sampled motion as an animation. |
+| [obj.js](../src/kernel/obj.js), [ply.js](../src/kernel/ply.js) | OBJ with its MTL, and binary PLY coloured per vertex. |
 | [step.js](../src/kernel/step.js) | STEP export (AP214): an assembly of named, coloured solids. [brep.js](../src/kernel/brep.js) builds exact solids from shape trees that say exactly what a shape is, from outlines of lines and arcs ([outline2.js](../src/kernel/outline2.js)); [facets.js](../src/kernel/facets.js) turns any other part's mesh into a solid of flat faces. |
 | [drawing.js](../src/kernel/drawing.js) | 2D drawings: line views with hidden edges removed, sections, overall dimensions, and the drawing sheet as SVG. |
 | [worker.js](../src/kernel/worker.js) | The worker that runs scripts and meshes parts. |

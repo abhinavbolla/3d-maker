@@ -57,17 +57,18 @@ jobs:
       - name: Write the STEP samples
         run: node test/step-samples.mjs step-samples
 
+      # Ubuntu 24.04 has no freecad package; the snap is FreeCAD's own build.
       - name: Install FreeCAD
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends freecad
+          sudo snap install freecad
+          snap list freecad
 
       - name: Open them in FreeCAD
         env:
           STEP_DIR: step-samples
           QT_QPA_PLATFORM: offscreen
         run: |
-          freecadcmd test/freecad-check.py < /dev/null 2>&1 | tee freecad.log
+          freecad.cmd test/freecad-check.py < /dev/null 2>&1 | tee freecad.log
           grep -q "^STEP-FREECAD: PASS" freecad.log
 
       - uses: actions/upload-artifact@v4

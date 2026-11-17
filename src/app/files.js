@@ -1,5 +1,7 @@
 // Save, open and export. Uses native dialogs in the desktop app and
 // download / file-picker fallbacks in a plain browser.
+import { mtlFileName } from "../kernel/obj.js";
+
 const isTauri = () => Boolean(window.__TAURI_INTERNALS__);
 
 async function tauri() {
@@ -14,6 +16,9 @@ const FILTERS = {
   step: { name: "STEP model", extensions: ["step", "stp"] },
   png: { name: "PNG picture", extensions: ["png"] },
   svg: { name: "SVG drawing", extensions: ["svg"] },
+  glb: { name: "glTF binary", extensions: ["glb"] },
+  obj: { name: "OBJ mesh", extensions: ["obj"] },
+  ply: { name: "PLY mesh", extensions: ["ply"] },
 };
 
 // Returns the saved path (or file name in a browser), or null if cancelled.
@@ -31,6 +36,24 @@ export async function saveBytes(bytes, defaultName, kind) {
   a.download = defaultName;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return defaultName;
+}
+
+// An OBJ and its MTL beside it. objBytes(mtlName) gives the OBJ, which names
+// its MTL, once the file's name is known. Returns as saveBytes does.
+export async function saveOBJ(objBytes, mtlBytes, defaultName) {
+  if (isTauri()) {
+    const { invoke, dialog } = await tauri();
+    const path = await dialog.save({ defaultPath: defaultName, filters: [FILTERS.obj] });
+    if (!path) return null;
+    const mtl = mtlFileName(path);
+    await invoke("write_file", { path, data: Array.from(objBytes(mtl)) });
+    await invoke("write_file", { path: path.replace(/[^\\/]*$/, mtl), data: Array.from(mtlBytes) });
+    return path;
+  }
+  const mtl = mtlFileName(defaultName);
+  await saveBytes(objBytes(mtl), defaultName, "obj");
+  await saveBytes(mtlBytes, mtl, "obj");
   return defaultName;
 }
 
