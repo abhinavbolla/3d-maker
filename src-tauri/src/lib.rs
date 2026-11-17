@@ -83,19 +83,25 @@ const OLD_IDENTIFIER: &str = concat!("se.abhinavbolla.", "threed", "maker");
 
 // ---- Claude Code ----
 // Apps opened from Finder get a bare PATH, so ask the user's login shell where
-// `claude` lives and what PATH it uses.
+// `claude` and `node` live and what PATH it uses.
 struct ShellEnv {
     claude: Option<String>,
+    node: Option<String>,
     path: String,
 }
 
+const CLAUDE_MISSING: &str =
+    "Claude Code was not found. Draftsman uses your own Claude Code to draw: install it from claude.com/claude-code, run `claude` once in a terminal to log in, then try again.";
+const NODE_MISSING: &str = "Node.js was not found. Draftsman needs Node.js 20 or newer to connect Claude Code to this window: install it from nodejs.org, then try again.";
+
+#[cfg(not(windows))]
 fn shell_env() -> &'static ShellEnv {
     static ENV: OnceLock<ShellEnv> = OnceLock::new();
     ENV.get_or_init(|| {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let out = Command::new(&shell).args(["-l", "-c", "printf '%s\\n%s' \"$PATH\" \"$(command -v claude)\""]).stdin(Stdio::null()).output();
+        let out = Command::new(&shell).args(["-l", "-c", "printf '%s\\n%s\\n%s' \"$PATH\" \"$(command -v claude)\" \"$(command -v node)\""]).stdin(Stdio::null()).output();
         let home = std::env::var("HOME").unwrap_or_default();
-        let (mut path, mut claude) = (std::env::var("PATH").unwrap_or_default(), None);
+        let (mut path, mut claude, mut node) = (std::env::var("PATH").unwrap_or_default(), None, None);
         if let Ok(o) = out {
             let text = String::from_utf8_lossy(&o.stdout).to_string();
             let mut lines = text.lines();
@@ -104,23 +110,71 @@ fn shell_env() -> &'static ShellEnv {
             {
                 path = p.to_string();
             }
-            if let Some(c) = lines.next()
-                && !c.trim().is_empty()
-            {
-                claude = Some(c.trim().to_string());
-            }
+            let mut found = || lines.next().map(str::trim).filter(|c| !c.is_empty()).map(str::to_string);
+            claude = found();
+            node = found();
         }
+        let first = |candidates: [String; 4]| candidates.into_iter().find(|c| std::path::Path::new(c).exists());
         if claude.is_none() {
-            for c in [format!("{home}/.local/bin/claude"), format!("{home}/.claude/local/claude"), "/opt/homebrew/bin/claude".into(), "/usr/local/bin/claude".into()] {
-                if std::path::Path::new(&c).exists() {
-                    claude = Some(c);
-                    break;
-                }
-            }
+            claude = first([format!("{home}/.local/bin/claude"), format!("{home}/.claude/local/claude"), "/opt/homebrew/bin/claude".into(), "/usr/local/bin/claude".into()]);
+        }
+        if node.is_none() {
+            node = first([format!("{home}/.volta/bin/node"), "/opt/homebrew/bin/node".into(), "/usr/local/bin/node".into(), "/usr/bin/node".into()]);
         }
         path = format!("{path}:{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin");
-        ShellEnv { claude, path }
+        ShellEnv { claude, node, path }
     })
+}
+
+// Windows apps get the user's PATH as it is, so `where` finds both. Claude
+// Code's own installer puts claude.exe in .local\bin, which may not be on it.
+#[cfg(windows)]
+fn shell_env() -> &'static ShellEnv {
+    static ENV: OnceLock<ShellEnv> = OnceLock::new();
+    ENV.get_or_init(|| {
+        let find = |name: &str| {
+            let out = Command::new("where").arg(name).stdin(Stdio::null()).output().ok()?;
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            let all: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            all.iter().find(|l| l.to_lowercase().ends_with(".exe")).or(all.iter().find(|l| l.to_lowercase().ends_with(".cmd"))).map(|s| s.to_string())
+        };
+        let home = std::env::var("USERPROFILE").unwrap_or_default();
+        let own = format!("{home}\\.local\\bin\\claude.exe");
+        let claude = find("claude").or_else(|| std::path::Path::new(&own).exists().then_some(own));
+        ShellEnv { claude, node: find("node"), path: std::env::var("PATH").unwrap_or_default() }
+    })
+}
+
+// A .cmd file (Claude Code installed with npm on Windows) runs through cmd.
+fn command_for(program: &str) -> Command {
+    if cfg!(windows) && program.to_lowercase().ends_with(".cmd") {
+        let mut c = Command::new("cmd");
+        c.args(["/C", program]);
+        c
+    } else {
+        Command::new(program)
+    }
+}
+
+// How Claude Code should start the MCP server that connects it to this
+// window: the copy bundled with the installed app, run by the user's Node.
+// None while developing (`npm run app`), where the web UI uses the
+// repository's own server and the Node that built it.
+#[derive(serde::Serialize)]
+struct McpServer {
+    command: String,
+    server: String,
+}
+
+#[tauri::command]
+fn mcp_server(app: tauri::AppHandle) -> Result<Option<McpServer>, String> {
+    let Ok(dir) = app.path().resource_dir() else { return Ok(None) };
+    let server = dir.join("mcp").join("server.mjs");
+    if !server.exists() {
+        return Ok(None);
+    }
+    let node = shell_env().node.clone().ok_or(NODE_MISSING)?;
+    Ok(Some(McpServer { command: node, server: server.to_string_lossy().into_owned() }))
 }
 
 fn runs() -> &'static Mutex<HashMap<u32, Child>> {
@@ -143,9 +197,9 @@ struct Exit {
 
 fn spawn_claude(args: &[String], cwd: &std::path::Path) -> Result<Child, String> {
     let env = shell_env();
-    let claude = env.claude.clone().ok_or("Claude Code was not found. Install it from claude.com/claude-code, run `claude` once in a terminal to log in, then try again.")?;
+    let claude = env.claude.clone().ok_or(CLAUDE_MISSING)?;
     std::fs::create_dir_all(cwd).map_err(|e| e.to_string())?;
-    Command::new(claude)
+    command_for(&claude)
         .args(args)
         .current_dir(cwd)
         .env("PATH", &env.path)
@@ -205,7 +259,7 @@ fn claude_stop(run: u32) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![write_file, write_bytes, read_file, autosave_write, autosave_read, claude_start, claude_stop])
+        .invoke_handler(tauri::generate_handler![write_file, write_bytes, read_file, autosave_write, autosave_read, claude_start, claude_stop, mcp_server])
         .run(tauri::generate_context!())
         .expect("error while running Draftsman");
 }
@@ -237,9 +291,16 @@ mod tests {
 
     #[test]
     fn reads_path_from_login_shell() {
-        assert!(shell_env().path.contains('/'));
+        assert!(shell_env().path.contains(if cfg!(windows) { '\\' } else { '/' }));
     }
 
+    // Whoever builds the app has Node, so it must be found.
+    #[test]
+    fn finds_node() {
+        let node = shell_env().node.clone().expect("node not found");
+        let out = Command::new(&node).arg("--version").output().expect("node runs");
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with('v'));
+    }
     // Needs Claude Code installed: cargo test -- --ignored
     #[test]
     #[ignore]

@@ -1,9 +1,14 @@
 // Runs model scripts and meshes parts on a pool of workers, with a cache so
 // only parts that changed are meshed again.
 import { worldBox, boxesMeet } from "../kernel/fit.js";
-import { toSTL } from "../kernel/mesh.js";
+import { toSTL, meshVolume } from "../kernel/mesh.js";
+import { choosePlane } from "../kernel/holes.js";
 import { to3MF } from "../kernel/threemf.js";
-import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox } from "../kernel/drawing.js";
+import { exactParts, facetDetail, partsToSTEP } from "../kernel/step.js";
+import { toGLB } from "../kernel/gltf.js";
+import { toOBJ } from "../kernel/obj.js";
+import { toPLY } from "../kernel/ply.js";
+import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox, joinLines } from "../kernel/drawing.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
 const RUN_TIMEOUT_MS = 30000;
@@ -188,14 +193,17 @@ export function createKernel() {
 
   // Closed meshes of every visible part, meshed in parallel at one cell size
   // for the whole model (see exportDetail): [{ name, color, positions, indices }].
-  async function exportMeshes(parts) {
+  // With normals, each also has normals, with its vertices split along sharp
+  // edges, and its material and motion frames.
+  async function exportMeshes(parts, { normals = false } = {}) {
     const shown = visible(parts);
     const { cell, budgets } = exportDetail(shown);
     return Promise.all(
       shown.map(async (p, i) => ({
         name: p.name,
         color: p.color,
-        ...(await job({ type: "export", node: p.node, budget: budgets[i], maxCell: cell, what: `Part "${p.name}"` }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
+        ...(normals ? { material: p.material, frames: p.frames } : {}),
+        ...(await job({ type: "export", node: p.node, budget: budgets[i], maxCell: cell, what: `Part "${p.name}"`, ...(normals ? { normals } : {}) }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
       })),
     );
   }
@@ -223,23 +231,83 @@ export function createKernel() {
     return { bytes: await to3MF(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0) };
   }
 
+  // STEP: one named, coloured solid per visible part, exact where the script
+  // says exactly what the shape is, else flat faces from a coarser mesh.
+  async function exportSTEP(parts, title) {
+    // An exact part goes out even where the view has no mesh of it (a plate
+    // too thin for its cells); any other part with no mesh is left out, as
+    // in STL and 3MF, and named.
+    const unhidden = parts.filter((p) => !p.hidden);
+    const solids = exactParts(unhidden);
+    const keep = unhidden.map((p, i) => Boolean(solids[i] || p.mesh?.indices.length));
+    const shown = unhidden.filter((_, i) => keep[i]), exact = solids.filter((_, i) => keep[i]);
+    const left = unhidden.filter((_, i) => !keep[i]).map((p) => p.name);
+    if (!shown.length) throw new Error("There is nothing to export.");
+    const { cell, budgets } = facetDetail(shown.map((p, i) => (exact[i] ? null : p)));
+    // Each part meshed whole (one closed surface, no pieces passing through
+    // each other). Where the coarse cells lose part of it (thin tubes break
+    // up: its volume is more than 8% off the view's mesh) or cannot close it,
+    // it is meshed again finer, up to five times or 4000 triangles.
+    const mesh = (p, budget, maxCell) => job({ type: "export", solid: true, node: p.node, budget, maxCell, what: `Part "${p.name}"` }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`);
+    const faceted = async (p, budget, maxCell) => {
+      for (let k = 0; ; k++, budget *= 2, maxCell /= Math.SQRT2) {
+        const m = await mesh(p, budget, maxCell).catch((err) => (k < 5 ? null : Promise.reject(err)));
+        const want = p.mesh?.volume;
+        if (m && (k >= 5 || m.indices.length > 3 * 4000 || !(want > 0) || Math.abs(meshVolume(m) - want) <= 0.08 * want)) return m;
+      }
+    };
+    const meshes = await Promise.all(shown.map((p, i) => !exact[i] && faceted(p, budgets[i], cell)));
+    const r = partsToSTEP(shown, exact, meshes, { title, file: `${(title || "model").replace(/[^\w.-]+/g, "-")}.step` });
+    const n = shown.length, e = r.exact.length;
+    let line = e === n ? (n === 1 ? "It has exact surfaces." : "Every part has exact surfaces.") : e ? `${e} of ${n} parts have exact surfaces; the others are flat faces from their mesh.` : n === 1 ? "It is flat faces from its mesh." : "Every part is flat faces from its mesh.";
+    if (left.length) line += ` Left out, as too thin to mesh: ${left.join(", ")}.`;
+    return { bytes: new TextEncoder().encode(r.text), exact_parts: r.exact, faceted_parts: r.faceted, left_out: left, faces: r.faces, line };
+  }
+
+  // glTF (.glb): a named node per visible part with its material, and the
+  // motion as an animation. result: the build (parts, title, motion).
+  async function exportGLB(result) {
+    const meshes = await exportMeshes(result.parts, { normals: true });
+    const animated = meshes.filter((m) => m.frames).length;
+    const bytes = toGLB(meshes, { title: result.title, motion: result.motion });
+    return { bytes, triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length, ...(animated && result.motion ? { animated_parts: animated, loop_seconds: result.motion.loop } : {}) };
+  }
+
+  // OBJ and its MTL, as text: one object per visible part, with normals.
+  async function exportOBJ(parts, title) {
+    const meshes = await exportMeshes(parts, { normals: true });
+    const { obj, mtl } = toOBJ(meshes, { title });
+    return { obj, mtl, triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length };
+  }
+
+  // Binary PLY: every visible part in one mesh, coloured per vertex.
+  async function exportPLY(parts, title) {
+    const meshes = await exportMeshes(parts);
+    return { bytes: toPLY(meshes, { title }), triangles: meshes.reduce((s, m) => s + m.indices.length / 3, 0), parts: meshes.length };
+  }
+
   // A drawing sheet as SVG: front, top and side views, an isometric view, a
   // section and the overall sizes. The parts are meshed as for any export;
   // then each view and the section go to a worker of their own.
   // info: the title block's fields (see sheetSVG in kernel/drawing.js).
   // projection: "first" or "third". section: { axis, offset }, both optional.
-  async function exportDrawing(parts, { info = {}, projection = "first", section } = {}) {
+  // hidden: also draw hidden edges, dashed, on the three views.
+  async function exportDrawing(parts, { info = {}, projection = "first", section, hidden = false, size = "A3", detail = null } = {}) {
     const shown = visible(parts);
     const meshes = await exportMeshes(parts);
-    const bounds = modelBounds(meshes);
-    const plane = sectionPlane(bounds, section);
     const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
     const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the drawing took too long.");
+    // Holes and turned parts decide where the section goes (see choosePlane);
+    // the overall sizes are taken from the surfaces (see surfaceBounds).
+    const found = await draw({ features: true });
+    const bounds = found.bounds;
+    const { plane, note } = choosePlane(found.features, bounds, section, shown.length, (axis) => planSheet({ bounds, axis, projection, size, roomy: shown.length <= 3 }).scale);
     // The isometric view only where the sheet has room for it.
-    const roomForIso = planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(meshes, "iso") }).iso;
-    const [front, top, side, iso, cut] = await Promise.all([draw({ view: "front" }), draw({ view: "top" }), draw({ view: sideViewOf(projection) }), roomForIso ? draw({ view: "iso" }) : null, draw({ section: plane })]);
+    const roomForIso = planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(meshes, "iso"), size, roomy: shown.length <= 3 }).iso;
+    const flat = { opts: { hidden, marks: true } };
+    const [front, top, side, iso, cut] = await Promise.all([draw({ view: "front", ...flat }), draw({ view: "top", ...flat }), draw({ view: sideViewOf(projection), ...flat }), roomForIso ? draw({ view: "iso" }) : null, draw({ section: plane })]);
     const views = iso ? { front, top, side, iso } : { front, top, side };
-    const sheet = sheetSVG({ info: { date: today(), type: documentType(shown.length), ...info }, bounds, views, section: cut, projection });
+    const sheet = sheetSVG({ info: { date: today(), type: documentType(shown.length), ...info }, bounds, views, section: cut, projection, size, detail, roomy: shown.length <= 3 });
     const { svg, scale } = sheet;
     const count = (v) => v.reduce((s, p) => s + p.lines.length, 0);
     return {
@@ -247,9 +315,34 @@ export function createKernel() {
       scale,
       isometric_view: sheet.iso,
       titles: sheet.titles,
+      marks: sheet.marks,
+      sheet_size: size,
+      detail_view: sheet.detail,
+      section_note: note,
       section: { axis: cut.axis, offset_mm: Math.round(cut.offset * 100) / 100, cut_area_mm2: Math.round(cut.area * 10) / 10, parts_cut: cut.parts.map((p) => p.name) },
       lines: count(front.parts) + count(top.parts) + count(side.parts) + count(cut.beyond),
     };
+  }
+
+  // One outline at true size, for cutting: a section's cut faces as closed
+  // loops, or one view's visible lines. section: { axis, offset }; with no
+  // axis the cut is square across the model's thinnest side, at its middle
+  // (through a plate, not along it). Returns { loops, lines, section? }.
+  async function exportOutline(parts, { view, section = {} } = {}) {
+    const shown = visible(parts);
+    const meshes = await exportMeshes(parts);
+    const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
+    const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the outline took too long.");
+    if (view) {
+      const v = await draw({ view });
+      // Pieces of one outline that meet end to end are joined, so loops close.
+      return { view, loops: [], lines: joinLines(v.parts.flatMap((p) => p.lines), v.pixel * 4, 90), fromMesh: true, closeWithin: v.pixel * 4 };
+    }
+    const bounds = modelBounds(meshes);
+    const size = [0, 1, 2].map((a) => bounds[a + 3] - bounds[a]);
+    const plane = sectionPlane(bounds, { axis: section.axis ?? "xyz"[size.indexOf(Math.min(...size))], offset: section.offset });
+    const cut = await draw({ section: plane, cutOnly: true });
+    return { loops: cut.parts.flatMap((p) => p.loops), lines: [], section: { axis: cut.axis, offset_mm: Math.round(cut.offset * 100) / 100, view: cut.view, parts_cut: cut.parts.map((p) => p.name) } };
   }
 
   // Which parts pass into each other, at rest and over the motion loop. With
@@ -303,5 +396,10 @@ export function createKernel() {
     return r.poses ?? {};
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportDrawing, checkFit, posesAt };
+  // Volume and centre of mass of each part, from its distance function
+  // (kernel/measure.js), one worker per part; and how close two parts come.
+  const measureSolids = (parts) => Promise.all(parts.map((p) => job({ type: "measure", what: "solid", node: p.node }, FIT_TIMEOUT_MS, `Measuring part "${p.name}" took too long.`)));
+  const measureGap = (a, b) => job({ type: "measure", what: "gap", a: a.node, b: b.node }, FIT_TIMEOUT_MS, "Measuring the distance took too long.");
+
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportOutline, checkFit, exportGLB, exportOBJ, exportPLY, measureSolids, measureGap, posesAt };
 }

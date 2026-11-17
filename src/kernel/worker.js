@@ -5,7 +5,9 @@ import { compile } from "./sdf.js";
 import { meshSDF, meshBounds, meshArea, displayMesh, lightMesh } from "./mesh.js";
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
-import { viewOutline, sectionView } from "./drawing.js";
+import { viewOutline, sectionView, sectionCut } from "./drawing.js";
+import { markedView, partFeatures, sectionMarks, surfaceBounds } from "./holes.js";
+import { measureJob } from "./measure.js";
 
 // A part with at least this many triangles gets a lighter copy, its vertices
 // merged over this many of its cells: about a ninth of the triangles.
@@ -23,8 +25,9 @@ self.onmessage = ({ data: job }) => {
     } else if (job.type === "mesh") {
       const m = meshPart(job.node, { budget: job.budget, maxCell: job.maxCell, maxCells: job.maxCells, normals: true });
       // Volume and size from the closed mesh; the copy for drawing has
-      // vertices split along sharp edges.
-      const d = displayMesh(m);
+      // vertices split along sharp edges, found and shaded from the part's
+      // distance function.
+      const d = displayMesh(m, undefined, compile(job.node).f);
       const result = { ...d, cellSize: m.cellSize, volume: m.volume, area: meshArea(m), bounds: m.indices.length ? meshBounds(m) : null };
       const buffers = [d.positions.buffer, d.indices.buffer, d.normals.buffer];
       // A lighter copy for the view's shadow and reflection, where a mesh is
@@ -45,17 +48,33 @@ self.onmessage = ({ data: job }) => {
         if (job.solid) {
           const { f, box } = compile(job.node);
           m = meshSDF(f, box, { budget, maxCell });
-        } else m = meshPart(job.node, { budget, maxCell });
+        } else m = meshPart(job.node, { budget, maxCell, normals: Boolean(job.normals) });
         if (!m.incomplete && m.indices.length) break;
         if (budget < 1000) throw new Error(m.indices.length ? `${job.what} is too large to export as a closed mesh.` : "There is nothing to export.");
       }
+      // With normals (glTF, OBJ): vertices split along sharp edges, as drawn in the view.
+      if (job.normals && !job.solid) {
+        const d = displayMesh(m);
+        self.postMessage({ id: job.id, ok: true, result: { ...d, cellSize: m.cellSize } }, [d.positions.buffer, d.indices.buffer, d.normals.buffer]);
+        return;
+      }
       const { positions, indices } = m;
       self.postMessage({ id: job.id, ok: true, result: { positions, indices, cellSize: m.cellSize } }, [positions.buffer, indices.buffer]);
+    } else if (job.type === "measure") {
+      self.postMessage({ id: job.id, ok: true, result: measureJob(job) });
     } else if (job.type === "drawing") {
       // One view of a drawing, or its section: the parts' export meshes, with
       // their distance functions compiled here.
       const parts = job.parts.map((p) => ({ ...p, ...compile(p.node) }));
-      self.postMessage({ id: job.id, ok: true, result: job.section ? sectionView(parts, job.section) : viewOutline(parts, job.view) });
+      let result;
+      if (job.features) result = { features: partFeatures(parts), bounds: surfaceBounds(parts) };
+      else if (job.section && job.cutOnly) result = sectionCut(parts, job.section);
+      else if (job.section) {
+        // The section, with the holes and turned parts whose axes lie in its plane.
+        result = sectionView(parts, job.section);
+        result.marks = sectionMarks(partFeatures(parts), job.section, result.view);
+      } else result = job.opts?.marks ? markedView(parts, job.view, job.opts) : viewOutline(parts, job.view, job.opts);
+      self.postMessage({ id: job.id, ok: true, result });
     }
   } catch (err) {
     self.postMessage({ id: job.id, ok: false, error: String(err?.message ?? err) });

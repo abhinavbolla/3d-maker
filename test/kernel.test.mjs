@@ -12,6 +12,23 @@ import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
 import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, titleLines, textWidth, LIMITS } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
+import { readDXF } from "./check-dxf.mjs";
+import { sheetPDF } from "../src/kernel/pdf.js";
+import { sheetDXF, outlineDXF, outlineSVG, fitCircle } from "../src/kernel/dxf.js";
+import { readSheet } from "../src/kernel/svgread.js";
+import { partFeatures, featuresInView } from "../src/kernel/holes.js";
+import { inflateSync } from "node:zlib";
+import { toGLB, lookOf } from "../src/kernel/gltf.js";
+import { toOBJ, objWithMtl, mtlFileName } from "../src/kernel/obj.js";
+import { toPLY } from "../src/kernel/ply.js";
+import { apply } from "../src/kernel/motion.js";
+import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { exactSolids } from "../src/kernel/brep.js";
+import { facetedSolids } from "../src/kernel/facets.js";
+import { writeSTEP, exactParts } from "../src/kernel/step.js";
+import { checkStep } from "./check-step.mjs";
 import { writeMP4, readBoxes, avcConfig, annexBUnits } from "../src/kernel/mp4.js";
 import { writeWebM } from "../src/kernel/webm.js";
 
@@ -131,6 +148,43 @@ test("sharp edges are drawn sharp, smooth surfaces smooth", () => {
   assert.equal(displayMesh(s).positions.length, s.positions.length);
 });
 
+test("with the distance function, small fillets are shaded round and sharp edges stay crisp", () => {
+  // [shape, budget, p99 before (deg), p99 now must be under]: the shading
+  // error without and with the distance function given to displayMesh.
+  const cases = [
+    // A 3 mm fillet at 2.6 mm cells: before, its faces were split apart and shaded flat.
+    [{ t: "box", s: [40, 30, 20], r: 3 }, 1500, 9],
+    [{ t: "torus", R: 20, r: 5 }, 1500, 3],
+    [{ t: "sphere", r: 20 }, 1500, 0.5],
+    [{ t: "cylinder", r: 10, h: 30 }, 6000, 1],
+    // Sharp edges: shaded flat to the edge.
+    [{ t: "subtract", a: { t: "union", c: [{ t: "box", s: [80, 60, 30] }, { t: "move", v: [0, 0, 20], c: { t: "cylinder", r: 15, h: 20 } }] }, b: [{ t: "cylinder", r: 8, h: 100 }] }, 6000, 1],
+  ];
+  for (const [node, budget, limit] of cases) {
+    const { f, box } = compile(node);
+    const m = meshSDF(f, box, { budget, normals: true });
+    const before = shadingError(f, displayMesh(m));
+    const d = displayMesh(m, undefined, f);
+    const after = shadingError(f, d);
+    const what = `${node.t} at budget ${budget}: p90 ${pct(before, 0.9).toFixed(1)} -> ${pct(after, 0.9).toFixed(1)}, p99 ${pct(before, 0.99).toFixed(1)} -> ${pct(after, 0.99).toFixed(1)} deg`;
+    assert.ok(pct(after, 0.99) < limit, what);
+    assert.ok(pct(after, 0.9) <= pct(before, 0.9) + 0.05, what);
+    // The same surface, and every triangle corner where it was.
+    assert.equal(d.indices.length, m.indices.length);
+    for (let n = 0; n < m.indices.length; n += 7) for (let a = 0; a < 3; a++) assert.equal(d.positions[d.indices[n] * 3 + a], m.positions[m.indices[n] * 3 + a]);
+  }
+  // The filleted block's 3 mm fillets were shaded in facets: p90 26 degrees.
+  const { f, box } = compile({ t: "box", s: [40, 30, 20], r: 3 });
+  const r = meshSDF(f, box, { budget: 1500, normals: true });
+  assert.ok(pct(shadingError(f, displayMesh(r, undefined, f)), 0.9) < 4);
+  // A box corner still gets three copies, each facing straight out of one face.
+  const b = compile({ t: "box", s: [40, 30, 20] });
+  const bd = displayMesh(meshSDF(b.f, b.box, { normals: true }), undefined, b.f);
+  const at = [];
+  for (let i = 0; i < bd.positions.length; i += 3) if (Math.hypot(bd.positions[i] - 20, bd.positions[i + 1] - 15, bd.positions[i + 2] - 10) < 0.5) at.push([...bd.normals.slice(i, i + 3)].map((v) => Math.round(v * 100) / 100));
+  assert.deepEqual(at.map(String).sort(), ["0,0,1", "0,1,0", "1,0,0"]);
+});
+
 test("the lighter copy of a mesh keeps its shape with far fewer triangles", () => {
   // Signed volume of a triangle mesh; it is only meaningful for a closed one.
   const volume = ({ positions: P, indices: I }) => {
@@ -205,6 +259,119 @@ test("3MF export: a valid zip with one named, coloured, closed object per part",
   assert.deepEqual(r.problems, []);
   assert.equal(r.title, "Test &lt;plate&gt;");
   assert.deepEqual(r.objects.map((o) => [o.name, o.color, o.triangles]), objects.map((o) => [o.name, `${o.color.toUpperCase()}FF`, o.indices.length / 3]));
+});
+
+test("STEP: exact solids have the exact volumes of boxes, cylinders, cones, spheres, tori, capsules, extrusions and revolves", () => {
+  const PI = Math.PI;
+  const holes = { t: "subtract2", a: { t: "rect2", w: 40, h: 30, r: 5 }, b: [{ t: "move2", v: [10, 0], c: { t: "circle2", r: 3 } }, { t: "move2", v: [-10, 0], c: { t: "circle2", r: 3 } }] };
+  const cases = [
+    [{ t: "box", s: [10, 20, 30], r: 0 }, 6000, { plane: 6 }],
+    [{ t: "cylinder", r: 5, h: 10, round: 0 }, PI * 250, { plane: 2, cylinder: 1 }],
+    [{ t: "cone", r1: 5, r2: 2, h: 10 }, ((PI * 10) / 3) * 39, { plane: 2, cone: 1 }],
+    [{ t: "cone", r1: 5, r2: 0, h: 10 }, ((PI * 10) / 3) * 25, { plane: 1, cone: 1 }],
+    [{ t: "sphere", r: 7 }, (4 / 3) * PI * 343, { sphere: 1 }],
+    [{ t: "torus", R: 10, r: 3 }, 2 * PI * PI * 10 * 9, { torus: 1 }],
+    [{ t: "capsule", a: [0, 0, 0], b: [10, 5, 3], r1: 2, r2: 2 }, PI * 4 * Math.hypot(10, 5, 3) + (4 / 3) * PI * 8, { sphere: 2, cylinder: 1 }],
+    [{ t: "rotate", deg: [10, 20, 30], c: { t: "move", v: [5, 0, 0], c: { t: "box", s: [10, 20, 30], r: 0 } } }, 6000, { plane: 6 }],
+    [{ t: "mirror", axis: 0, c: { t: "move", v: [5, 1, 2], c: { t: "cone", r1: 5, r2: 2, h: 10 } } }, ((PI * 10) / 3) * 39, { plane: 2, cone: 1 }],
+    [{ t: "extrude", p: holes, h: 5 }, (40 * 30 - (4 - PI) * 25 - 2 * PI * 9) * 5, { plane: 6, cylinder: 6 }],
+    [{ t: "revolve", p: { t: "move2", v: [7, 0], c: { t: "rect2", w: 4, h: 10 } } }, PI * (81 - 25) * 10, { plane: 2, cylinder: 2 }],
+    [{ t: "revolve", p: { t: "move2", v: [4, 0], c: { t: "rect2", w: 4, h: 6 } }, angle: 90 }, (PI / 4) * 32 * 6, { plane: 4, cylinder: 2 }],
+    [{ t: "revolve", p: { t: "subtract2", a: { t: "move2", v: [10, 0], c: { t: "rect2", w: 8, h: 8 } }, b: [{ t: "move2", v: [10, 0], c: { t: "circle2", r: 2 } }] } }, 2 * PI * 10 * (64 - PI * 4), { plane: 2, cylinder: 2, torus: 1 }],
+    [{ t: "symmetric", axis: 1, c: { t: "move", v: [0, 20, 0], c: { t: "sphere", r: 5 } } }, (8 / 3) * PI * 125, { sphere: 2 }],
+  ];
+  for (const [node, volume, surfaces] of cases) {
+    const solids = exactSolids(node);
+    assert.ok(solids, `${node.t} comes out exact`);
+    const r = checkStep(writeSTEP([{ name: node.t, color: "#4f7cac", solids }], { time: "2026-01-01T00:00:00" }).text, { tol: 1e-7 });
+    assert.deepEqual(r.problems, [], node.t);
+    const p = r.parts[0];
+    assert.deepEqual(p.surfaces, surfaces, `${node.t}: ${JSON.stringify(p.surfaces)}`);
+    assert.ok(Math.abs(p.volume - volume) < 1e-6 * volume, `${node.t}: volume ${p.volume}, exact ${volume}`);
+  }
+});
+
+test("STEP: script shapes come out exact where they can, and match the kernel's meshes", () => {
+  const r = runScript(`
+    part("Plate", extrude(rect(80, 40, 6).cut(circle(6).move(-25, 0), circle(6).move(25, 0)), 8).at(0, -150, 4));
+    part("Slot", extrude(path([0, 0]).line(40, 0).arc([50, 10], [40, 20]).line(0, 20).close(), 5).rotateX(30).at(10, 20, 30));
+    part("Cam", extrude(path([0, 0]).line(40, 0).tangentArc(40, 20).line(0, 20).radiusArc(0, 0, 10).close(), 2));
+    part("Lid", extrude(polygon([[0, 0], [60, 0], [60, 30], [20, 45], [0, 30]], 6), 4).at(100, 0, 0));
+    part("Bearing", revolve(rect(10, 8).cut(circle(2)).move(20, 0)));
+    part("Pin", cylinder(4, 30, 1).rotateY(90).at(0, 0, 50));
+    part("Knob", union(sphere(8).at(0, 0, 100), torus(20, 3).at(0, 0, 80), cone(10, 0, 20).at(50, 50, 50)));
+    part("Rod", capsule([0, 0, 0], [30, 10, 5], 4, 2).at(-50, 0, 0));
+    part("Feet", cylinder(3, 10).at(40, 0, 0).radial(6));
+    part("Block", box(20, 20, 20).cut(cylinder(5, 30)));
+    part("Blend", union(sphere(10), sphere(8).at(12, 0, 0), 4));
+    part("Rounded", box(20, 20, 20, 2));
+  `);
+  const exact = exactParts(r.parts);
+  assert.deepEqual(r.parts.filter((p, i) => !exact[i]).map((p) => p.name), ["Block", "Blend", "Rounded"]);
+  r.parts.forEach((p, i) => {
+    if (!exact[i]) return;
+    const { f, box } = compile(p.node);
+    const m = meshSDF(f, box, { budget: 30000 });
+    const c = checkStep(writeSTEP([{ name: p.name, color: p.color, solids: exact[i] }], { time: "x" }).text, { tol: 1e-6 });
+    assert.deepEqual(c.problems, [], p.name);
+    const q = c.parts[0], mv = meshVolume(m), mb = meshBounds(m);
+    assert.ok(Math.abs(q.volume - mv) < 0.005 * mv, `${p.name}: volume ${q.volume}, mesh ${mv}`);
+    q.bounds.forEach((x, k) => assert.ok(Math.abs(x - mb[k]) < m.cellSize, `${p.name}: box ${q.bounds}, mesh ${mb}`));
+  });
+  // The arcs the script drew are arcs in the file: the slot's end is one
+  // cylinder face, not 90 flat ones.
+  const slot = checkStep(writeSTEP([{ name: "Slot", solids: exact[1] }], { time: "x" }).text).parts[0];
+  assert.deepEqual(slot.surfaces, { plane: 5, cylinder: 1 });
+});
+
+test("STEP: a faceted part is a closed solid with its mesh's volume, and flat faces merge", () => {
+  const cases = [
+    // An L of two boxes that overlap: flat all over, so a few big faces (and
+    // slivers where the mesh rounds its corners a little).
+    ["L", { t: "union", c: [{ t: "box", s: [60, 40, 5], r: 0 }, { t: "move", v: [-27.5, 0, 15], c: { t: "box", s: [5, 40, 30], r: 0 } }] }, 0.04],
+    ["Blend", { t: "union", c: [{ t: "sphere", r: 10 }, { t: "move", v: [12, 0, 0], c: { t: "sphere", r: 8 } }], k: 4 }, null],
+    ["Two pieces", { t: "union", c: [{ t: "subtract", a: { t: "box", s: [10, 10, 10], r: 0 }, b: [{ t: "sphere", r: 6 }] }, { t: "move", v: [30, 0, 0], c: { t: "box", s: [10, 10, 10], r: 1 } }] }, null],
+  ];
+  for (const [name, node, maxFaces] of cases) {
+    const { f, box } = compile(node);
+    const m = meshSDF(f, box, { budget: 6000 });
+    const solids = facetedSolids(m);
+    const r = checkStep(writeSTEP([{ name, color: "#888", solids }], { time: "x" }).text);
+    assert.deepEqual(r.problems, [], name);
+    const p = r.parts[0], mv = meshVolume(m);
+    assert.ok(Math.abs(p.volume - mv) < 1e-6 * mv, `${name}: volume ${p.volume}, mesh ${mv}`);
+    assert.deepEqual(Object.keys(p.surfaces), ["plane"]);
+    if (maxFaces) assert.ok(p.faces <= maxFaces * m.indices.length / 3, `${name}: ${p.faces} faces from ${m.indices.length / 3} triangles`);
+    if (name === "Two pieces") assert.equal(p.solids.length, 2);
+  }
+});
+
+test("STEP: names, colours and the assembly read back, and the checker finds broken files", () => {
+  const parts = [
+    { name: "Base 'A' \\ Größe", color: "#4f7cac", solids: exactSolids({ t: "box", s: [40, 40, 10], r: 0 }) },
+    { name: "Peg", color: "#d9a441", solids: exactSolids({ t: "move", v: [0, 0, 12], c: { t: "cylinder", r: 5, h: 20, round: 0 } }) },
+  ];
+  const { text } = writeSTEP(parts, { title: "Peg & base", time: "2026-01-01T00:00:00" });
+  const r = checkStep(text);
+  assert.deepEqual(r.problems, []);
+  assert.equal(r.assembly, "Peg & base");
+  assert.deepEqual(r.parts.map((p) => p.name), ["Base 'A' \\ Größe", "Peg"]);
+  assert.match(text, /PRODUCT\('part 1','Base ''A'' \\\\ Gr\\X2\\00F600DF\\X0\\e'/);
+  assert.deepEqual(r.parts.map((p) => p.colour.map((c) => Math.round(c * 255))), [[0x4f, 0x7c, 0xac], [0xd9, 0xa4, 0x41]]);
+  // Broken on purpose: each of these must be found.
+  const breaks = [
+    [/ADVANCED_FACE\('',\((#\d+)\),(#\d+),\.T\.\)/, "ADVANCED_FACE('',($1),$2,.F.)", /volume|not positive|right way/],
+    [/ORIENTED_EDGE\('',\*,\*,(#\d+),\.T\.\)/, "ORIENTED_EDGE('',*,*,$1,.F.)", /not closed|once each way/],
+    [/CIRCLE\('',(#\d+),5\.\)/, "CIRCLE('',$1,5.1)", /off/],
+    [/VECTOR\('',(#\d+),([\d.]+)\)/, "VECTOR('',$1)", /arguments/],
+    [/#1=APPLICATION_CONTEXT/, "#1=APPLICATION_CONTEXT_X", /unknown entity/],
+    [/(EDGE_LOOP\('',\()#\d+,/, "$1#999999,", /not defined/],
+  ];
+  for (const [find, put, want] of breaks) {
+    assert.ok(find.test(text), String(find));
+    const b = checkStep(text.replace(find, put));
+    assert.ok(b.problems.some((p) => want.test(p)), `${find}: ${b.problems.slice(0, 3).join("; ") || "no problems found"}`);
+  }
 });
 
 test("small pieces of a big part keep their detail, and the volume stays right", () => {
@@ -306,7 +473,8 @@ test("a part can name its material", () => {
   assert.equal(r.error, undefined);
   assert.equal(r.parts[0].material, "rubber");
   assert.equal(r.parts[1].material, null);
-  assert.match(runScript('part("A", sphere(10), { material: "wood" });').error, /material must be one of metal, paint, plastic, rubber, glass/);
+  assert.equal(runScript('part("A", sphere(10), { material: "brushed" }); part("B", sphere(10), { material: "anodised" });').parts.map((p) => p.material).join(), "brushed,anodised");
+  assert.match(runScript('part("A", sphere(10), { material: "wood" });').error, /material must be one of metal, brushed, anodised, paint, plastic, rubber, glass/);
 });
 
 test("tube takes smooth as a radius, or true and false as sweep does", () => {
@@ -502,6 +670,69 @@ test("thin parts are not lost", () => {
   const m = mesh({ t: "box", s: [5000, 300, 50] }, 6000);
   assert.ok(m.indices.length > 0 && openEdges(m) === 0);
   assert.ok(Math.abs(meshVolume(m) / (5000 * 300 * 50) - 1) < 0.05);
+});
+
+test("thin plates, tubes, blades and pins never mesh to nothing or lose a wall", () => {
+  // [shape, budget, exact volume, tolerance]. A 1 mm plate at 3.2 mm cells
+  // used to mesh to nothing: every grid corner and cell centre fell outside it.
+  const tube = (R, w, h) => ({ t: "subtract", a: { t: "cylinder", r: R, h }, b: [{ t: "cylinder", r: R - w, h: h + 2 }] });
+  const cases = [
+    [{ t: "box", s: [200, 120, 1] }, 1500, 24000, 0.01],
+    [{ t: "box", s: [200, 120, 1] }, 20000, 24000, 0.01],
+    [{ t: "box", s: [200, 120, 0.6] }, 6000, 14400, 0.01],
+    [{ t: "box", s: [200, 120, 0.8] }, 20000, 19200, 0.01],
+    [{ t: "box", s: [200, 120, 0.8] }, 40000, 19200, 0.01],
+    [{ t: "box", s: [500, 500, 2] }, 1500, 500000, 0.01],
+    [{ t: "move", v: [7, 3, 0.3], c: { t: "box", s: [300, 80, 1.5] } }, 1500, 36000, 0.01],
+    [{ t: "cylinder", r: 100, h: 1 }, 1500, Math.PI * 1e4, 0.01],
+    [{ t: "box", s: [600, 60, 1.2] }, 1500, 43200, 0.02],
+    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 20000, 900000, 0.01],
+    [tube(50, 1, 100), 20000, Math.PI * (2500 - 49 * 49) * 100, 0.01],
+    [{ t: "cylinder", r: 1, h: 40 }, 1500, Math.PI * 40, 0.05],
+    // A 1 mm rod at 0.8 mm cells comes out fat, never thin or broken.
+    [{ t: "rotate", deg: [0, 90, 0], c: { t: "cylinder", r: 0.5, h: 200 } }, 1500, Math.PI * 0.25 * 200, 0.35],
+  ];
+  for (const [node, budget, exact, tol] of cases) {
+    const m = mesh(node, budget);
+    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget} (cell ${m.cellSize.toFixed(2)} mm)`;
+    assert.ok(m.indices.length > 0, `${what} is empty`);
+    assert.equal(openEdges(m), 0, `${what} is not closed`);
+    assert.ok(Math.abs(meshVolume(m) / exact - 1) < tol, `${what}: volume ${meshVolume(m).toFixed(0)} of ${exact.toFixed(0)}`);
+    assert.equal(m.thickened, undefined, `${what} was drawn thicker`);
+  }
+  // Walls far thinner than any cell the budget allows (a 0.5 mm tube 400 mm
+  // long, a 0.8 mm shell, a tilted 3 mm sheet at a small budget) are drawn a
+  // little more than a cell thick, whole, instead of in shreds or not at all.
+  for (const [node, budget, exact, wall] of [
+    [tube(20, 0.5, 400), 1500, Math.PI * (400 - 19.5 ** 2) * 400, 0.5],
+    [tube(100, 0.8, 300), 1500, Math.PI * (100 ** 2 - 99.2 ** 2) * 300, 0.8],
+    [{ t: "shell", th: 0.8, c: { t: "box", s: [200, 150, 100] } }, 1500, 200 * 150 * 100 - 198.4 * 148.4 * 98.4, 0.8],
+    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 1500, 900000, 3],
+  ]) {
+    const m = mesh(node, budget);
+    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget}`;
+    assert.ok(m.thickened > 0, `${what} was not drawn thicker`);
+    assert.equal(openEdges(m), 0, `${what} is not closed`);
+    // Every wall is there: no less than the true volume, and no more than
+    // walls a cell and a half thick would hold.
+    const v = meshVolume(m);
+    assert.ok(v > exact && v < exact * ((1.5 * m.cellSize) / wall), `${what}: volume ${v.toFixed(0)} of ${exact.toFixed(0)}`);
+  }
+  // A part through meshPart, as the app meshes it, the same.
+  const p = meshPart({ t: "box", s: [200, 120, 1] }, { budget: 20000, normals: true });
+  assert.ok(p.indices.length > 1000 && Math.abs(p.volume / 24000 - 1) < 0.01, `plate part: ${p.indices.length / 3} triangles, volume ${p.volume.toFixed(0)}`);
+});
+
+test("pieces that are the same piece, or share a box, give no edge with four triangles", () => {
+  // The rotor head's mast: a centred bar in radial(6) is itself again turned
+  // by 180 degrees, and the three bars left share one box. Meshed one by one
+  // they made one surface twice, and their ends in one plane twice.
+  const r = runScript('part("Mast", cylinder(110, 450).move(0, 0, 455).add(box(12, 232, 150).move(0, 0, 790).radial(6, "z")));');
+  for (const [budget, maxCell] of [[9375, 19], [40000, 4]]) {
+    const m = meshPart(r.parts[0].node, { budget, maxCell });
+    assert.equal(openEdges(m), 0);
+    assert.ok(closedByPosition(m), `budget ${budget}: edges shared by more than two triangles`);
+  }
 });
 
 test("model scripts: example, test helicopter, Claude's helicopter", () => {
@@ -1065,7 +1296,7 @@ const sheetText = (svg, id) => {
 
 test("drawing: the title block has every field ISO 7200 asks for, and fills only what it was given", () => {
   const block = [drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)];
-  const d = drawingSVG(block, { title: "Block & hole", date: "2026-01-31", info: { number: "3DM-4K7Q2X" } }).svg;
+  const d = drawingSVG(block, { title: "Block & hole", date: "2026-01-31", info: { number: "DFT-4K7Q2X" } }).svg;
   const tb = d.match(/<g id="title-block"[\s\S]*?\n<\/g>/)[0];
   // The eight mandatory fields, each with its cell.
   for (const l of ["Legal owner", "Identification number", "Date of issue", "Sheet", "Title", "Approved by", "Created by", "Document type"]) assert.ok(tb.includes(`>${l}</text>`), `no ${l} field`);
@@ -1073,7 +1304,7 @@ test("drawing: the title block has every field ISO 7200 asks for, and fills only
   assert.equal(sheetText(d, "title").size, 5);
   assert.equal(sheetText(d, "date").s, "2026-01-31");
   assert.equal(sheetText(d, "sheet").s, "1/1");
-  assert.equal(sheetText(d, "number").s, "3DM-4K7Q2X");
+  assert.equal(sheetText(d, "number").s, "DFT-4K7Q2X");
   assert.equal(sheetText(d, "number").size, 5);
   assert.equal(sheetText(d, "document-type").s, "Part drawing");
   assert.equal(sheetText(d, "scale").s, "1:1");
@@ -1087,7 +1318,7 @@ test("drawing: the title block has every field ISO 7200 asks for, and fills only
   // The credit is outside the frame, and in the metadata only as a comment.
   const credit = sheetText(d, "credit");
   assert.ok(credit && credit.x < 20 && !tb.includes("Draftsman"), "the credit is in the title block");
-  assert.match(d, /<dc:identifier>3DM-4K7Q2X<\/dc:identifier>/);
+  assert.match(d, /<dc:identifier>DFT-4K7Q2X<\/dc:identifier>/);
   assert.ok(!/<dc:creator>/.test(d));
   // The projection symbol at its ISO 5456-2 size for 3.5 mm lettering:
   // circles 3.5 and 7 across, a cone 7 long, lines 0.35.
@@ -1205,6 +1436,417 @@ test("drawing: Claude's rotor head draws, with its mast, hub and gearbox cut by 
   // the hub does not fill in; the block above is drawn in the 0.5 group.
   assert.match(d.svg, /<g id="view-top"[^>]*stroke-width="0.25"/);
   assert.equal(d.svg.match(/<text [^>]*id="document-type"[^>]*>([^<]*)</)[1], "Assembly drawing");
+});
+
+// The sheet's marks, read back from its SVG: lines, circles, fills and text.
+const sheetMarks = (svg) => readSheet(svg).marks;
+
+test("drawing: the sheet as PDF draws what the SVG does, at the sheet's size", async () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block & hole (Ø20)", date: "2026-01-31" });
+  const bytes = await sheetPDF(svg, { title: "Block & hole", date: "2026-01-31" });
+  const pdf = Buffer.from(bytes).toString("latin1");
+  assert.match(pdf, /^%PDF-1\.4\n/);
+  assert.match(pdf, /\/MediaBox \[0 0 1190\.551 841\.89\]/, "A3 is 420 x 297 mm, 1190.55 x 841.89 points");
+  assert.match(pdf, /\/BaseFont \/Helvetica \/Encoding \/WinAnsiEncoding/);
+  // Every object is where the cross-reference table says.
+  const xref = Number(pdf.match(/startxref\n(\d+)\n%%EOF\n$/)[1]);
+  const offsets = pdf.slice(xref).match(/^\d{10} 00000 n $/gm).map((l) => Number(l.slice(0, 10)));
+  offsets.forEach((o, i) => assert.equal(pdf.slice(o, o + `${i + 1} 0 obj`.length), `${i + 1} 0 obj`));
+  // The content: one stroke per line and circle of the SVG, one fill per arrowhead, one text per text.
+  const at = pdf.indexOf("stream\n") + 7, len = Number(pdf.match(/\/Length (\d+)/)[1]);
+  const ops = inflateSync(Buffer.from(bytes.subarray(at, at + len))).toString("latin1");
+  const marks = sheetMarks(svg);
+  const count = (k) => marks.filter((m) => m.kind === k).length;
+  assert.equal(ops.match(/ S$/gm).length, count("line") + count("circle"));
+  assert.equal(ops.match(/ f$/gm).length, count("fill") + count("disc"));
+  assert.equal(ops.match(/ Tj ET$/gm).length, count("text"));
+  // The widths and dashes the SVG uses, and the text in the font's own bytes.
+  for (const w of ["0.5 w", "0.25 w", "0.7 w"]) assert.ok(ops.includes(`\n${w}\n`), `no ${w}`);
+  assert.ok(ops.includes("[8 1.5 0.5 1.5] 0 d"), "the cutting line is not long-dash-dot");
+  assert.ok(ops.includes("(Block & hole \\(\\33020\\)) Tj"), "the title is not set in WinAnsi");
+  assert.ok(bytes.length < svg.length / 2, `the PDF is ${bytes.length} bytes, the SVG ${svg.length}`);
+});
+
+test("drawing: the sheet as DXF has its lines and text on named layers, in paper millimetres", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block", date: "2026-01-31", hidden: true });
+  const d = readDXF(sheetDXF(svg));
+  assert.deepEqual(d.problems, []);
+  assert.equal(d.version, "AC1009");
+  assert.equal(d.units, 4, "millimetres");
+  for (const l of ["VISIBLE", "HIDDEN", "SECTION", "HATCH", "DIMENSIONS", "FRAME", "TITLE"]) assert.ok(d.byLayer[l] > 0, `nothing on layer ${l}`);
+  assert.ok(d.bounds[0] >= 0 && d.bounds[1] >= 0 && d.bounds[2] <= 420 && d.bounds[3] <= 297, `bounds ${d.bounds}`);
+  // The frame is 390 x 277 mm, 20 mm in from the left and 10 from the bottom (y up).
+  const frame = d.entities.find((e) => e.type === "POLYLINE" && e.layer === "FRAME" && e.closed && Math.abs(e.pts[0] - 20) < 1e-6 && Math.abs(e.pts[1] - 287) < 1e-6);
+  assert.ok(frame, "no closed frame from (20, 287)");
+  const fb = extent(Array.from({ length: frame.pts.length / 2 }, (_, i) => [frame.pts[i * 2], frame.pts[i * 2 + 1]]));
+  assert.deepEqual(fb, [20, 10, 410, 287]);
+  // The section's cut face is closed; hidden edges are dashed by their layer.
+  const cuts = d.entities.filter((e) => e.layer === "SECTION" && e.type === "POLYLINE" && e.closed);
+  assert.ok(cuts.length >= 2, `${cuts.length} closed cut outlines`);
+  assert.equal(d.layers.HIDDEN.ltype, "HIDDEN");
+  assert.ok(d.ltypes.HIDDEN.length === 2 && d.ltypes.HIDDEN[0] > 0 && d.ltypes.HIDDEN[1] < 0);
+  const texts = d.entities.filter((e) => e.type === "TEXT").map((e) => e.text);
+  for (const t of ["100", "60", "40", "Block", "A\\U+2013A", "1:1"]) assert.ok(texts.includes(t), `no text ${t}`);
+  assert.equal(texts.length, sheetMarks(svg).filter((m) => m.kind === "text").length);
+});
+
+test("drawing: an outline at 1:1 has the plate's size, and its holes as true circles", () => {
+  // A 120 x 80 plate, 6 thick, with four 9 mm holes and one 20 mm bore.
+  const holes = [[-45, -25], [45, -25], [-45, 25], [45, 25]].map(([x, y]) => ({ t: "move", v: [x, y, 0], c: { t: "cylinder", r: 4.5, h: 20 } }));
+  const plate = [drawn("Plate", { t: "subtract", a: { t: "box", s: [120, 80, 6] }, b: [...holes, { t: "cylinder", r: 10, h: 20 }] })];
+  const cut = sectionCut(plate, { axis: "z", offset: 0 });
+  const shape = { loops: cut.parts.flatMap((p) => p.loops) };
+  const dxf = outlineDXF(shape);
+  const d = readDXF(dxf.text);
+  assert.deepEqual(d.problems, []);
+  assert.deepEqual(d.counts, { CIRCLE: 5, POLYLINE: 1 });
+  const radii = d.entities.filter((e) => e.type === "CIRCLE").map((e) => e.r).sort((a, b) => a - b);
+  radii.forEach((r, i) => assert.ok(Math.abs(r - [4.5, 4.5, 4.5, 4.5, 10][i]) < 0.005, `radius ${r}`));
+  const outer = d.entities.find((e) => e.type === "POLYLINE");
+  assert.ok(outer.closed && outer.pts.length === 8, "the plate is not one closed four-cornered outline");
+  assert.deepEqual(d.bounds.map((v) => Math.round(v * 1000) / 1000), [-60, -40, 60, 40]);
+  const svg = outlineSVG(shape).text;
+  assert.match(svg, /width="122mm" height="82mm" viewBox="0 0 122 82"/, "the SVG is not at true size (with 1 mm round it)");
+  assert.equal(svg.match(/<circle /g).length, 5);
+  // A loop that is nearly round but is not a circle stays a polyline.
+  assert.equal(fitCircle(Array.from({ length: 64 }, (_, i) => [Math.cos(i / 10) * (10 + (i % 2) * 0.3), Math.sin(i / 10) * 10]).flat()), null);
+});
+
+test("drawing: hidden edges can be drawn dashed, and never over a visible line", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const plain = viewOutline(block, "front");
+  assert.ok(!plain.parts[0].hidden, "hidden edges without being asked");
+  const v = viewOutline(block, "front", { hidden: true });
+  const hid = v.parts[0].hidden.flatMap((L) => Array.from({ length: L.length / 2 }, (_, i) => [L[i * 2], L[i * 2 + 1]]));
+  // From the front, the hole is two vertical lines at x = ±10, the block's height.
+  assert.ok(hid.length >= 4 && hid.every(([x]) => Math.abs(Math.abs(x) - 10) < 0.15), `hidden points off the hole's sides: ${JSON.stringify(hid.filter(([x]) => Math.abs(Math.abs(x) - 10) >= 0.15).slice(0, 3))}`);
+  for (const s of [-1, 1]) {
+    const ys = hid.filter(([x]) => Math.sign(x) === s).map(([, y]) => y);
+    assert.ok(Math.max(...ys) - Math.min(...ys) > 39, `the hidden side at x = ${s * 10} runs ${Math.min(...ys)} to ${Math.max(...ys)}`);
+  }
+  // Each side is one line, not overlapping pieces: dashes laid on dashes
+  // (or restarted on every short piece) would look like a solid line.
+  const sides = v.parts[0].hidden.filter((L) => Math.hypot(L[0] - L[L.length - 2], L[1] - L[L.length - 1]) > 1);
+  assert.equal(sides.length, 2, `the hole's hidden sides come in ${sides.length} pieces`);
+  // On the sheet: narrow and dashed, on their own layer.
+  const { svg } = drawingSVG(block, { hidden: true });
+  assert.match(svg, /<g class="hidden" data-layer="HIDDEN" stroke-width="0\.25" stroke-dasharray="3 0\.75"/);
+});
+
+// Text on a sheet, outside the title block and the frame's border, as
+// rectangles: [x0, y0, x1, y1, text].
+const textBoxes = (svg) =>
+  sheetMarks(svg)
+    .filter((m) => m.kind === "text" && m.layer !== "TITLE" && m.layer !== "FRAME")
+    .map((m) => {
+      const w = textWidth(m.str, m.size), h = m.size * 0.72;
+      const x0 = m.anchor === "middle" ? -w / 2 : m.anchor === "end" ? -w : 0;
+      // Corners along and up from the baseline, turned as the text is.
+      const t = (m.angle * Math.PI) / 180, c = Math.cos(t), s = Math.sin(t);
+      const pts = [[x0, 0], [x0 + w, 0], [x0, -h], [x0 + w, -h]].map(([a, b]) => [m.x + a * c - b * s, m.y + a * s + b * c]);
+      return [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1])), m.str];
+    });
+const overlapping = (boxes) => {
+  const out = [];
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) if (boxes[i][0] < boxes[j][2] - 0.1 && boxes[j][0] < boxes[i][2] - 0.1 && boxes[i][1] < boxes[j][3] - 0.1 && boxes[j][1] < boxes[i][3] - 0.1) out.push(`${boxes[i][4]} / ${boxes[j][4]}`);
+  return out;
+};
+const bracketParts = (budget = 30000) => {
+  const r = runScript(readFileSync(new URL("./models/bracket.js", import.meta.url), "utf8"), {});
+  return r.parts.map((p) => {
+    const m = meshPart(p.node, { budget });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+};
+
+test("drawing: holes and turned parts are found in the script, and checked against the shape", () => {
+  const parts = bracketParts(8000);
+  const found = partFeatures(parts);
+  const of = (part, kind) => found.filter((f) => f.part === part && f.kind === kind).map((f) => Math.round(f.r * 2 * 100) / 100).sort((a, b) => a - b);
+  assert.deepEqual(of("Bracket", "hole"), [6.6, 6.6, 9, 9, 9, 9, 20]);
+  assert.deepEqual(of("Bush", "hole"), [12]);
+  assert.deepEqual(of("Bush", "solid"), [28]);
+  // A hole filled in again is not a hole; a pin buried inside a block is not a turned part.
+  const filled = { t: "union", c: [{ t: "subtract", a: { t: "box", s: [40, 40, 10] }, b: [{ t: "cylinder", r: 5, h: 20 }] }, { t: "cylinder", r: 6, h: 20 }] };
+  const buried = { t: "union", c: [{ t: "box", s: [40, 40, 10] }, { t: "cylinder", r: 3, h: 6 }] };
+  assert.deepEqual(partFeatures([{ name: "F", node: filled }]).map((f) => `${f.kind} ${f.r}`), ["solid 6"]);
+  assert.deepEqual(partFeatures([{ name: "B", node: buried }]), []);
+  // A tapped hole is called out by its thread.
+  const tapped = runScript('part("P", box(30, 30, 10).at(0, 0, 5).cut(hole("M6", 8, { tapped: true }).at(0, 0, 10)));', {}).parts[0];
+  assert.ok(partFeatures([{ name: "P", node: tapped.node }]).some((f) => f.kind === "hole" && f.label === "M6"));
+});
+
+test("drawing: a bore the script does not describe is found by fitting a circle, with its accuracy", () => {
+  // A ring turned from a profile: the script says "revolve", not "a 10 mm hole".
+  const node = { t: "revolve", p: { t: "move2", v: [12.5, 0], c: { t: "rect2", w: 15, h: 6 } } };
+  const ring = [{ ...drawn("Ring", node, 20000), node }];
+  const top = viewOutline(ring, "top");
+  const { circles } = featuresInView(partFeatures(ring), top, ring);
+  const bore = circles.find((c) => c.source === "fitted");
+  assert.ok(bore && bore.kind === "hole" && Math.abs(bore.r - 5) < 0.05 && bore.error < 0.05, `the bore: ${JSON.stringify(bore)}`);
+  assert.ok(circles.some((c) => c.source === "script" && c.kind === "solid" && Math.abs(c.r - 20) < 1e-9), "the ring's outside, from the script");
+});
+
+// Leaders and dimension lines on a sheet, as segments on paper, and how
+// many times a leader crosses a dimension line or another leader.
+const leaderCrossings = (svg) => {
+  const segsOf = (cls) => [...svg.matchAll(new RegExp(`<path class="${cls}" d="([^"]*)"`, "g"))].map((m) => m[1].match(/[\d.]+/g).map(Number));
+  const leaders = segsOf("leader").map((n) => [n[0], n[1], n[2], n[3]]);
+  const lines = segsOf("dim-line").map((n) => [n[0], n[1], n[2], n[3]]);
+  const side = (a, b, c) => Math.sign((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+  const cross = (p, q) => side([p[0], p[1]], [p[2], p[3]], [q[0], q[1]]) * side([p[0], p[1]], [p[2], p[3]], [q[2], q[3]]) < 0 && side([q[0], q[1]], [q[2], q[3]], [p[0], p[1]]) * side([q[0], q[1]], [q[2], q[3]], [p[2], p[3]]) < 0;
+  let n = 0;
+  leaders.forEach((l, i) => {
+    for (const d of lines) if (cross(l, d)) n++;
+    for (const m of leaders.slice(i + 1)) if (cross(l, m)) n++;
+  });
+  return { n, leaders: leaders.length, lines: lines.length };
+};
+
+test("drawing: the bracket's sheet is cut through its bore and sized to be made, with no text on other text", () => {
+  const parts = bracketParts();
+  const d = drawingSVG(parts, { title: "Angle bracket", date: "2026-01-31" });
+  // The section goes through the bore's axis, so the bore shows at its full 20 mm.
+  assert.equal(d.section.axis, "y");
+  assert.equal(d.section.offset, 0);
+  assert.match(d.section.note, /through 2 holes on their axes \(⌀20, ⌀12\)/);
+  const cut = sectionCut(parts, d.section);
+  const walls = cut.parts.find((p) => p.name === "Bracket").loops.flatMap((L) => Array.from({ length: L.length / 2 }, (_, i) => L[i * 2])).filter((u) => u > -6 && u < 16);
+  const bore = Math.max(...walls) - Math.min(...walls);
+  assert.ok(Math.abs(bore - 20) < 0.01, `the bore is ${bore} mm wide in the section`);
+  assert.match(d.svg, /<g id="centre-lines" data-layer="CENTRE"/);
+  const said = (kind) => [...d.svg.matchAll(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`, "g"))].map((m) => m[1]).sort();
+  // Every hole and the boss, once: the bore on the section (it is under the boss on the top view).
+  assert.deepEqual(said("diameter"), ["2× ⌀6.6", "4× ⌀9", "⌀12", "⌀28"]);
+  assert.deepEqual(said("size"), ["10", "10", "26", "⌀20"], "the plate and upright thicknesses, the boss's top and the bore on the section");
+  // From the bracket's left and bottom edges: 45, 65 and 105 across, 15 and 65 up (the
+  // bore is on the cutting line, in the middle); 20, 60 and 50 on the upright.
+  assert.deepEqual(said("position"), ["105", "15", "20", "45", "50", "60", "65", "65"]);
+  assert.equal(d.marks.left_out.length, 0, d.marks.left_out.join("; "));
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+  const c = leaderCrossings(d.svg);
+  assert.ok(c.leaders === 4 && c.lines > 5, JSON.stringify(c));
+  assert.equal(c.n, 0, "a leader crosses a dimension line or another leader");
+  // In the DXF, centre lines are on their own layer, long-dash-dot.
+  const x = readDXF(sheetDXF(d.svg));
+  assert.ok(x.byLayer.CENTRE > 8 && !x.problems.length);
+});
+
+test("drawing: a plate is cut through its holes' axes, and a section given beside a hole moves onto it", () => {
+  // The plate Claude made in the prompt run: 120 x 80 x 10, four 9 mm holes 15 mm in, a 20 mm hole in the middle.
+  const script = 'title("Steel plate"); let prof = rect(120, 80); for (const sx of [-1, 1]) for (const sy of [-1, 1]) prof = prof.cut(circle(4.5).move(sx * 45, sy * 25)); prof = prof.cut(circle(10)); part("Plate", extrude(prof, 10).at(0, 0, 5));';
+  const parts = runScript(script, {}).parts.map((p) => {
+    const m = meshPart(p.node, { budget: 20000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const gaps = (plane) => {
+    // The widths of the gaps between the cut faces, along the cut.
+    const xs = sectionCut(parts, plane).parts[0].loops.map((L) => { const u = Array.from({ length: L.length / 2 }, (_, i) => L[i * 2]); return [Math.min(...u), Math.max(...u)]; }).sort((a, b) => a[0] - b[0]);
+    return xs.slice(1).map((x, i) => Math.round((x[0] - xs[i][1]) * 1000) / 1000);
+  };
+  const d = drawingSVG(parts, { title: "Steel plate", size: "A4" });
+  assert.equal(d.scale, "1:2", "the section was chosen so the sheet keeps 1:2");
+  assert.ok(Math.abs(Math.abs(d.section.offset) - 45) < 1e-9 && d.section.axis === "x", JSON.stringify(d.section));
+  assert.deepEqual(gaps(d.section), [9, 9], "both holes at their full 9 mm");
+  // Given 3 mm beside the 20 mm hole's axis: moved onto it, and said.
+  const moved = drawingSVG(parts, { section: { axis: "x", offset: 3 }, size: "A4" });
+  assert.equal(moved.section.offset, 0);
+  assert.match(moved.section.note, /moved 3 mm onto the axis of the ⌀20 hole, at x = 0 mm/);
+  assert.deepEqual(gaps(moved.section), [20]);
+  assert.equal(leaderCrossings(d.svg).n, 0);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
+test("drawing: a boss plate reads its true sizes, and a chamfer's edge is not taken for a hole", () => {
+  // The part Claude made in the second prompt run: a rounded 100 x 60 x 8 plate, a ⌀24 boss
+  // turned from a profile with a 1 mm chamfer, a ⌀10 bore and two ⌀6.6 holes.
+  const script = 'title("Boss plate"); const L = 100, W = 60, T = 8, D = 24, H = 30; const plate = extrude(rect(L, W, 3), T).at(0, 0, T / 2); const boss = revolve(path([0, T / 2]).line(D / 2, T / 2).line(D / 2, T + H - 1).line(D / 2 - 1, T + H).line(0, T + H).close()); let body = union(plate, boss, 2).common(box(L + 10, W + 10, T + H).at(0, 0, (T + H) / 2)); body = body.cut(cylinder(5, 100).at(0, 0, 20), hole(6.6, T).at(-L / 2 + 15, 0, T), hole(6.6, T).at(L / 2 - 15, 0, T)); part("Plate", body);';
+  const parts = runScript(script, {}).parts.map((p) => {
+    const m = meshPart(p.node, { budget: 30000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: "Boss plate", projection: "third" });
+  const said = (kind) => [...d.svg.matchAll(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`, "g"))].map((m) => m[1]).sort();
+  // The meshes' boxes are a few hundredths proud or short; the sheet reads the surfaces.
+  assert.deepEqual([said("width"), said("depth"), said("height")].flat(), ["100", "60", "38"]);
+  assert.deepEqual(said("diameter"), ["2× ⌀6.6", "⌀10", "⌀24"]);
+  assert.deepEqual(d.marks.fitted, []);
+  assert.equal(leaderCrossings(d.svg).n, 0);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
+test("drawing: a big assembly gets centre lines but no hole sizes, and no text on other text", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
+  const parts = r.parts.map((p) => {
+    const m = meshPart(p.node, { budget: 3000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 } });
+  assert.ok(d.marks.centre_lines > 5, `${d.marks.centre_lines} centre lines`);
+  assert.equal(d.marks.holes.length, 0);
+  assert.match(d.marks.left_out.join(), /an assembly of 47 parts gets centre lines only/);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
+test("drawing: sheets come in A4 to A0, with the frame and grid to match", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] }, 8000)];
+  const got = {};
+  for (const size of ["A4", "A3", "A2", "A1", "A0"]) {
+    const d = drawingSVG(block, { size });
+    const [, w, h] = d.svg.match(/width="(\d+)mm" height="(\d+)mm"/);
+    const border = d.svg.match(/<rect id="border" x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/).slice(1).map(Number);
+    const label = d.svg.match(/id="sheet-size"[^>]*>([^<]*)</)[1];
+    // Grid numbers along the top: none in a field narrower than 25 mm.
+    got[size] = `${w}x${h} ${border.join(",")} ${label} ${d.scale}`;
+    assert.deepEqual(overlapping(textBoxes(d.svg)), [], size);
+  }
+  assert.deepEqual(got, { A4: "210x297 20,10,180,277 A4 1:2", A3: "420x297 20,10,390,277 A3 1:1", A2: "594x420 20,10,564,400 A2 2:1", A1: "841x594 20,10,811,574 A1 2:1", A0: "1189x841 20,10,1159,821 A0 5:1" });
+  assert.throws(() => drawingSVG(block, { size: "B4" }), /A4, A3, A2, A1, A0/);
+});
+
+test("drawing: a detail view shows a crowded place at a larger scale, marked on its view", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
+  const parts = r.parts.map((p) => {
+    const m = meshPart(p.node, { budget: 3000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 }, detail: true });
+  // A standard scale at least twice the sheet's (1:50): 1:20 or 1:10, whichever has room.
+  assert.ok(d.detail?.view === "top" && ["1:20", "1:10"].includes(d.detail.scale) && d.detail.letter === "B", JSON.stringify(d.detail));
+  const k = 50 / Number(d.detail.scale.slice(2));
+  assert.ok(d.svg.includes(`<g id="detail-B" class="detail" data-view="top" data-scale="${d.detail.scale}">`));
+  assert.ok(d.svg.includes(`>B (${d.detail.scale})<`));
+  // Every detail line lies inside its circle.
+  const g = d.svg.slice(d.svg.indexOf('<g id="detail-B"'), d.svg.indexOf('id="detail-name"'));
+  const circles = [...g.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g)].map((m) => m.slice(1).map(Number));
+  const [cx, cy, R] = circles[1];
+  const pts = [...g.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  assert.ok(pts.length > 500 && pts.every(([x, y]) => Math.hypot(x - cx, y - cy) <= R + 0.02), `${pts.length} points, the furthest ${Math.max(...pts.map(([x, y]) => Math.hypot(x - cx, y - cy))).toFixed(2)} from the middle (radius ${R})`);
+  assert.ok(Math.abs(R / circles[0][2] - k) < 1e-6, `the detail is not ${k} times its circle on the view`);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+  // At a given place too.
+  const at = drawingSVG(parts, { section: { axis: "y", offset: 0 }, detail: { view: "front", at: [0, 0, 800], radius: 300 } });
+  assert.equal(at.detail?.view, "front");
+});
+
+// ---- glTF, OBJ and PLY ----
+
+// A crank, a rod linked to it and a sliding piston: spin, follow, link and
+// slide, with a glass and a plastic part.
+const CRANK = `title("Crank & piston");
+loop(1);
+part("Base", box(120, 60, 8).at(0, 0, -60), { color: "#4f7cac" });
+part("Crank", cylinder(30, 10).rotateX(90).at(0, -10, 0), { color: "#8d939a", spin: { axis: "y", rpm: 60 } });
+part("Crank pin", sphere(5).at(0, -2, 25), { color: "#d9a441", material: "plastic", follow: "Crank" });
+const pin = [0, 0, 25], top = [0, 0, 125];
+part("Piston", cylinder(20, 30).at(0, 0, 135), { color: "#222222", motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
+part("Rod", capsule(pin, top, 5), { color: "#9aa3ad", motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
+part("Cover", box(40, 2, 40).at(60, 30, 100), { color: "#aaccee", material: "glass" });
+joint("Rod", "Crank", pin);
+joint("Rod", "Piston", top);`;
+const crankParts = () => {
+  const r = runScript(CRANK);
+  assert.equal(r.error, undefined);
+  return { r, parts: r.parts.map((p) => ({ name: p.name, color: p.color, material: p.material, frames: p.frames, ...displayMesh(meshPart(p.node, { budget: 3000, normals: true })) })) };
+};
+
+test("glTF: named parts in metres with Y up, materials, and the motion as an animation three.js plays", async () => {
+  const { r, parts } = crankParts();
+  const glb = toGLB(parts, { title: r.title, motion: r.motion });
+  const c = checkGLB(Buffer.from(glb));
+  assert.deepEqual(c.problems, []);
+  assert.deepEqual(c.parts.map((p) => [p.name, p.triangles]), parts.map((p) => [p.name, p.indices.length / 3]));
+  // Bounds back in our millimetres, Z up, as meshed.
+  for (const [i, p] of c.parts.entries()) {
+    const b = meshBounds(parts[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3, `${p.name} bound ${k}: ${v} vs ${b[k]}`));
+  }
+  const look = Object.fromEntries(c.parts.map((p) => [p.name, [p.material.metallic, p.material.roughness, p.material.alphaMode]]));
+  assert.deepEqual(look, { Base: [0, 0.46, "OPAQUE"], Crank: [0.92, 0.36, "OPAQUE"], "Crank pin": [0, 0.52, "OPAQUE"], Piston: [0, 0.93, "OPAQUE"], Rod: [0.92, 0.36, "OPAQUE"], Cover: [0, 0.05, "BLEND"] });
+  // The look without a material is picked as the view picks it.
+  for (const color of ["#4f7cac", "#8d939a", "#222222", "#2f3338", "#b8483e", "#9aa3ad", "#c8c8c0", "#3a3f2a"]) {
+    const hsl = new THREE.Color(color).getHSL({});
+    assert.equal(lookOf({ color }), hsl.s >= 0.16 ? "paint" : hsl.l < 0.16 ? "rubber" : "metal", color);
+  }
+  assert.equal(c.animations.length, 1);
+  assert.ok(Math.abs(c.animations[0].duration - 1) < 1e-6);
+  assert.equal(c.animations[0].parts, 4, "crank, pin, piston and rod move");
+
+  // three.js's own loader: the same parts, and poses at the keys where the
+  // kernel puts them.
+  const g = await new Promise((ok, fail) => new GLTFLoader().parse(glb.buffer, "", ok, fail));
+  const byName = (n) => g.scene.getObjectByName(THREE.PropertyBinding.sanitizeNodeName(n));
+  assert.ok(parts.every((p) => byName(p.name)?.isMesh));
+  const mixer = new THREE.AnimationMixer(g.scene);
+  mixer.clipAction(g.animations[0]).play();
+  const count = r.motion.frames;
+  let worst = 0;
+  for (const k of [7, 15, 30, 44, 59]) {
+    mixer.setTime((k / count) * r.motion.loop);
+    g.scene.updateMatrixWorld(true);
+    for (const p of r.parts.filter((x) => x.frames)) {
+      for (const at of [[0, 0, 25], [0, 0, 125], [30, -10, 0]]) {
+        const want = apply(Array.from(p.frames.subarray(k * 12, k * 12 + 12)), at);
+        const v = new THREE.Vector3(at[0] / 1000, at[2] / 1000, -at[1] / 1000).applyMatrix4(byName(p.name).matrixWorld);
+        worst = Math.max(worst, Math.hypot(v.x * 1000 - want[0], -v.z * 1000 - want[1], v.y * 1000 - want[2]));
+      }
+    }
+  }
+  assert.ok(worst < 0.01, `poses are off by up to ${worst} mm`);
+  // Without motion, no animation.
+  assert.equal(checkGLB(Buffer.from(toGLB(parts.map((p) => ({ ...p, frames: null }))))).animations.length, 0);
+});
+
+test("OBJ and MTL: one object per part with normals, in mm with Y up; PLY: one coloured mesh", () => {
+  const { r, parts } = crankParts();
+  const { obj, mtl } = toOBJ(parts, { title: r.title });
+  const o = checkOBJ(objWithMtl(obj, mtlFileName("Crank & piston.obj")), mtl);
+  assert.deepEqual(o.problems, []);
+  assert.equal(o.mtllib, "Crank-piston.mtl");
+  assert.deepEqual(o.parts.map((p) => [p.name, p.triangles]), parts.map((p) => [p.name, p.indices.length / 3]));
+  for (const [i, p] of o.parts.entries()) {
+    const b = meshBounds(parts[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3, `${p.name} bound ${k}: ${v} vs ${b[k]}`));
+  }
+  assert.deepEqual(o.parts[0].material.Kd, [0x4f / 255, 0x7c / 255, 0xac / 255].map((v) => +v.toFixed(4)));
+  assert.deepEqual(o.parts.map((p) => [p.material.Pm, p.material.Pr, p.material.d]).slice(-2), [[0.92, 0.36, 1], [0, 0.05, 0.36]]);
+
+  // PLY gets the closed meshes with shared vertices, as STL and 3MF do.
+  const plain = r.parts.map((p) => ({ name: p.name, color: p.color, ...meshPart(p.node, { budget: 3000 }) }));
+  const ply = checkPLY(Buffer.from(toPLY(plain, { title: r.title })));
+  assert.deepEqual(ply.problems, []);
+  assert.deepEqual(ply.parts.map((p) => [p.name, p.triangles, p.colors]), plain.map((p) => [p.name, p.indices.length / 3, [p.color]]));
+  for (const [i, p] of ply.parts.entries()) {
+    const b = meshBounds(plain[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3));
+  }
+});
+
+test("measure: volume, centre of mass and nearest points from the distance functions", async () => {
+  const { solidMoments, nearestPoints } = await import("../src/kernel/measure.js");
+  const cases = [
+    [{ t: "sphere", r: 20 }, (4 / 3) * Math.PI * 8000],
+    [{ t: "cylinder", r: 10, h: 30 }, Math.PI * 3000],
+    [{ t: "torus", R: 20, r: 5 }, 2 * Math.PI ** 2 * 500],
+    [{ t: "subtract", a: { t: "box", s: [40, 40, 40] }, b: [{ t: "cylinder", r: 10, h: 50 }] }, 64000 - Math.PI * 100 * 40],
+  ];
+  for (const [node, exact] of cases) {
+    const { f, box } = compile(node);
+    const r = solidMoments(f, box);
+    assert.ok(Math.abs(r.volume / exact - 1) < 0.001, `${node.t} volume off by ${((r.volume / exact - 1) * 100).toFixed(3)}%`);
+    assert.ok(Math.hypot(...r.centre) < 0.01, `${node.t} centre of mass at ${r.centre}`);
+  }
+  // A half cylinder's centre of mass is 4r / 3 pi from its flat face.
+  const half = compile(runScript('part("H", cylinder(30, 10).cut(box(100, 100, 20).at(0, -50, 0)));', {}).parts[0].node);
+  const h = solidMoments(half.f, half.box);
+  assert.ok(Math.abs(h.volume / (Math.PI * 450 * 10) - 1) < 0.001, `half cylinder volume ${h.volume}`);
+  assert.ok(Math.abs(h.centre[1] - 40 / Math.PI) < 0.02, `half cylinder centre of mass at y ${h.centre[1]}, ${40 / Math.PI} expected`);
+  const a = runScript('part("A", box(40, 20, 10).at(0, 0, 5)); part("B", cylinder(10, 20).at(50, 0, 10));', {}).parts.map((p) => compile(p.node));
+  const region = [0, 1, 2].map((i) => Math.min(a[0].box[i], a[1].box[i])).concat([3, 4, 5].map((i) => Math.max(a[0].box[i], a[1].box[i])));
+  const g = nearestPoints(a[0].f, a[1].f, region, { cell: 0.02 });
+  assert.ok(Math.abs(g.gap - 20) < 0.01 && Math.abs(g.a[0] - 20) < 0.01 && Math.abs(g.b[0] - 40) < 0.01, JSON.stringify(g));
 });
 
 test("the app's Claude is allowed every tool the server offers", () => {

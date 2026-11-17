@@ -175,12 +175,12 @@ export function overlapVolume(fa, fb, region, { cell, maxEvals = 400000 }) {
   return { volume, box: volume > 0 ? [...lo, ...hi] : null };
 }
 
-function centre(b) {
+export function centre(b) {
   const hx = (b[3] - b[0]) / 2, hy = (b[4] - b[1]) / 2, hz = (b[5] - b[2]) / 2;
   return [b[0] + hx, b[1] + hy, b[2] + hz, Math.hypot(hx, hy, hz), Math.max(hx, hy, hz), hx, hy, hz];
 }
 // Halves the long sides, so boxes stay about cube-shaped.
-function split(b, stack, hx, hy, hz, big) {
+export function split(b, stack, hx, hy, hz, big) {
   const cuts = [hx > big / 1.5, hy > big / 1.5, hz > big / 1.5];
   const mid = [b[0] + hx, b[1] + hy, b[2] + hz];
   for (let i = 0; i < 8; i++) {

@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { z } from "zod";
 import { writeFile, mkdir, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve, extname } from "node:path";
+import { dirname, resolve, extname, basename, join } from "node:path";
 import { REFERENCE } from "./reference.mjs";
 
 const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
@@ -177,9 +177,73 @@ tool(
     height: z.number().int().min(256).max(2048).optional(),
   },
   async (a) => {
-    const { png } = await call("screenshot", a);
-    return { content: [{ type: "image", data: png, mimeType: "image/png" }] };
+    const { png, view } = await call("screenshot", a);
+    return { content: [{ type: "image", data: png, mimeType: "image/png" }, ...(view ? [{ type: "text", text: view }] : [])] };
   },
+);
+
+tool(
+  "set_look",
+  "Change how the view draws the model. edges: true for the \"shaded with edges\" look, where sharp edges and outlines are drawn as thin dark lines, as in engineering views; false for the plain shaded look (the default). The app remembers the choice. Pictures and screenshots use it too. Use it when the user asks to see edges or outlines, or to turn them off.",
+  { edges: z.boolean().describe("Draw sharp edges and outlines as thin dark lines.") },
+  async (a) => json(await call("set_look", a)),
+);
+
+// ---- looking inside and checking: view state, and measuring ----
+const VIEW_NOTE = "This changes only the view and its pictures, not the model: exports, drawings, check_fit and measure are unaffected, and it is not in undo. The user sees one line by the prompt box saying what is in force, and can clear it with a click or Esc. Returns what the view now shows.";
+
+tool(
+  "hide_parts",
+  `Hide parts in the view, or show them again, so you (and the user) can see what is behind or inside them. Hidden parts are not drawn, cast no shadow, cannot be clicked and are left out of screenshots, except parts a screenshot names in part or parts. hide: parts to hide. show: hidden parts to show again. only: show just these and hide all the others (isolate). all: true shows every part. ${VIEW_NOTE}`,
+  {
+    hide: z.array(z.string()).optional(),
+    show: z.array(z.string()).optional(),
+    only: z.array(z.string()).min(1).optional(),
+    all: z.boolean().optional(),
+  },
+  async (a) => json(await call("hide_parts", a)),
+);
+
+tool(
+  "section_view",
+  `Cut the model open with a plane to look inside it: the part of the model on one side is taken away and the cut faces are filled, so solids look solid and hollows, holes and parts inside show. Use it to check an assembly's insides (a gearbox in its housing, a shaft through its bearings, wall thickness), then take a screenshot. Give axis (x, y or z: the plane stands square across it) and offset (mm along it; default the model's middle), and remove, the side taken away ("+" or "-"; default the side the iso view looks from, so an iso screenshot looks into the cut). Or give point and normal for a plane at any angle; normal points to the side taken away. uncut: parts left whole. off: true removes the section. Returns the parts cut and, for an axis, the view that looks straight into the cut. Moving parts move through the plane. ${VIEW_NOTE}`,
+  {
+    axis: z.enum(["x", "y", "z"]).optional(),
+    offset: z.number().optional().describe("mm along axis"),
+    remove: z.enum(["+", "-"]).optional().describe("The side of the plane taken away, along axis"),
+    point: z.array(z.number()).length(3).optional().describe("A point on the plane, mm"),
+    normal: z.array(z.number()).length(3).optional().describe("Square to the plane, pointing to the side taken away"),
+    uncut: z.array(z.string()).optional().describe("Parts left whole"),
+    off: z.boolean().optional(),
+  },
+  async (a) => json(await call("section_view", a)),
+);
+
+tool(
+  "explode_view",
+  `Move the parts apart in the view (an exploded view), to show how an assembly goes together or to see parts hidden by others. factor: 0 is assembled, 1 fully apart (each group moves away from the model's middle by as far again as it is from there). axis: move only along x, y or z (a stack such as a rotor head along its mast). together: "steps" keeps each plan step's parts together as a sub-assembly (the default when there is a plan), "parts" moves every part on its own. Parts are lifted so none goes below the floor. Works with hide_parts and section_view (each part keeps its cut). ${VIEW_NOTE}`,
+  {
+    factor: z.number().min(0).max(1).optional().describe("0 assembled to 1 fully apart; default 1"),
+    axis: z.enum(["x", "y", "z"]).optional(),
+    together: z.enum(["steps", "parts"]).optional(),
+  },
+  async (a) => json(await call("explode_view", a)),
+);
+
+tool("clear_view", "Show the whole model again: every part shown, no section, assembled. Use it when you have finished looking inside, unless the user asked for the view to stay that way.", {}, async () => json(await call("clear_view")));
+
+tool(
+  "measure",
+  "Measure the model in numbers, from its exact shapes as the script places them (not moved by motion or the exploded view). part or parts: each one's size, bounds, volume, surface area and centre of mass, and with material (aluminium, steel, stainless steel, titanium, brass, copper, PLA, ABS, PETG, nylon, carbon fibre, oak and more) or density_g_cm3 its mass in grams; with several parts also their total and combined centre of mass. between: two part names, for the shortest distance between them and the nearest point on each (0 and overlap_mm if they pass into each other). points: two points [x, y, z] in mm, for the distance between them. Any of these can be asked together. Volume and centre of mass are good to about 0.1%, surface area to about 1%. Use it to answer questions about sizes, clearances and weight instead of judging from a picture.",
+  {
+    part: z.string().optional(),
+    parts: z.array(z.string()).min(1).optional(),
+    material: z.string().optional(),
+    density_g_cm3: z.number().positive().optional(),
+    between: z.array(z.string()).length(2).optional(),
+    points: z.array(z.array(z.number()).length(3)).length(2).optional(),
+  },
+  async (a) => json(await call("measure", a)),
 );
 
 // Writes an exported file; path defaults to ~/Downloads/<title>.<ext>.
@@ -211,8 +275,15 @@ tool(
 );
 
 tool(
+  "export_step",
+  "Export all visible parts as a STEP file (AP214) for other CAD programs: an assembly of named, coloured solids in mm. Parts that are a box, cylinder, cone, sphere, torus, capsule, or an extrude or revolve of an outline of lines and arcs (holes in the outline included), moved, turned or mirrored, or several of these that do not touch, come out with exact surfaces; any part with a cut, join, smooth blend or other shape comes out as flat faces from its mesh. path defaults to ~/Downloads/<title>.step. Only do this when the user asks. Returns the path, exact_parts, faceted_parts and left_out (part names; left_out: too thin to mesh) and line; tell the user which parts are faceted or left out.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_step"), path, "step"),
+);
+
+tool(
   "export_drawing",
-  "Export a 2D drawing of all visible parts as an SVG: an A3 sheet (ISO 5457) with the front, top and side views (hidden edges left out), an isometric view where there is room, a section A-A with its cut faces hatched, the overall width, depth and height in mm, and an ISO 7200 title block. The title is the model's title() (change that to change it); a long one continues in the supplementary title, and one too long for the block is shortened on the sheet with …. The app fills in the date of issue, the scale, the document type and a drawing number made once per model. The fields below are what the user tells you: pass only what they said in this conversation, never a name or company you guessed, and leave the rest out. The app remembers each value it is given (who draws, the owner and the projection for this user; the number, revision, supplementary title and tolerances with the model, saved in its file) and uses it on later drawings, except approved_by, which is never remembered. \"\" forgets a remembered value; for number, the app then makes a new one. A value longer than its limit is refused with a message; nothing is cut short. The section plane stands square across axis at offset mm along it; by default it cuts across the model's longest axis at its middle. Parts are drawn as the script places them, not posed by their motion. path defaults to ~/Downloads/<title>.svg. Only do this when the user asks. Returns the path, the scale, isometric_view (whether there was room for it), the section, sheet (each title block field: names that were remembered rather than given now show only as filled in) and line: one sentence on what went on the sheet and how to change it. Reply with the path and that line, nothing more.",
+  "Export a 2D drawing of all visible parts as an SVG, PDF or DXF (format): an A3 sheet (or A4 to A0, sheet; ISO 5457) with the front, top and side views (hidden edges left out, or dashed with hidden_edges), an isometric view where there is room, a section A-A with its cut faces hatched, the overall width, depth and height in mm, centre lines of holes and turned parts, on a drawing of up to 3 parts the sizes needed to make it (holes' diameters, depths and positions, bosses, step heights and wall thicknesses, from the script's own values), a detail view where asked, and an ISO 7200 title block. The title is the model's title() (change that to change it); a long one continues in the supplementary title, and one too long for the block is shortened on the sheet with …. The app fills in the date of issue, the scale, the document type and a drawing number made once per model. The fields below are what the user tells you: pass only what they said in this conversation, never a name or company you guessed, and leave the rest out. The app remembers each value it is given (who draws, the owner and the projection for this user; the number, revision, supplementary title and tolerances with the model, saved in its file) and uses it on later drawings, except approved_by, which is never remembered. \"\" forgets a remembered value; for number, the app then makes a new one. A value longer than its limit is refused with a message; nothing is cut short. The section plane stands square across axis at offset mm along it; by default it goes through the axes of the most holes (on a drawing of up to 3 parts), else across the model's longest axis at its middle; a plane within a hole's radius of its axis is moved onto it, and the line says so. Parts are drawn as the script places them, not posed by their motion. With outline, the file is instead one outline alone at true size (1:1, mm, no sheet) as SVG or DXF, for laser and water-jet cutters: \"section\" (the cut faces of the section plane; with no axis it cuts across the model's thinnest side, so through a plate) or a view's visible lines (\"top\" and so on); round holes come out as true circles. path defaults to ~/Downloads/<title>.<format>. Only do this when the user asks. Returns the path, the scale, isometric_view (whether there was room for it), the section, sheet (each title block field: names that were remembered rather than given now show only as filled in) and line: one sentence on what went on the sheet and how to change it. Reply with the path and that line, nothing more.",
   {
     path: z.string().optional().describe("Absolute path, or relative to the home folder."),
     axis: z.enum(["x", "y", "z"]).optional().describe("The axis the section plane stands square across; default the model's longest."),
@@ -224,9 +295,45 @@ tool(
     revision: z.string().optional().describe("Revision index, at most 2 characters: A, B, C ... (I and O are not used)."),
     subtitle: z.string().optional().describe("Supplementary title, at most 50 characters: a line under the title."),
     tolerances: z.string().optional().describe('General tolerances note, at most 30 characters, such as "ISO 2768-m". Shown only when given.'),
+    format: z.enum(["svg", "pdf", "dxf"]).optional().describe("svg (default), pdf (to print or send; same sheet) or dxf (for 2D CAD: layers for visible edges, section, hatching, dimensions and frame)."),
+    sheet: z.enum(["A4", "A3", "A2", "A1", "A0"]).optional().describe("Sheet size (ISO 5457): A4 upright, A3 (default) to A0 across. A bigger sheet gives a larger scale."),
+    detail: z.union([z.boolean(), z.object({ view: z.enum(["front", "top", "side"]), at: z.array(z.number()).length(3).describe("The middle of the detail, [x, y, z] in mm."), radius: z.number().optional().describe("Radius of the detail circle, in mm of the model.") })]).optional().describe("A detail view B at a larger scale: true picks the most crowded place of the views; or say which view and where. Pass it when the user asks for a detail, or when a view is too crowded to read."),
+    hidden_edges: z.boolean().optional().describe("Draw hidden edges as dashed lines on the front, top and side views (default: left out). For this drawing only; pass it when the user asks for hidden lines."),
+    outline: z.enum(["section", "front", "back", "left", "right", "top", "bottom"]).optional().describe("Export only this outline at 1:1 instead of the sheet, as svg or dxf. Only when the user asks for an outline or a file to cut."),
     projection: z.enum(["first", "third", ""]).optional().describe('"first" (ISO, Europe and most of the world) or "third" angle (US, Canada, Japan). Default: from the region the user\'s system names, else first.'),
   },
-  async ({ path, ...args }) => save(await call("export_drawing", args), path, "svg"),
+  async ({ path, ...args }) => {
+    const r = await call("export_drawing", args);
+    return save(r, path, r.format ?? "svg");
+  },
+);
+
+tool(
+  "export_glb",
+  "Export all visible parts as a glTF binary file (.glb) for Blender, game engines and web viewers: one named node per part with its colour and material (metal, paint, plastic, rubber, glass), in metres with Y up as glTF requires, and the model's motion as an animation that loops. path defaults to ~/Downloads/<title>.glb. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_glb"), path, "glb"),
+);
+
+tool(
+  "export_obj",
+  "Export all visible parts as an OBJ file, one object per part with normals, in millimetres with Y up, and its colours and materials in an MTL file of the same name beside it. Parts are at rest, without motion. path defaults to ~/Downloads/<title>.obj. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => {
+    const r = await call("export_obj", { mtl: path ? basename(path) : "" });
+    const { mtl_name, mtl_base64, ...rest } = r;
+    const out = JSON.parse((await save(rest, path, "obj")).content[0].text);
+    const mtlPath = join(dirname(out.path), mtl_name);
+    await writeFile(mtlPath, Buffer.from(mtl_base64, "base64"));
+    return json({ ...out, mtl_path: mtlPath });
+  },
+);
+
+tool(
+  "export_ply",
+  "Export all visible parts as a binary PLY file: one mesh, each vertex coloured with its part's colour, in millimetres with Z up. Parts are at rest. path defaults to ~/Downloads/<title>.ply. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_ply"), path, "ply"),
 );
 
 // ---- the camera, pictures and video ----

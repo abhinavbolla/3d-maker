@@ -499,12 +499,27 @@ button {
   gap: 6px;
 }
 #ideas button {
-  padding: 5px 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px 3px 3px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 9px;
   background: color-mix(in srgb, var(--surface) 60%, transparent);
   color: var(--text);
   font-size: 13px;
+}
+#ideas img {
+  display: block;
+  width: 40px;
+  height: 28px;
+  border-radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  /* The pictures are studio shots on white; dim them to sit in the dark. */
+  #ideas img {
+    filter: brightness(0.82);
+  }
 }
 #ideas button:hover {
   background: var(--surface);
@@ -543,4 +558,31 @@ button {
   width: 0;
   background: var(--accent);
   transition: width 0.3s;
+}
+
+/* ---- what the view leaves out: hidden parts, a section, exploded ---- */
+#inspect-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 auto 6px;
+  padding: 2px 6px 2px 10px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#inspect-line[hidden] {
+  display: none;
+}
+#inspect-line:hover {
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--text);
+}
+#inspect-line .clear {
+  font-size: 15px;
+  line-height: 1;
 }

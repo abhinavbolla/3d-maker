@@ -7,6 +7,8 @@
 import * as THREE from "three";
 import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 import { createNavigation } from "./navigate.js";
+import { createLook } from "./look.js";
+import { createInspect } from "./inspect.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -103,6 +105,10 @@ const FLOOR = {
 // paint, which suits most machines.
 const LOOKS = {
   metal: { metalness: 0.92, roughness: 0.36, clearcoat: 0, transparent: false, opacity: 1 },
+  // Brushed: the highlights spread wide and soft. Anodised: a coloured metal
+  // with a thin clear skin over it.
+  brushed: { metalness: 0.88, roughness: 0.56, clearcoat: 0, transparent: false, opacity: 1 },
+  anodised: { metalness: 0.72, roughness: 0.3, clearcoat: 0.3, transparent: false, opacity: 1 },
   paint: { metalness: 0, roughness: 0.46, clearcoat: 0.55, transparent: false, opacity: 1 },
   plastic: { metalness: 0, roughness: 0.52, clearcoat: 0, transparent: false, opacity: 1 },
   rubber: { metalness: 0, roughness: 0.93, clearcoat: 0, transparent: false, opacity: 1 },
@@ -140,6 +146,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.localClippingEnabled = true; // for a section (inspect.js)
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -220,9 +227,11 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     scene.background = null;
     renderer.setClearAlpha(0);
     grid.visible = shadowFloor.visible = guides.visible = false;
+    look.lines(false);
     mirrorFade.value.x = 1;
     reflect.apply(this, args);
     mirrorFade.value.x = 0;
+    look.lines(true);
     [scene.background, , grid.visible, shadowFloor.visible, guides.visible] = was;
     renderer.setClearAlpha(was[1]);
   });
@@ -244,7 +253,8 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     key.shadow.normalBias = radius / 500;
     for (const f of [shadowFloor, mirror]) {
       f.visible = Boolean(box);
-      f.position.set(center.x, center.y, floorZ);
+      // A hair under the model (see makeGrid).
+      f.position.set(center.x, center.y, floorZ - radius * 2e-3);
       f.scale.setScalar(radius * 16);
     }
     // The origin's planes reach a little past a model that stands on the origin.
@@ -261,6 +271,16 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   let playing = true;
   let fitted = false;
   let lastBox = null;
+  // Crease shading and edge lines (look.js).
+  const look = createLook(container, { renderer, camera, content, parts: () => parts, reach: () => stageSize * 0.02, schedule });
+  // Hidden parts, the section and the exploded view (inspect.js).
+  const inspect = createInspect({
+    onChange({ moved, restage }) {
+      if (moved) shadowsMoved = true;
+      if (restage) setStage(inspect.stageBox() ?? modelBox());
+      render();
+    },
+  });
 
   const colors = () => ({
     bg: backdrop(cssVar("--viewport-glow", "#fbfbfc"), cssVar("--viewport", "#dfe1e5")),
@@ -278,6 +298,11 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   function makeGrid(box) {
     grid.traverse((o) => o.geometry?.dispose());
     grid.clear();
+    // The grid, the floor's shadow and its mirror lie a hair (a thousandth
+    // of the model's size) under where the model stands, so the inside of a
+    // cut part's bottom face (a section, inspect.js), which lies in that
+    // plane, hides them instead of fighting them pixel by pixel.
+    grid.position.z = -stageSize * 1e-3;
     const size = box ? Math.max(box.max.x - box.min.x, box.max.y - box.min.y, 50) : 200;
     const step = 10 ** Math.floor(Math.log10(size / 4));
     const half = Math.ceil((size * 1.4) / step / 2) * step;
@@ -348,7 +373,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     frame = 0;
     if (recording) return; // a film is being made (see filmStudio); it redraws after
     if (!asked) {
-      if (!moving()) return;
+      if (!moving()) return look.rest();
       // 4 ms short of the full gap, so a frame that comes a little early still counts.
       if (now - drawnAt < 1000 / (document.hasFocus() ? 60 : 30) - 4) return schedule();
     }
@@ -360,6 +385,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       time += Math.min(dt, 0.1);
       shadowsMoved = true;
     }
+    if (inspect.step()) shadowsMoved = true;
     pose(time);
     if (guides.visible) sizePivot();
     renderer.shadowMap.autoUpdate = false;
@@ -367,10 +393,12 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     try {
       draw();
       shadowsMoved = false;
+      look.drawn(moving());
     } finally {
       // Pictures and screenshots draw their own shadows.
       renderer.shadowMap.autoUpdate = true;
     }
+    if (inspect.animating()) render();
     if (!seen.equals(camera.quaternion)) onView(camera);
     seen.copy(camera.quaternion);
     if (moving()) schedule();
@@ -472,6 +500,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
         setFrame(mb, f, j * 12);
         screw(ma, mb, w, object.matrix);
       }
+      inspect.place(part.name, object.matrix);
       object.matrixWorldNeedsUpdate = true;
     }
   }
@@ -558,14 +587,18 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       const made = makeObject(part);
       content.add(made.object);
       next.set(part.name, { ...made, part });
+      look.dress(next.get(part.name));
     }
-    for (const { object, mesh, light } of parts.values()) {
+    for (const entry of parts.values()) {
+      const { object, mesh, light } = entry;
+      look.drop(entry);
       content.remove(object);
       mesh.geometry.dispose();
       light?.geometry.dispose();
       mesh.material.dispose();
     }
     parts = next;
+    inspect.attach(parts);
     shadowsMoved = true;
     const box = modelBox();
     if (!lastBox || !box || !box.equals(lastBox)) {
@@ -573,6 +606,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       setStage(box);
       makeGrid(box);
     }
+    if (inspect.exploded()) setStage(inspect.stageBox());
     if (!parts.size) {
       // Back to a default framing, so an empty grid is not a speck far away.
       fit();
@@ -582,16 +616,20 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     render();
   }
 
-  function modelBox(names) {
+  // placed: where the exploded view has moved the parts to.
+  function modelBox(names, placed = false) {
     if (typeof names === "string") names = [names];
     const box = new THREE.Box3();
     for (const [n, { part }] of parts) {
       if (names && !names.includes(n)) continue;
       const b = part.mesh.bounds;
-      if (b) box.expandByPoint(new THREE.Vector3(b[0], b[1], b[2])).expandByPoint(new THREE.Vector3(b[3], b[4], b[5]));
+      const o = (placed && inspect.shift(n)) || { x: 0, y: 0, z: 0 };
+      if (b) box.expandByPoint(new THREE.Vector3(b[0] + o.x, b[1] + o.y, b[2] + o.z)).expandByPoint(new THREE.Vector3(b[3] + o.x, b[4] + o.y, b[5] + o.z));
     }
     return box.isEmpty() ? null : box;
   }
+  // What a picture frames: the parts asked for, or all parts that are shown.
+  const frameBox = (names) => modelBox(names ?? inspect.shownNames(), true);
 
   function highlight() {
     for (const [name, { mesh, part }] of parts) {
@@ -617,7 +655,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     const rect = renderer.domElement.getBoundingClientRect();
     content.updateMatrixWorld(true);
     ray.setFromCamera(new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
-    return ray.intersectObjects([...parts.values()].map((p) => p.mesh), false)[0] ?? null;
+    return inspect.pick(ray.intersectObjects([...parts.values()].map((p) => p.mesh), false), ray.ray);
   }
   const nav = createNavigation(camera, renderer.domElement, {
     surfaceAt: (x, y) => surfaceAt(x, y)?.point ?? null,
@@ -707,7 +745,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
 
   // Frames the whole model, or just the named parts, from a standard view.
   function fit(view = "iso", names) {
-    nav.lookAt(placeCamera(camera, view, modelBox(names) ?? modelBox()));
+    nav.lookAt(placeCamera(camera, view, frameBox(names) ?? modelBox()));
     fitted = true;
   }
 
@@ -757,11 +795,13 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   function screenshot({ view, width = 1024, height = 768, parts: only, ghost = false, at = 0 } = {}) {
     const unknown = (only ?? []).filter((n) => !parts.has(n));
     if (unknown.length) throw new Error(`There is no part named ${unknown.map((n) => `"${n}"`).join(", ")}.`);
+    inspect.settle();
+    const restore = inspect.reveal(only);
     let cam = camera.clone();
     cam.aspect = width / height;
     const v = view ?? (only ? "iso" : null);
-    if (v && v !== "iso" && VIEWS[v] && modelBox(only)) cam = flatCamera(v, modelBox(only), width / height);
-    else if (v) placeCamera(cam, v, modelBox(only));
+    if (v && v !== "iso" && VIEWS[v] && frameBox(only)) cam = flatCamera(v, frameBox(only), width / height);
+    else if (v) placeCamera(cam, v, frameBox(only));
     else cam.updateProjectionMatrix();
     const ghosted = [];
     if (only && ghost) {
@@ -783,6 +823,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     shadowFloor.visible = mirror.visible = guides.visible = false;
     renderer.setRenderTarget(target);
     renderer.render(scene, cam);
+    look.paint(cam, width, height, target);
     shadowsMoved = true; // the shadow map now holds this pose
     [shadowFloor.visible, mirror.visible, guides.visible] = floor;
     const pixels = new Uint8Array(width * height * 4);
@@ -791,6 +832,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     target.dispose();
     pose(time);
     for (const [m, transparent, opacity, depthWrite] of ghosted) Object.assign(m, { transparent, opacity, depthWrite, needsUpdate: true });
+    restore();
     selected = was;
     highlight();
     const canvas = document.createElement("canvas");
@@ -811,6 +853,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     const H = Math.round((W * h) / w);
     const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, shadow: key.shadow.mapSize.x, guides: guides.visible };
     shadowsMoved = true;
+    inspect.settle();
     try {
       selected = null;
       highlight();
@@ -824,6 +867,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       sizeMirror(W, H, 4);
       pose(time);
       renderer.render(scene, camera);
+      look.paint(camera, W, H, null);
       return { png: renderer.domElement.toDataURL("image/png").split(",")[1], width: W, height: H };
     } finally {
       key.shadow.mapSize.setScalar(was.shadow);
@@ -938,6 +982,50 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     return out;
   }
 
+  // Draws one finished frame of the view as it is now onto the canvas, the
+  // crease shading included (creases: false leaves it out), synchronously,
+  // and returns the canvas. Read it before giving the browser back control
+  // (toDataURL, drawImage, new VideoFrame): the canvas is not kept after
+  // that. The window goes back to drawing itself on its next frame.
+  //
+  // With width and height (px) it draws at that size instead, one pixel per
+  // pixel, with the camera's shape following it, and hands the canvas to
+  // read(canvas) while the frame is on it; the window's own size comes back
+  // before it returns what read returned.
+  function finishedFrame({ creases = true, width, height } = {}, read) {
+    const sized = width > 0 && height > 0;
+    const was = { ratio: renderer.getPixelRatio(), aspect: camera.aspect };
+    try {
+      if (sized) {
+        renderer.setPixelRatio(1);
+        renderer.setSize(Math.round(width), Math.round(height), false);
+        sizeMirror(Math.round(width), Math.round(height), 4);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+      pose(time);
+      if (guides.visible) sizePivot();
+      renderer.shadowMap.autoUpdate = false;
+      renderer.shadowMap.needsUpdate = shadowsMoved;
+      try {
+        draw();
+        shadowsMoved = false;
+      } finally {
+        renderer.shadowMap.autoUpdate = true;
+      }
+      look.hide();
+      if (creases) look.paint(camera, renderer.domElement.width, renderer.domElement.height, null);
+      return read ? read(renderer.domElement) : renderer.domElement;
+    } finally {
+      if (sized) {
+        renderer.setPixelRatio(was.ratio);
+        camera.aspect = was.aspect;
+        resize();
+      }
+      render();
+    }
+  }
+
   setStage(null);
   applyTheme();
   resize();
@@ -975,6 +1063,10 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     turning: (on) => nav.turning(on),
     screenshot,
     picture,
+    frame: finishedFrame,
+    // The look: setLook({ edges }) turns the edge lines on or off and returns the look.
+    setLook: (v) => (look.set(v), render(), look.get()),
+    getLook: () => look.get(),
     setPlaying,
     // The model's overall size [x, y, z] in mm, or null without a model.
     size() {
@@ -987,12 +1079,14 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     },
     isPlaying: () => playing,
     screenPosition(name) {
-      const box = modelBox(name);
+      const box = modelBox(name, true);
       return box ? onScreen(box.getCenter(new THREE.Vector3())) : null;
     },
     // Where the turning point is drawn in the window, or null when the view
     // is not being turned.
     turningPoint: () => (guides.visible ? onScreen(pivot.position.clone()) : null),
     resetFit: () => (fitted = false),
+    // Hiding, the section and the exploded view (inspect.js).
+    inspect,
   };
 }

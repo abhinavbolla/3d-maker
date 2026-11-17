@@ -25,6 +25,9 @@ Notable changes to Draftsman. The format follows
 - Plans for big models: Claude lists the sub-assemblies and their parts, then builds and checks
   them one step at a time, with progress shown above the prompt.
 - Export as STL (each part its own shell), STL as one solid, and 3MF with named, coloured parts.
+- Export as glTF (.glb) with a named node, colour and material per part and the motion as an
+  animation; OBJ with an MTL; and binary PLY coloured per vertex. From the Export menu, and for
+  Claude as `export_glb`, `export_obj` and `export_ply`.
 - A studio view: a key light that casts shadows, a floor with a soft shadow and a faint
   reflection, and parts drawn as metal, paint, plastic, rubber or glass. Scripts can name a
   part's material.
@@ -45,8 +48,25 @@ Notable changes to Draftsman. The format follows
   and say where the section goes.
 - The drawing sheet follows ISO 5457 and ISO 7200: a full title block that fills itself in and
   remembers what you tell Claude, an isometric view, a grid border and heavier lines.
+- Drawings as PDF and DXF as well as SVG, from the Export menu or `export_drawing`. The PDF is
+  vector, at the sheet's real size; the DXF has layers for visible and hidden edges, centre
+  lines, section, hatching, dimensions and frame. Export > Outline, DXF saves one section alone
+  at 1:1 for a laser cutter, with round holes as true circles (SVG too, and any view's outline).
+- Drawings show centre lines of holes and turned parts, and on a drawing of a few parts every size needed to make them: the diameters and positions of holes and bosses, blind holes' depths, step heights and wall thicknesses. Sizes come from the script's own values (or from circles fitted to the view, with their accuracy). The section goes through the holes' axes. Drawing numbers begin with DFT-.
+  Hidden edges can be drawn dashed, sheets come in A4 to A0, and a detail view shows a crowded
+  place at a larger scale.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
+- Shading in the creases: once the view rests, the gaps between parts and inside corners are
+  darkened, worked out once in three passes at one pixel per CSS pixel and faded in. Frames
+  drawn while parts move or the view turns cost exactly what they did. Pictures and screenshots
+  include it.
+- A "shaded with edges" look: sharp edges as thin dark lines (prebuilt line geometry, no extra
+  pass) and outlines once the view is still. Claude turns it on or off with the new `set_look`
+  tool, and the app remembers it.
+- Two more materials a script can name: `brushed` and `anodised` metal.
+- `frame()` on the view draws one finished frame, crease shading included, synchronously, at
+  the window's size or a given one.
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
@@ -60,6 +80,31 @@ Notable changes to Draftsman. The format follows
 - A camera Claude can direct: `set_camera` places the view (a direction, a position and a
   target, or framed on chosen parts) with a lens in millimetres, and keeps named views with
   the model; `save_picture` saves a studio picture from any camera at any size.
+- STEP export (AP214). Export > STEP, or the `export_step` tool, saves an assembly of named,
+  coloured solids in mm for other CAD programs. Boxes, cylinders, cones, spheres, tori, capsules,
+  and extrusions and revolves of outlines made of lines and arcs (holes included) come out with
+  exact planes, cylinders, cones, spheres and tori; every other part comes out as a closed solid of
+  flat faces made from its mesh. `node test/check-step.mjs` checks a STEP file on its own.
+- Examples on the empty window: a coffee mug, an angle bracket with bolts, a rotor head that
+  moves and a helicopter. One click opens a ready model without Claude, with sliders, a clean
+  undo history, and two prompts to try on it in the prompt box.
+- Installers: a release workflow builds the desktop app for macOS (Apple silicon and Intel),
+  Windows and Linux when a version tag is pushed and attaches them to a draft release. It signs
+  when the certificates are added as secrets ([docs/releasing.md](docs/releasing.md)). The
+  installed app carries its own MCP server and runs it with the user's Node.js; it says when
+  Claude Code or Node.js is missing and where to get them.
+- An app icon of our own.
+- Looking inside and checking a model, by prompt: ask Claude to hide or isolate parts, cut the
+  model open with a section (its cut faces filled, so solids look solid), or explode it, and a
+  line above the prompt box says what the view leaves out (a click or Esc shows the whole model
+  again). This is view state: exports, drawings and undo are not affected. Claude can also
+  measure a part's size, volume, surface area, centre of mass and mass in a named material, the
+  shortest distance between two parts, and the distance between two points, from the exact
+  shapes. New tools: `hide_parts`, `section_view`, `explode_view`, `clear_view` and `measure`.
+- A section's cut faces are hatched, the hatch turned the other way on the next part, as on a
+  drawing. The crease shading treats a cut face as the flat face it is, and with edges on it gets
+  an outline where it ends. Edge lines are cut by the section, hidden with their parts and move
+  with the exploded view, and lines on the back of a part are no longer drawn.
 
 ### Changed
 
@@ -73,6 +118,17 @@ Notable changes to Draftsman. The format follows
 - The view's shadow and floor reflection cost the GPU much less. Both are drawn before the view
   instead of in the middle of it, from a lighter copy of each part with about a ninth of its
   triangles. Pictures and screenshots still use the full meshes.
+- Thin walls no longer go missing from meshes. A 200 x 120 x 1 mm plate at a small budget used to
+  mesh to nothing, because every grid point fell outside it; the mesher now finds walls hidden
+  between grid points, meshes flat plates, discs and blades stretched through their thickness, and
+  refines for thin tubes and shells. A wall too thin for any cell the budget allows is drawn a
+  little more than a cell thick instead of in shreds.
+- Export meshes no longer have edges shared by four triangles where a part repeats a piece onto
+  itself (a centred bar in `radial(6)`) or has small pieces with the same box: the rotor head's
+  mast now exports closed for slicers.
+- Smoother metal. Small fillets and tight curves are shaded round instead of in facets, and sharp
+  edges stay crisp: the view asks the distance function whether each fold in the mesh is a sharp
+  edge or a curve, and takes its normals from it.
 
 ### Fixed
 

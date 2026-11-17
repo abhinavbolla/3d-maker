@@ -259,7 +259,10 @@ const profilesAndSmooth = (args, where) => {
   if (typeof list.at(-1) === "number") k = num(list.pop(), `${where} smooth`, { nonneg: true });
   return { nodes: list.map((p) => profileNode(p, where)), k };
 };
-const outline = (pts) => new Profile({ t: "poly2", pts: pts.map(([x, y]) => [R5(x), R5(y)]) });
+// arcs (optional): which runs of points are arcs, [first, last, cx, cy, r,
+// sweep], last may be pts.length for the first point. Only the STEP export
+// reads them, to write those runs as true arcs.
+const outline = (pts, arcs) => new Profile({ t: "poly2", pts: pts.map(([x, y]) => [R5(x), R5(y)]), ...(arcs?.length ? { arcs } : {}) });
 
 const circle = (r) => new Profile({ t: "circle2", r: num(r, "circle radius", { positive: true }) });
 function rect(w, h = w, round = 0) {
@@ -270,7 +273,7 @@ function rect(w, h = w, round = 0) {
   return new Profile({ t: "rect2", w, h, r: round });
 }
 // Corners rounded with arcs of radius r (each limited to fit its edges).
-function roundCorners(pts, r) {
+function roundCorners(pts, r, arcs) {
   if (!r) return pts;
   const n = pts.length, out = [];
   for (let i = 0; i < n; i++) {
@@ -297,12 +300,14 @@ function roundCorners(pts, r) {
     while (sw > Math.PI) sw -= 2 * Math.PI;
     while (sw < -Math.PI) sw += 2 * Math.PI;
     const k = Math.max(2, Math.ceil(Math.abs(sw) / (3 * DEG)));
+    arcs?.push([out.length, out.length + k, c[0], c[1], rr, sw]);
     for (let j = 0; j <= k; j++) out.push([c[0] + rr * Math.cos(s0 + (sw * j) / k), c[1] + rr * Math.sin(s0 + (sw * j) / k)]);
   }
   return out;
 }
 function polygon(pts, round = 0) {
-  return outline(roundCorners(points2(pts, "polygon"), num(round, "polygon round", { nonneg: true })));
+  const arcs = [];
+  return outline(roundCorners(points2(pts, "polygon"), num(round, "polygon round", { nonneg: true }), arcs), arcs);
 }
 
 // A NACA 4-digit airfoil ("2412": 2% camber at 40% chord, 12% thick), leading
@@ -357,6 +362,7 @@ function catmull(pts, closed, perSpan) {
 class Path {
   constructor(p) {
     this.pts = [pt2(p, "path start")];
+    this.arcs = []; // [first, last, cx, cy, r, sweep] per arc, for the STEP export
   }
   get last() {
     return this.pts[this.pts.length - 1];
@@ -423,6 +429,7 @@ class Path {
     return this.arcPoints(cx, cy, Math.abs(r), s0, sw, to);
   }
   arcPoints(cx, cy, r, s0, sw, to) {
+    this.arcs.push([this.pts.length - 1, this.pts.length - 1 + Math.max(2, Math.ceil(Math.abs(sw) / (2 * DEG))), cx, cy, r, sw]);
     const k = Math.max(2, Math.ceil(Math.abs(sw) / (2 * DEG)));
     for (let j = 1; j < k; j++) this.pts.push([cx + r * Math.cos(s0 + (sw * j) / k), cy + r * Math.sin(s0 + (sw * j) / k)]);
     this.pts.push(to);
@@ -458,7 +465,17 @@ class Path {
     let p = this.pts.filter((q, i, all) => i === 0 || Math.hypot(q[0] - all[i - 1][0], q[1] - all[i - 1][1]) > 1e-9);
     if (p.length > 1 && Math.hypot(p[0][0] - p.at(-1)[0], p[0][1] - p.at(-1)[1]) < 1e-9) p = p.slice(0, -1);
     if (p.length < 3) fail("a closed path needs at least 3 points");
-    return outline(roundCorners(p, num(round, "close round", { nonneg: true })));
+    round = num(round, "close round", { nonneg: true });
+    if (round) {
+      const arcs = [];
+      return outline(roundCorners(p, round, this.arcs.length ? undefined : arcs), arcs);
+    }
+    // Where each point went once repeats were dropped (a dropped closing
+    // point becomes p.length, which stands for the first point).
+    const at = [];
+    this.pts.forEach((q, i, all) => at.push(i === 0 || Math.hypot(q[0] - all[i - 1][0], q[1] - all[i - 1][1]) > 1e-9 ? (at.at(-1) ?? -1) + 1 : at.at(-1)));
+    const arcs = this.arcs.map(([i0, i1, ...c]) => [at[i0], at[i1], ...c]).filter(([i0, i1]) => i1 > i0);
+    return outline(p, arcs);
   }
 }
 const path = (...a) => new Path(Array.isArray(a[0]) ? a[0] : [a[0], a[1]]);
@@ -944,7 +961,7 @@ const DEG = Math.PI / 180;
 export const JOINT_TOLERANCE_MM = 1;
 // Globals a model script has no business touching inside the worker.
 // How a part's surface is drawn. Without one the view picks from the colour.
-const MATERIALS = ["metal", "paint", "plastic", "rubber", "glass"];
+const MATERIALS = ["metal", "brushed", "anodised", "paint", "plastic", "rubber", "glass"];
 const BLOCKED = ["self", "globalThis", "window", "fetch", "importScripts", "XMLHttpRequest", "WebSocket", "postMessage", "close", "indexedDB", "caches", "Worker", "Function"];
 
 let lineOffset = null;
