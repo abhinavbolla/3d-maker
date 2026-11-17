@@ -84,6 +84,10 @@ Notable changes to Draftsman. The format follows
   measure a part's size, volume, surface area, centre of mass and mass in a named material, the
   shortest distance between two parts, and the distance between two points, from the exact
   shapes. New tools: `hide_parts`, `section_view`, `explode_view`, `clear_view` and `measure`.
+- A section's cut faces are hatched, the hatch turned the other way on the next part, as on a
+  drawing. The crease shading treats a cut face as the flat face it is, and with edges on it gets
+  an outline where it ends. Edge lines are cut by the section, hidden with their parts and move
+  with the exploded view, and lines on the back of a part are no longer drawn.
 
 ### Changed
 
