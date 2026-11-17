@@ -17,7 +17,9 @@ jobs:
   # None of these need Claude. macOS runners come with Google Chrome.
   test:
     runs-on: macos-latest
-    timeout-minutes: 20
+    # The app test draws in software and now also records short films; it
+    # takes 15 to 25 minutes on a runner.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
