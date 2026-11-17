@@ -12,11 +12,11 @@ This page says where it stands against that goal and what comes next. The order 
 | Mechanisms | Motion, joints checked over the whole loop, collision checks. |
 | Looking at the model | Studio view with shadows, a reflecting floor and materials. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
 | Pictures | PNG studio shots of any view. |
-| 2D drawings | One A3 sheet as SVG: front, top, side and isometric views with hidden edges left out, a hatched section, the overall sizes and an ISO title block. |
+| 2D drawings | One sheet, A4 to A0, as SVG, PDF or DXF: front, top, side and isometric views, hidden edges left out or dashed, centre lines, a hatched section, a detail view, the overall sizes, hole diameters and positions, and an ISO title block. Single outlines at 1:1 as DXF or SVG. |
 | Buildings | One storey by prompt: walls, doors, windows, rooms with their areas, slab, roof, stair. A floor plan sheet with door swings, room areas and dimension chains. |
-| Files for other apps | STL, 3MF, OBJ, PLY, glTF with materials and motion, and STEP: exact solids for simple parts (primitives, extrusions and revolves of line-and-arc outlines), flat faces from the mesh for the rest. |
+| Files for other apps | STL, 3MF, OBJ, PLY, glTF with materials and motion, and STEP: exact solids for simple parts (primitives, extrusions and revolves of line-and-arc outlines), flat faces from the mesh for the rest. 2D: drawings as PDF and DXF, outlines at 1:1 as DXF and SVG. |
 | Exact surfaces | In STEP files, for parts the script describes exactly without 3D cuts or joins. Elsewhere surfaces are fine meshes of distance fields. |
-| Direct editing | Sliders and prompts. No dragging, measuring or sectioning. |
+| Direct editing | Sliders and prompts. Hiding and isolating parts, sections, exploded views and measuring, by prompt. No dragging. |
 | Video | Motion plays in the view. Nothing is recorded. |
 | Installing | Installers for macOS, Windows and Linux, built for each release, with our own icon. Not signed yet. |
 
@@ -35,14 +35,14 @@ A studio shot of a mechanism from a professional tool gets its look from four th
 
 A model is not finished for a workshop until it has drawings. Distance fields make some of this easier than it is for other kernels: a section through a part is an exact outline, with no surface-to-surface intersection to compute.
 
-Done so far: an A3 sheet as SVG to ISO 5457 (frame, grid reference border, centring marks) with the front, top and side views in first or third angle (sharp edges and outlines, hidden edges left out), an isometric view, one section cut straight from the distance functions with its faces hatched per part, the overall width, depth and height, and an ISO 7200 title block that fills itself in and remembers what you tell it. Claude can export it, say where the section goes and fill in the title block.
+Done so far: an A3 sheet as SVG to ISO 5457 (frame, grid reference border, centring marks) with the front, top and side views in first or third angle (sharp edges and outlines, hidden edges left out), an isometric view, one section cut straight from the distance functions with its faces hatched per part, the overall width, depth and height, and an ISO 7200 title block that fills itself in and remembers what you tell it. Claude can export it, say where the section goes and fill in the title block. The same sheet comes as PDF (vector, real size) and as DXF (layers for each kind of line), on A4 to A0. Hidden edges can be dashed; holes and turned parts get centre lines; holes get their diameters and positions, from the script's own values or from circles fitted to a view; and a detail view can show a crowded place at a larger scale. One section or view's outline can be saved alone at 1:1 for cutting.
 
 What is left:
 
-1. **Views.** Detail views at a larger scale, for crowded parts of an assembly (at 1:50 the rotor head's hub fills in, however thin its lines). Hidden edges dashed, as a choice. The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Centre lines of holes and turned parts. Views drawn from the distance functions instead of the mesh, so curves are exact here too.
+1. **Views.** The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Views drawn from the distance functions instead of the mesh, so curves are exact here too. Detail views drawn from a finer view instead of an enlarged one.
 2. **Sections.** Planes at any angle, stepped and half sections, several sections on a sheet, and detail views.
-3. **Dimensions.** Hole positions and diameters, radii and angles, taken from the model and from the values in its script.
-4. **Sheets.** PDF and DXF. Other sheet sizes, several sheets, and a parts list with balloons.
+3. **Dimensions.** Radii and angles, counterbore and countersink callouts, hole patterns on a pitch circle, chamfers, tolerances and surface finish.
+4. **Sheets.** Several sheets, and a parts list with balloons.
 5. **Drawings by prompt.** "Make a drawing of the bracket with a section through the holes": Claude choosing the views, the sections and what to dimension, and looking at the sheet it made.
 
 ## Buildings
@@ -62,24 +62,25 @@ What is left:
 
 ## Files for other apps
 
-Done so far: STL, 3MF, glTF (a named node per part, its colour and material, and the motion as an animation that loops), OBJ with an MTL of each part's colour and material, and PLY coloured per vertex.
+Done so far: STL, 3MF, glTF (a named node per part, its colour and material, and the motion as an animation that loops), OBJ with an MTL of each part's colour and material, PLY coloured per vertex, and SVG and DXF of single outlines and sections at 1:1, for laser cutters and 2D CAD.
 
 What is left:
 
-1. **SVG and DXF** of single outlines and sections at 1:1, for laser cutters and 2D CAD. (The drawing sheet is already an SVG.)
-4. **STEP.** This is the hard one, and the main thing that separates Draftsman from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. Done so far: STEP (AP214) with exact surfaces written straight from the script for boxes, cylinders, cones, spheres, tori, capsules, and extrusions and revolves of line-and-arc outlines with their holes, and a closed solid of flat faces from the mesh for every other part, as a named, coloured assembly. What is left: exact cuts and joins in 3D (a plate with a drilled hole, a shaft with a key), which need the solids intersected; fillets and rounded boxes; fitted surfaces for smooth blends, lofts and sweeps instead of flat faces; and checking the files in FreeCAD, Fusion and SolidWorks. This will take a long time, and it is the largest open question on this page.
-5. **Import.** Open an STL or a STEP file as a reference to build around.
+1. **STEP.** This is the hard one, and the main thing that separates Draftsman from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. Done so far: STEP (AP214) with exact surfaces written straight from the script for boxes, cylinders, cones, spheres, tori, capsules, and extrusions and revolves of line-and-arc outlines with their holes, and a closed solid of flat faces from the mesh for every other part, as a named, coloured assembly. What is left: exact cuts and joins in 3D (a plate with a drilled hole, a shaft with a key), which need the solids intersected; fillets and rounded boxes; fitted surfaces for smooth blends, lofts and sweeps instead of flat faces; and checking the files in FreeCAD, Fusion and SolidWorks. This will take a long time, and it is the largest open question on this page.
+2. **Import.** Open an STL or a STEP file as a reference to build around.
 
 ## Working with the model directly
 
 The prompt stays the main way to make things. These are for looking, checking and small adjustments, and they stay out of the way until you reach for them.
 
-1. **Measure.** Click two points for a distance, or a part for its size, volume and mass.
-2. **Hide and isolate parts**, and a short list of the model's parts.
-3. **Section view.** Slide a cutting plane through the model to see inside.
-4. **Exploded view** of an assembly.
-5. **Move a part by dragging it**, with the change written back into the script.
-6. **Reference pictures.** Drop in a photo or a blueprint for Claude to work from, shown behind the model for comparison.
+Done so far, by prompt: measuring (a part's size, volume, surface area, centre of mass and mass; the distance between two parts or two points), hiding and isolating parts, a section view with filled cut faces at any plane, and an exploded view that keeps sub-assemblies together. A line above the prompt box says what the view leaves out.
+
+What is left:
+
+1. **Measuring and cutting by hand.** Click two points for a distance, slide the cutting plane, and a thin dimension line in the view for the last measurement.
+2. **A short list of the model's parts**, to hide and pick from.
+3. **Move a part by dragging it**, with the change written back into the script.
+4. **Reference pictures.** Drop in a photo or a blueprint for Claude to work from, shown behind the model for comparison.
 
 ## Video
 

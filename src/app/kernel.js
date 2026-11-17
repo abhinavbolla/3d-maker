@@ -2,12 +2,13 @@
 // only parts that changed are meshed again.
 import { worldBox, boxesMeet } from "../kernel/fit.js";
 import { toSTL, meshVolume } from "../kernel/mesh.js";
+import { choosePlane } from "../kernel/holes.js";
 import { to3MF } from "../kernel/threemf.js";
 import { exactParts, facetDetail, partsToSTEP } from "../kernel/step.js";
 import { toGLB } from "../kernel/gltf.js";
 import { toOBJ } from "../kernel/obj.js";
 import { toPLY } from "../kernel/ply.js";
-import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox } from "../kernel/drawing.js";
+import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox, joinLines } from "../kernel/drawing.js";
 
 const SIZE = Math.max(2, Math.min((navigator.hardwareConcurrency || 4) - 1, 8));
 const RUN_TIMEOUT_MS = 30000;
@@ -290,18 +291,23 @@ export function createKernel() {
   // then each view and the section go to a worker of their own.
   // info: the title block's fields (see sheetSVG in kernel/drawing.js).
   // projection: "first" or "third". section: { axis, offset }, both optional.
-  async function exportDrawing(parts, { info = {}, projection = "first", section } = {}) {
+  // hidden: also draw hidden edges, dashed, on the three views.
+  async function exportDrawing(parts, { info = {}, projection = "first", section, hidden = false, size = "A3", detail = null } = {}) {
     const shown = visible(parts);
     const meshes = await exportMeshes(parts);
-    const bounds = modelBounds(meshes);
-    const plane = sectionPlane(bounds, section);
     const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
     const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the drawing took too long.");
+    // Holes and turned parts decide where the section goes (see choosePlane);
+    // the overall sizes are taken from the surfaces (see surfaceBounds).
+    const found = await draw({ features: true });
+    const bounds = found.bounds;
+    const { plane, note } = choosePlane(found.features, bounds, section, shown.length, (axis) => planSheet({ bounds, axis, projection, size, roomy: shown.length <= 3 }).scale);
     // The isometric view only where the sheet has room for it.
-    const roomForIso = planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(meshes, "iso") }).iso;
-    const [front, top, side, iso, cut] = await Promise.all([draw({ view: "front" }), draw({ view: "top" }), draw({ view: sideViewOf(projection) }), roomForIso ? draw({ view: "iso" }) : null, draw({ section: plane })]);
+    const roomForIso = planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(meshes, "iso"), size, roomy: shown.length <= 3 }).iso;
+    const flat = { opts: { hidden, marks: true } };
+    const [front, top, side, iso, cut] = await Promise.all([draw({ view: "front", ...flat }), draw({ view: "top", ...flat }), draw({ view: sideViewOf(projection), ...flat }), roomForIso ? draw({ view: "iso" }) : null, draw({ section: plane })]);
     const views = iso ? { front, top, side, iso } : { front, top, side };
-    const sheet = sheetSVG({ info: { date: today(), type: documentType(shown.length), ...info }, bounds, views, section: cut, projection });
+    const sheet = sheetSVG({ info: { date: today(), type: documentType(shown.length), ...info }, bounds, views, section: cut, projection, size, detail, roomy: shown.length <= 3 });
     const { svg, scale } = sheet;
     const count = (v) => v.reduce((s, p) => s + p.lines.length, 0);
     return {
@@ -309,6 +315,10 @@ export function createKernel() {
       scale,
       isometric_view: sheet.iso,
       titles: sheet.titles,
+      marks: sheet.marks,
+      sheet_size: size,
+      detail_view: sheet.detail,
+      section_note: note,
       section: { axis: cut.axis, offset_mm: Math.round(cut.offset * 100) / 100, cut_area_mm2: Math.round(cut.area * 10) / 10, parts_cut: cut.parts.map((p) => p.name) },
       lines: count(front.parts) + count(top.parts) + count(side.parts) + count(cut.beyond),
     };
@@ -321,6 +331,27 @@ export function createKernel() {
     const parts = result.parts.filter((p) => !p.hidden).map((p) => ({ name: p.name, node: p.node }));
     const r = await job({ type: "floorplan", building: result.building, parts, info: { date: today(), type: "Floor plan", ...info } }, MESH_TIMEOUT_MS, "Making the floor plan took too long.");
     return { bytes: new TextEncoder().encode(r.svg), scale: r.scale, titles: r.titles, rooms: r.facts.rooms, openings: r.facts.openings.length, cut_height_mm: r.facts.cut_height_mm };
+  }
+
+  // One outline at true size, for cutting: a section's cut faces as closed
+  // loops, or one view's visible lines. section: { axis, offset }; with no
+  // axis the cut is square across the model's thinnest side, at its middle
+  // (through a plate, not along it). Returns { loops, lines, section? }.
+  async function exportOutline(parts, { view, section = {} } = {}) {
+    const shown = visible(parts);
+    const meshes = await exportMeshes(parts);
+    const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
+    const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the outline took too long.");
+    if (view) {
+      const v = await draw({ view });
+      // Pieces of one outline that meet end to end are joined, so loops close.
+      return { view, loops: [], lines: joinLines(v.parts.flatMap((p) => p.lines), v.pixel * 4, 90), fromMesh: true, closeWithin: v.pixel * 4 };
+    }
+    const bounds = modelBounds(meshes);
+    const size = [0, 1, 2].map((a) => bounds[a + 3] - bounds[a]);
+    const plane = sectionPlane(bounds, { axis: section.axis ?? "xyz"[size.indexOf(Math.min(...size))], offset: section.offset });
+    const cut = await draw({ section: plane, cutOnly: true });
+    return { loops: cut.parts.flatMap((p) => p.loops), lines: [], section: { axis: cut.axis, offset_mm: Math.round(cut.offset * 100) / 100, view: cut.view, parts_cut: cut.parts.map((p) => p.name) } };
   }
 
   // Which parts pass into each other, at rest and over the motion loop. With
@@ -365,5 +396,10 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportFloorPlan, checkFit, exportGLB, exportOBJ, exportPLY };
+  // Volume and centre of mass of each part, from its distance function
+  // (kernel/measure.js), one worker per part; and how close two parts come.
+  const measureSolids = (parts) => Promise.all(parts.map((p) => job({ type: "measure", what: "solid", node: p.node }, FIT_TIMEOUT_MS, `Measuring part "${p.name}" took too long.`)));
+  const measureGap = (a, b) => job({ type: "measure", what: "gap", a: a.node, b: b.node }, FIT_TIMEOUT_MS, "Measuring the distance took too long.");
+
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportFloorPlan, exportOutline, checkFit, exportGLB, exportOBJ, exportPLY, measureSolids, measureGap };
 }

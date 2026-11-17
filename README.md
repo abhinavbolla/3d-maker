@@ -19,10 +19,10 @@
 | Big models built from a plan, each step checked | ✅ |
 | Mechanisms that move, with joint and collision checks | ✅ |
 | A studio view with materials, and CAD-style navigation | ✅ |
-| Export: PNG pictures, STL and 3MF meshes | ✅ |
-| 2D drawings: front, top and side views, a section and the overall sizes on an A3 sheet (SVG) | ✅ |
+| Export: PNG pictures; STL, 3MF, glTF, OBJ, PLY and STEP files | ✅ |
+| 2D drawings: views, a section, a detail, centre lines, overall sizes and hole dimensions, on A4 to A0, as SVG, PDF or DXF | ✅ |
 | Installers for macOS, Windows and Linux (unsigned), and examples to start from | ✅ |
-| Dimensions of holes, PDF and DXF drawings, STEP export, video, signed installers | Planned |
+| Video, signed installers | Planned |
 
 The [roadmap](docs/roadmap.md) has the plan.
 
@@ -48,7 +48,7 @@ npm start          # or in your browser, at http://localhost:5173
 - **Change a part.** Click it, then move its sliders or type "make this longer".
 - **Look around.** Drag to turn, right-drag or two fingers to slide, scroll or pinch to zoom. The view cube looks from any side.
 - **Undo.** ⌘Z undoes every change, Claude's included.
-- **Export** a PNG picture, a drawing sheet (SVG), or a 3MF or STL file.
+- **Export** a PNG picture, a drawing sheet (SVG, PDF or DXF), an outline to cut, or an STL, 3MF, STEP, glTF, OBJ or PLY file.
 
 The [guide](docs/using.md) has every gesture and key, and what Claude can draw.
 
@@ -68,8 +68,8 @@ On 20 of CADPrompt's 200 parts, every part built, at 0.916 IoGT. Eight complex m
 
 ## Limitations
 
-- **Meshes only.** Export is STL and 3MF, not STEP, and curved surfaces are fine meshes, not exact curves.
-- **Drawings are a first version.** One A3 sheet with three views, a section and the overall sizes, as SVG. No PDF or DXF yet, and no dimensions of holes.
+- **Exact surfaces only for simple parts.** STEP files hold exact solids for primitives, extrusions and revolves; other parts are flat faces from the mesh.
+- **Drawings are early.** One sheet per drawing; holes, bosses, steps and wall thicknesses are dimensioned, but not radii, angles, chamfers or tolerances.
 - **No dragging.** You change a model with prompts and sliders.
 - **Fine detail on big parts** is limited by the mesh: a 1 mm engraving on a 10 m fuselage comes out rough.
 - **Unsigned installers.** macOS and Windows warn you the first time you open the app.

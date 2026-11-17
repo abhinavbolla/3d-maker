@@ -10,6 +10,8 @@
 // function, whatever the mesh detail.
 // Units are millimetres; on the sheet, millimetres of paper.
 
+import { markedView, partFeatures, choosePlane, sectionMarks, surfaceBounds } from "./holes.js";
+
 const { abs, min, max, sqrt, hypot, floor, ceil, round, cos, sin, PI } = Math;
 
 // ---- views ----
@@ -219,7 +221,8 @@ function edgesOf(part, crease) {
 //
 // cut: { depth, loops } draws only what lies beyond that depth (the far side
 // of a cutting plane), with the loops (the cut faces) hiding what is behind them.
-export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut = null } = {}) {
+// hidden: also the hidden edges, as each part's `hidden` polylines (see hiddenLines).
+export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut = null, hidden: hiddenToo = false } = {}) {
   const { u, v, w } = viewOf(view);
   // Project every part's vertices.
   const proj = parts.map(({ positions: P }) => {
@@ -350,11 +353,17 @@ export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut =
     // Visible pieces: [node a, node b] with their points; a node is a mesh
     // vertex, or -1 where an edge was cut short.
     const ka = [], kb = [], pts = [];
+    // Hidden pieces, the same way, where they are asked for.
+    const hka = [], hkb = [], hpts = [];
     for (let e = 0; e < ne; e++) {
       const t0 = E[e * 6 + 2], t1 = E[e * 6 + 3];
       const f0 = front[t0], f1 = t1 < 0 ? 0 : front[t1];
       // An outline (only for the mesh's own edges), or a sharp edge on a face that shows.
-      if (!((f0 !== f1 && e < real) || (sharp[e] && (f0 || f1)))) continue;
+      const outline = f0 !== f1 && e < real;
+      const shows = outline || (sharp[e] && (f0 || f1));
+      // Hidden: an outline or any sharp edge, where something nearer covers it.
+      const mayHide = hiddenToo && (outline || sharp[e]);
+      if (!shows && !mayHide) continue;
       const a = E[e * 6], b = E[e * 6 + 1];
       const xa = (U[a] - u0) / px, ya = (V[a] - v0) / px, xb = (U[b] - u0) / px, yb = (V[b] - v0) / px;
       const len = hypot(xb - xa, yb - ya);
@@ -368,25 +377,151 @@ export function viewOutline(parts, view, { resolution = 3200, crease = 30, cut =
       const n = max(1, ceil(((tb - ta) * len) / 0.5));
       if (f0) into(a, b, E[e * 6 + 4], 0);
       if (f1) into(a, b, E[e * 6 + 5], 3);
-      let start = -1;
+      let start = -1, hstart = -1;
+      const piece = (K, KB, Q, s, k) => {
+        const s0 = ta + (s / n) * (tb - ta), s1 = ta + (k / n) * (tb - ta);
+        K.push(s === 0 && ta === 0 ? a : -1);
+        KB.push(k === n && tb === 1 ? b : -1);
+        Q.push(U[a] + s0 * (U[b] - U[a]), V[a] + s0 * (V[b] - V[a]), U[a] + s1 * (U[b] - U[a]), V[a] + s1 * (V[b] - V[a]));
+      };
       for (let k = 0; k <= n; k++) {
         const t = ta + ((k + 0.5) / n) * (tb - ta);
         const x = xa + t * (xb - xa), y = ya + t * (yb - ya), z = za + t * (zb - za);
-        const vis = k < n && ((f0 && !hidden(x + step[0], y + step[1], z + step[2])) || (f1 && !hidden(x + step[3], y + step[4], z + step[5])));
+        const vis = shows && k < n && ((f0 && !hidden(x + step[0], y + step[1], z + step[2])) || (f1 && !hidden(x + step[3], y + step[4], z + step[5])));
         if (vis && start < 0) start = k;
         else if (!vis && start >= 0) {
-          const s0 = ta + (start / n) * (tb - ta), s1 = ta + (k / n) * (tb - ta);
-          ka.push(start === 0 && ta === 0 ? a : -1);
-          kb.push(k === n && tb === 1 ? b : -1);
-          pts.push(U[a] + s0 * (U[b] - U[a]), V[a] + s0 * (V[b] - V[a]), U[a] + s1 * (U[b] - U[a]), V[a] + s1 * (V[b] - V[a]));
+          piece(ka, kb, pts, start, k);
           start = -1;
+        }
+        if (!mayHide) continue;
+        // An edge that shows where it is not covered is hidden where it is;
+        // one between two faces turned away is hidden where something is in front of it.
+        const hid = k < n && !vis && (shows || hidden(x, y, z));
+        if (hid && hstart < 0) hstart = k;
+        else if (!hid && hstart >= 0) {
+          piece(hka, hkb, hpts, hstart, k);
+          hstart = -1;
         }
       }
     }
     const lines = chain(ka, kb, pts, U.length, 3 * px, 0.2 * px);
-    if (lines.length) out.push({ name: part.name, lines });
+    if (lines.length || hka.length) out.push({ name: part.name, lines, raw: hiddenToo ? [hka, hkb, hpts, U.length] : null });
   });
-  return { view, box, pixel: px, parts: out };
+  if (hiddenToo) hiddenLines(out, { u0, v0, px, nx, ny });
+  for (const p of out) delete p.raw;
+  return { view, box, pixel: px, parts: out.filter((p) => p.lines.length || p.hidden?.length) };
+}
+
+// Hidden lines are drawn only where no visible line is: an edge behind a
+// visible one of the same shape (the back of a box, the far rim of a hole)
+// would only thicken it. So the visible lines are marked on a picture of the
+// view, a pixel either side, and each hidden piece keeps only its stretches
+// off them. Sets parts[i].hidden to polylines, like lines.
+function hiddenLines(parts, { u0, v0, px, nx, ny }) {
+  const mask = new Uint8Array(nx * ny);
+  for (const { lines } of parts)
+    for (const L of lines)
+      for (let n = 2; n < L.length; n += 2) {
+        const xa = (L[n - 2] - u0) / px, ya = (L[n - 1] - v0) / px, xb = (L[n] - u0) / px, yb = (L[n + 1] - v0) / px;
+        const k = max(1, ceil(hypot(xb - xa, yb - ya) / 0.5));
+        for (let i = 0; i <= k; i++) {
+          const x = floor(xa + ((xb - xa) * i) / k), y = floor(ya + ((yb - ya) * i) / k);
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (x + dx >= 0 && y + dy >= 0 && x + dx < nx && y + dy < ny) mask[(y + dy) * nx + x + dx] = 1;
+        }
+      }
+  const drawn = new Uint8Array(nx * ny);
+  for (const p of parts) {
+    if (!p.raw) continue;
+    const [hka, hkb, hpts, nv] = p.raw;
+    const ka = [], kb = [], pts = [];
+    for (let s = 0; s < hka.length; s++) {
+      const [ua, va, ub, vb] = hpts.slice(s * 4, s * 4 + 4);
+      const xa = (ua - u0) / px, ya = (va - v0) / px, xb = (ub - u0) / px, yb = (vb - v0) / px;
+      const n = max(1, ceil(hypot(xb - xa, yb - ya) / 0.5));
+      let start = -1;
+      const marks = [];
+      for (let k = 0; k <= n; k++) {
+        const t = (k + 0.5) / n;
+        const x = floor(xa + t * (xb - xa)), y = floor(ya + t * (yb - ya));
+        const inside = x >= 0 && y >= 0 && x < nx && y < ny;
+        // Away from its own ends, a stretch already drawn hidden (the same
+        // edge seen twice, or another part's) is not drawn again: two
+        // dashed lines on one another look like one solid line.
+        const nearEnd = min(k, n - k) * 0.5 < 2;
+        const free = k < n && !(inside && mask[y * nx + x]) && !(inside && !nearEnd && drawn[y * nx + x]);
+        if (free && inside) marks.push(y * nx + x);
+        if (free && start < 0) start = k;
+        else if (!free && start >= 0) {
+          const s0 = start / n, s1 = k / n;
+          ka.push(start === 0 ? hka[s] : -1);
+          kb.push(k === n ? hkb[s] : -1);
+          pts.push(ua + s0 * (ub - ua), va + s0 * (vb - va), ua + s1 * (ub - ua), va + s1 * (vb - va));
+          start = -1;
+        }
+      }
+      for (const m of marks) drawn[m] = 1;
+    }
+    p.hidden = joinLines(chain(ka, kb, pts, nv, 4 * px, 0.2 * px), 1.5 * px);
+  }
+}
+
+// Joins polylines whose ends meet (within tol) and run on in nearly the same
+// direction (within 30°), so a dashed line's pattern runs on along it: where
+// a line is made of many short pieces, each piece would start its own dash,
+// and a dashed line would look solid.
+export function joinLines(lines, tol, turn = 30) {
+  const key = (x, y) => `${Math.round(x / tol)},${Math.round(y / tol)}`;
+  const at = new Map();
+  const ends = (L) => [[L[0], L[1]], [L[L.length - 2], L[L.length - 1]]];
+  const live = lines.map((L) => Array.from(L));
+  const add = (i) => {
+    for (const [x, y] of ends(live[i])) {
+      const k = key(x, y);
+      if (!at.has(k)) at.set(k, new Set());
+      at.get(k).add(i);
+    }
+  };
+  const drop = (i) => {
+    for (const [x, y] of ends(live[i])) at.get(key(x, y))?.delete(i);
+  };
+  live.forEach((_, i) => add(i));
+  const dir = (ax, ay, bx, by) => {
+    const l = hypot(bx - ax, by - ay) || 1;
+    return [(bx - ax) / l, (by - ay) / l];
+  };
+  for (let i = 0; i < live.length; i++) {
+    if (!live[i]) continue;
+    for (let grew = true; grew; ) {
+      grew = false;
+      const L = live[i];
+      const n = L.length;
+      const [ex, ey] = [L[n - 2], L[n - 1]];
+      const out = dir(L[n - 4], L[n - 3], ex, ey);
+      const near = [];
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const j of at.get(`${Math.round(ex / tol) + dx},${Math.round(ey / tol) + dy}`) ?? []) near.push(j);
+      for (const j of near) {
+        if (j === i || !live[j]) continue;
+        let M = live[j];
+        const m = M.length;
+        if (hypot(M[m - 2] - ex, M[m - 1] - ey) <= tol && hypot(M[0] - ex, M[1] - ey) > tol) {
+          const r = [];
+          for (let q = m - 2; q >= 0; q -= 2) r.push(M[q], M[q + 1]);
+          M = r;
+        }
+        if (hypot(M[0] - ex, M[1] - ey) > tol) continue;
+        const on = dir(M[0], M[1], M[2], M[3]);
+        if (out[0] * on[0] + out[1] * on[1] < cos((turn * PI) / 180)) continue;
+        drop(i);
+        drop(j);
+        live[i] = [...L, ...M.slice(2)];
+        live[j] = null;
+        add(i);
+        grew = true;
+        break;
+      }
+    }
+  }
+  return live.filter(Boolean).map((L) => Float64Array.from(L));
 }
 
 // Joins pieces end to end into polylines. Pieces shorter than minLen that
@@ -703,7 +838,18 @@ export const scaleText = (s) => (s >= 1 ? `${round(s)}:1` : `1:${round(1 / s)}`)
 
 // A3 landscape (ISO 5457): a 20 mm filing edge on the left, 10 mm elsewhere.
 // The grid reference border is the outer 5 mm of that margin next to the frame.
-const SHEET = { w: 420, h: 297, left: 20, top: 10, right: 410, bottom: 287, grid: 5 };
+// The other sizes (ISO 5457 and ISO 216): A4 upright, A3 to A0 across, each
+// with the same margins, so the frame and its grid of 50 mm fields grow
+// with the sheet and the title block stays 180 mm wide in the corner.
+export const SHEETS = { A4: [210, 297], A3: [420, 297], A2: [594, 420], A1: [841, 594], A0: [1189, 841] };
+const sheetOf = (name = "A3") => {
+  const size = SHEETS[name];
+  if (!size) throw new Error(`The sheet is one of ${Object.keys(SHEETS).join(", ")}, not ${JSON.stringify(name)}.`);
+  const [w, h] = size;
+  return { name, w, h, left: 20, top: 10, right: w - 10, bottom: h - 10, grid: 5 };
+};
+// The sheet being drawn: set by planSheet and sheetSVG from their size.
+let SHEET = sheetOf("A3");
 // The title block (ISO 7200): 180 mm wide, three 9 mm rows, at the bottom
 // right against the frame, with a 9 mm strip above it for the projection,
 // scale and units.
@@ -715,7 +861,11 @@ const FONT = 'font-family="Helvetica, Arial, sans-serif"';
 const INK = 'fill="#000" stroke="none"';
 // Room kept around the views for dimensions, the cutting line's letters and
 // the section's name, clear of the centring marks.
-const ROOM = { left: 28, top: 18, right: 12, bottom: 24, gapX: 28, gapY: 32 };
+const ROOM_BASE = { left: 28, top: 18, right: 12, bottom: 24, gapX: 28, gapY: 32 };
+// A drawing of a few parts carries its holes' sizes and positions and its
+// steps between the views, so it gets wider gaps.
+const ROOM_SIZED = { ...ROOM_BASE, gapX: 46, gapY: 44, right: 30 };
+let ROOM = ROOM_BASE;
 const DIM_OFF = 13; // from a view to its dimension line
 
 // ---- lettering ----
@@ -932,14 +1082,21 @@ export function outlineBox(parts, view) {
 //   isometric view's box (outlineBox), or null for none.
 // Returns { scale, at: { front, top, side, section: { x, y, w, h } }, boxes,
 // iso: { s, x, y, w, h } or null }.
-export function planSheet({ bounds, axis, projection = "first", isoBox = null }) {
+export function planSheet({ bounds, axis, projection = "first", isoBox = null, size = "A3", roomy = false }) {
+  ROOM = roomy ? ROOM_SIZED : ROOM_BASE;
+  SHEET = sheetOf(size);
   const names = { front: "front", top: "top", side: sideViewOf(projection), section: SECTION_VIEWS[axis] };
   const boxes = Object.fromEntries(Object.entries(names).map(([k, name]) => [k, viewBox(bounds, name)]));
   const sizes = Object.fromEntries(Object.entries(boxes).map(([k, b]) => [k, [b[2] - b[0], b[3] - b[1]]]));
   let options = [], scale = 0;
+  // Wider gaps only where they do not cost a smaller scale.
   for (const s of SCALES) {
-    options = layouts(sizes, s, projection, "corner");
-    if (!options.length) options = layouts(sizes, s, projection, "end");
+    for (const room of roomy ? [ROOM_SIZED, ROOM_BASE] : [ROOM_BASE]) {
+      ROOM = room;
+      options = layouts(sizes, s, projection, "corner");
+      if (!options.length) options = layouts(sizes, s, projection, "end");
+      if (options.length) break;
+    }
     if (options.length) {
       scale = s;
       break;
@@ -1047,8 +1204,7 @@ function dimension(kind, a, b, edge, off, label) {
   const seg = (p, q) => `M${c2(p[0])} ${c2(p[1])}L${c2(q[0])} ${c2(q[1])}`;
   const d = [seg(P(a, edge + dir * 1.5), P(a, line + dir * 2)), seg(P(b, edge + dir * 1.5), P(b, line + dir * 2))];
   const short = abs(b - a) < 8;
-  d.push(short ? seg(P(min(a, b) - 6, line), P(max(a, b) + 6, line)) : seg(P(a, line), P(b, line)));
-  out.push(`<path d="${d.join("")}"/>`);
+  out.push(`<path d="${d.join("")}"/><path class="dim-line" d="${short ? seg(P(min(a, b) - 6, line), P(max(a, b) + 6, line)) : seg(P(a, line), P(b, line))}"/>`);
   const lo = P(min(a, b), line), hi = P(max(a, b), line);
   const along = horizontal ? [1, 0] : [0, 1];
   const s = short ? 1 : -1;
@@ -1086,7 +1242,7 @@ function projectionSymbol(x, y, first) {
 const GRID_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 function fieldsAlong(lo, hi, mid) {
   const cuts = [lo];
-  for (let b = mid - 50 * floor((mid - lo) / 50); b < hi - 1e-9; b += 50) if (b > lo + 1e-9) cuts.push(b);
+  for (let b = mid - 50 * floor((mid - lo) / 50); b < hi - 25; b += 50) if (b > lo + 25) cuts.push(b);
   cuts.push(hi);
   return cuts;
 }
@@ -1109,10 +1265,12 @@ function frame() {
     out.push(mark(L - g / 2, y, GRID_LETTERS[i]), mark(R + g / 2, y, GRID_LETTERS[i]));
   }
   out.push("</g>\n");
-  // Centring marks: from the grid border to 10 mm inside the frame.
-  out.push(`<path id="centring-marks" stroke-width="${FRAME}" stroke-linecap="butt" d="M${cx} ${T - g}V${T + 10}M${cx} ${B + g}V${B - 10}M${L - g} ${cy}H${L + 10}M${R + g} ${cy}H${R - 10}"/>\n`);
+  // Centring marks: from the grid border to 10 mm inside the frame, except
+  // into the title block where it spans the middle (on A4).
+  const under = cx > R - TITLE.w ? B : B - 10;
+  out.push(`<path id="centring-marks" stroke-width="${FRAME}" stroke-linecap="butt" d="M${cx} ${T - g}V${T + 10}M${cx} ${B + g}V${under}M${L - g} ${cy}H${L + 10}M${R + g} ${cy}H${R - 10}"/>\n`);
   // The size, in the bottom border at the right corner (ISO 5457).
-  out.push(text(R - 1, B + g / 2 + 1.25, 3.5, "A3", `id="sheet-size" text-anchor="end" ${INK}`), "\n");
+  out.push(text(R - 1, B + g / 2 + 1.25, 3.5, SHEET.name, `id="sheet-size" text-anchor="end" ${INK}`), "\n");
   return out.join("");
 }
 
@@ -1122,7 +1280,7 @@ function frame() {
 function titleBlock(f, scale, first) {
   const R = SHEET.right, B = SHEET.bottom, X = R - TITLE.w, row = TITLE.row;
   const top = B - 3 * row, strip = top - row;
-  const out = [`<g id="title-block" stroke-width="${THIN}">\n`];
+  const out = [`<g id="title-block" data-layer="TITLE" stroke-width="${THIN}">\n`];
   const lines = [];
   // A cell: its label small at the top left, its value below, fitted to the
   // cell, on two lines where `two` allows. Text that cannot fit is an error
@@ -1193,10 +1351,10 @@ function titleBlock(f, scale, first) {
 //   where planSheet found room for it. section: from sectionView.
 // Returns { svg, scale, iso, titles } where scale is e.g. "1:5", iso says
 // whether the isometric view was drawn, and titles is what titleLines made.
-export function sheetSVG({ info = {}, bounds, views, section, projection = "first" }) {
+export function sheetSVG({ info = {}, bounds, views, section, projection = "first", size = "A3", detail = null, roomy }) {
   const first = projection !== "third";
   const isoView = views.iso?.parts.length ? views.iso : null;
-  const { scale, at, boxes, names, iso } = planSheet({ bounds, axis: section.axis, projection, isoBox: isoView?.box });
+  const { scale, at, boxes, names, iso } = planSheet({ bounds, axis: section.axis, projection, isoBox: isoView?.box, size, roomy: roomy ?? new Set(["front", "top", "side"].flatMap((k) => views[k].parts.map((p) => p.name))).size <= MOST_PARTS });
   // Model millimetres in a view to paper millimetres (paper's y runs down).
   const map = (k) => ({ tx: (pu) => at[k].x + (pu - boxes[k][0]) * scale, ty: (pv) => at[k].y + (boxes[k][3] - pv) * scale });
   // Wide lines for outlines and cut faces, narrow ones (half as wide) for
@@ -1225,13 +1383,22 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   out.push(`<metadata><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description rdf:about="">${dc.filter(([, v]) => v).map(([k, v]) => `<dc:${k}>${xml(v)}</dc:${k}>`).join("")}</rdf:Description></rdf:RDF></metadata>\n`);
   out.push(`<rect width="${SHEET.w}" height="${SHEET.h}" fill="#fff"/>\n`);
   out.push(`<g fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" ${FONT}>\n`);
-  out.push(frame());
+  out.push(`<g data-layer="FRAME">\n${frame()}</g>\n`);
 
   // The three views, and the isometric one.
   for (const k of ["front", "top", "side"]) {
     const { tx, ty } = map(k);
-    out.push(`<g id="view-${names[k]}" class="view" data-view="${names[k]}" stroke-width="${wide}">\n`);
-    for (const p of views[k].parts) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
+    out.push(`<g id="view-${names[k]}" class="view" data-view="${names[k]}" data-layer="VISIBLE" stroke-width="${wide}">\n`);
+    // Hidden edges, where asked for: narrow and dashed (ISO 128-20 type 02:
+    // dashes 12 line widths long, gaps 3), under the visible ones.
+    const hid = views[k].parts.filter((p) => p.hidden?.length);
+    if (hid.length) {
+      const d = max(narrow, 0.25);
+      out.push(`<g class="hidden" data-layer="HIDDEN" stroke-width="${narrow}" stroke-dasharray="${c2(12 * d)} ${c2(3 * d)}" stroke-linecap="butt">\n`);
+      for (const p of hid) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.hidden, tx, ty)}"/>\n`);
+      out.push("</g>\n");
+    }
+    for (const p of views[k].parts) if (p.lines.length) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
     out.push("</g>\n");
   }
   if (iso) {
@@ -1239,7 +1406,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
     const tx = (pu) => iso.x + (pu - b[0]) * iso.s, ty = (pv) => iso.y + (b[3] - pv) * iso.s;
     // No scale is given: an isometric view foreshortens every axis, so
     // nothing on it is measured (it is a picture of the part).
-    out.push(`<g id="view-iso" class="view" data-view="iso" stroke-width="${wide}">\n`);
+    out.push(`<g id="view-iso" class="view" data-view="iso" data-layer="VISIBLE" stroke-width="${wide}">\n`);
     for (const p of isoView.parts) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
     out.push("</g>\n");
   }
@@ -1247,8 +1414,8 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   // The section: what lies beyond the cut, then the cut faces, hatched.
   {
     const { tx, ty } = map("section");
-    out.push(`<g id="section-A" class="section" data-axis="${section.axis}" data-offset="${fmt(section.offset)}" data-area="${fmt(section.area)}">\n`);
-    out.push(`<g class="beyond" stroke-width="${wide}">\n`);
+    out.push(`<g id="section-A" class="section" data-axis="${section.axis}" data-offset="${fmt(section.offset)}" data-area="${fmt(section.area)}" data-layer="SECTION">\n`);
+    out.push(`<g class="beyond" data-layer="VISIBLE" stroke-width="${wide}">\n`);
     for (const p of section.beyond ?? []) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(p.lines, tx, ty)}"/>\n`);
     out.push("</g>\n");
     section.parts.forEach((p, i) => {
@@ -1258,7 +1425,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
       for (const L of loops) for (let n = 0; n < L.length; n++) (lo[n % 2] = min(lo[n % 2], L[n])), (hi[n % 2] = max(hi[n % 2], L[n]));
       const spacing = min([2.4, 3.2, 1.8, 4][(i >> 1) % 4], max(0.6, min(hi[0] - lo[0], hi[1] - lo[1]) / 3));
       out.push(`<g class="cut" data-part="${xml(p.name)}" data-area="${fmt(p.area)}">`);
-      out.push(`<path class="hatch" stroke-width="${narrow}" d="${hatch(loops, i % 2 ? -45 : 45, spacing)}"/>`);
+      out.push(`<path class="hatch" stroke-width="${narrow}" data-layer="HATCH" d="${hatch(loops, i % 2 ? -45 : 45, spacing)}"/>`);
       out.push(`<path class="cut-outline" stroke-width="${wide}" d="${loops.map((L) => `${pathOf([L], (q) => q, (q) => q)}Z`).join("")}"/></g>\n`);
     });
     // The name goes just above what the section draws, which can be well
@@ -1284,7 +1451,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
     const look = section.axis === "x" ? [1, 0] : section.axis === "y" ? [0, -1] : [0, 1];
     const ends = vertical ? [[c, r.y - 6], [c, r.y + r.h + 6]] : [[r.x - 6, c], [r.x + r.w + 6, c]];
     const inner = vertical ? [[c, r.y], [c, r.y + r.h]] : [[r.x, c], [r.x + r.w, c]];
-    out.push(`<g id="cutting-line" data-view="${host}">\n`);
+    out.push(`<g id="cutting-line" data-view="${host}" data-layer="SECTION">\n`);
     out.push(`<path stroke-width="${narrow}" stroke-dasharray="8 1.5 0.5 1.5" d="M${c2(ends[0][0])} ${c2(ends[0][1])}L${c2(ends[1][0])} ${c2(ends[1][1])}"/>`);
     ends.forEach((e, i) => {
       out.push(`<path stroke-width="${wide}" stroke-linecap="butt" d="M${c2(e[0])} ${c2(e[1])}L${c2(inner[i][0])} ${c2(inner[i][1])}"/>`);
@@ -1302,7 +1469,7 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
   {
     const size = [0, 1, 2].map((a) => bounds[a + 3] - bounds[a]);
     const f = at.front, t = at.top, low = first ? t : f;
-    out.push(`<g id="dimensions" stroke-width="${narrow}">\n`);
+    out.push(`<g id="dimensions" data-layer="DIMENSIONS" stroke-width="${narrow}">\n`);
     out.push(dimension("height", f.y, f.y + f.h, f.x, -DIM_OFF, dimensionText(size[2])), "\n");
     out.push(dimension("depth", t.y, t.y + t.h, t.x, -DIM_OFF, dimensionText(size[1])), "\n");
     // In third angle a cut across X ends under the front view, so its letter
@@ -1312,11 +1479,506 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
     out.push("</g>\n");
   }
 
+  // Centre lines, and the holes' diameters and positions, kept clear of
+  // everything above.
+  const taken = [];
+  const overall = { lines: [], thin: [] };
+  const pad = (r, d = 1) => [r.x - d, r.y - d, r.x + r.w + d, r.y + r.h + d];
+  for (const k of ["front", "top", "side", "section"]) taken.push(pad(at[k]));
+  if (iso) taken.push(pad(iso));
+  {
+    const f0 = at.front, t0 = at.top, low = first ? t0 : f0;
+    // The overall sizes, part by part: their numbers are taken, their
+    // dimension lines may not be crossed by a leader, and their extension
+    // lines may be crossed (by another extension line) but not written on.
+    const size3 = [0, 1, 2].map((a) => bounds[a + 3] - bounds[a]);
+    const under = !first && section.axis === "x" ? 6 : 0;
+    for (const [V, n] of [[f0, size3[2]], [t0, size3[1]]]) {
+      const x = V.x - DIM_OFF, w = textWidth(dimensionText(n), 3.5), m = V.y + V.h / 2;
+      taken.push([x - 5.5, m - w / 2 - 1.5, x - 0.5, m + w / 2 + 1.5]);
+      overall.lines.push([x - 0.6, V.y - 3.5, x + 0.6, V.y + V.h + 3.5]);
+      overall.thin.push([x - 2, V.y - 0.3, V.x, V.y + 0.3], [x - 2, V.y + V.h - 0.3, V.x, V.y + V.h + 0.3]);
+    }
+    {
+      const y = low.y + low.h + DIM_OFF - 2 + under, w = textWidth(dimensionText(size3[0]), 3.5), m = low.x + low.w / 2;
+      taken.push([m - w / 2 - 1.5, y - 5, m + w / 2 + 1.5, y - 0.5]);
+      overall.lines.push([low.x - 3.5, y - 0.6, low.x + low.w + 3.5, y + 0.6]);
+      overall.thin.push([low.x - 0.3, low.y + low.h, low.x + 0.3, y + 2], [low.x + low.w - 0.3, low.y + low.h, low.x + low.w + 0.3, y + 2]);
+    }
+    const host = at[section.axis === "y" ? "top" : "front"];
+    // The cutting line's ends, arrows and letters.
+    const { tx: hx, ty: hy } = map(section.axis === "y" ? "top" : "front");
+    if (section.axis === "x") {
+      const c = hx(section.offset);
+      taken.push([c - 13, host.y - 15, c + 2, host.y], [c - 13, host.y + host.h, c + 2, host.y + host.h + 15]);
+      // The line itself, across the view: no label on it.
+      overall.thin.push([c - 0.6, host.y, c + 0.6, host.y + host.h]);
+    } else {
+      // Across Y the letters sit under the line (the arrows look up); across Z, over it.
+      const c = hy(section.offset), s = section.axis === "y" ? 1 : -1;
+      const [y0, y1] = s < 0 ? [c - 12, c + 2] : [c - 2, c + 12];
+      taken.push([host.x - 14, y0, host.x, y1], [host.x + host.w, y0, host.x + host.w + 14, y1]);
+      overall.thin.push([host.x, c - 0.6, host.x + host.w, c + 0.6]);
+    }
+    // The section's name.
+    taken.push([at.section.x - 4, at.section.y - 12, at.section.x + at.section.w + 4, at.section.y]);
+  }
+  taken.push([SHEET.right - TITLE.w - 2, SHEET.bottom - TITLE.h - 2, SHEET.right, SHEET.bottom]);
+  // The centring marks reach 10 mm into the frame.
+  taken.push([SHEET.w / 2 - 1, SHEET.top, SHEET.w / 2 + 1, SHEET.top + 11], [SHEET.w / 2 - 1, SHEET.bottom - 11, SHEET.w / 2 + 1, SHEET.bottom]);
+  taken.push([SHEET.left, SHEET.h / 2 - 1, SHEET.left + 11, SHEET.h / 2 + 1], [SHEET.right - 11, SHEET.h / 2 - 1, SHEET.right, SHEET.h / 2 + 1]);
+  const shown = detail ? detailView({ views, at, map, names, scale, wide, narrow, taken, spec: detail }) : null;
+  if (shown) out.push(shown.svg);
+  const marked = annotate({ views, at, map, scale, narrow, taken, keys: ["front", "top", "side"], section, bounds, overall });
+  if (shown?.left_out) marked.notes.left_out.push(shown.left_out);
+  out.push(marked.svg);
+
   out.push(titleBlock(f, scaleText(scale), first));
   // Credit where it belongs: in the filing margin, outside the frame.
-  out.push(text(10, SHEET.bottom, 1.8, "Made with Draftsman", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
+  out.push(text(10, SHEET.bottom, 1.8, "Made with Draftsman", `id="credit" data-layer="FRAME" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n");
   out.push("</g>\n</svg>\n");
-  return { svg: out.join(""), scale: scaleText(scale), iso: Boolean(iso), titles: { title, subtitle, shortened } };
+  return { svg: out.join(""), scale: scaleText(scale), iso: Boolean(iso), titles: { title, subtitle, shortened }, marks: marked.notes, detail: shown?.info ?? null };
+}
+
+// ---- centre lines and holes ----
+// Rectangles on paper: [x0, y0, x1, y1].
+const meets = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+// Does the segment from p to q pass through rectangle r?
+function crosses(p, q, r) {
+  let t0 = 0, t1 = 1;
+  const d = [q[0] - p[0], q[1] - p[1]];
+  for (let i = 0; i < 2; i++) {
+    if (abs(d[i]) < 1e-12) {
+      if (p[i] < r[i] || p[i] > r[i + 2]) return false;
+      continue;
+    }
+    let a = (r[i] - p[i]) / d[i], b = (r[i + 2] - p[i]) / d[i];
+    if (a > b) [a, b] = [b, a];
+    t0 = max(t0, a);
+    t1 = min(t1, b);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+// The long-dash-dot of centre lines and cutting lines (ISO 128-20 type 04).
+const CHAIN = "8 1.5 0.5 1.5";
+// A centre line beyond the outline it centres, on paper (ISO 129-1 suggests a few mm).
+const CENTRE_OVER = 2.5;
+// Diameters smaller than this on paper are not called out.
+const SMALLEST_HOLE = 2;
+// Holes at more places than this along a view's width or height get no
+// position dimensions: they would crowd the sheet.
+const MOST_POSITIONS = 6;
+// Drawings of more parts than this get centre lines but no hole sizes.
+const MOST_PARTS = 3;
+
+// Centre lines of holes and turned pieces in the views. On a drawing of a
+// few parts, also every size a workshop needs that the overall sizes do not
+// give, each once, on the view that shows it best:
+// - diameters of holes and of bosses and turned steps, on the view that
+//   shows them as circles ("4× ⌀9"; a blind hole with its depth);
+// - their positions, as running dimensions from the largest part's left and
+//   bottom edges;
+// - on the section: holes and bosses whose axis lies in its plane and are
+//   not sized elsewhere, as a length with the diameter sign, and the
+//   heights of its steps and the widths of its walls (plate and wall
+//   thicknesses, a boss's height above a plate), as running dimensions.
+// Labels go where nothing else is. A leader runs from outside the outline,
+// on the side nearest its hole, and crosses no dimension line, no text and
+// no other leader. taken: rectangles already used on paper.
+// Returns { svg, notes: { centre_lines, holes: [{ view, text, from }],
+// positions, sizes, fitted: [{ diameter, within }], left_out: [] } }.
+function annotate({ views, at, map, scale, narrow, taken, keys, section, bounds, overall = { lines: [], thin: [] } }) {
+  const centre = [], dims = [];
+  const notes = { centre_lines: 0, holes: [], positions: 0, sizes: 0, fitted: [], left_out: [] };
+  // Holes are sized and placed on a part drawing, or an assembly of a few
+  // parts; a bigger assembly gets centre lines only (its parts' sizes
+  // belong on their own drawings).
+  const count = new Set(keys.flatMap((k) => views[k].parts.map((p) => p.name))).size;
+  const sized = count <= MOST_PARTS;
+  if (!sized && keys.some((k) => views[k].marks?.circles.some((c) => c.kind === "hole" && c.dim)))
+    notes.left_out.push(`hole sizes and positions: an assembly of ${count} parts gets centre lines only (sizes belong on each part's own drawing)`);
+  // Extension lines: a label may not sit on one; a leader may cross one.
+  const thin = [...overall.thin];
+  // Dimension lines: neither a label nor a leader may touch one.
+  const dimLines = [...overall.lines];
+  const leaders = [];
+  const free = (r) => r[0] >= SHEET.left + 1 && r[1] >= SHEET.top + 1 && r[2] <= SHEET.right - 1 && r[3] <= SHEET.bottom - 1 && ![...taken, ...thin, ...dimLines].some((t) => meets(t, r));
+  const seg = (x0, y0, x1, y1) => `M${c2(x0)} ${c2(y0)}L${c2(x1)} ${c2(y1)}`;
+  // Sizes given once: features by their key, as they are dimensioned.
+  const done = new Set();
+
+  // ---- centre lines ----
+  for (const k of keys) {
+    const marks = views[k].marks;
+    if (!marks) continue;
+    const { tx, ty } = map(k);
+    // One cross per centre, as big as its largest circle; an axis per turned piece or hole seen from the side.
+    const crosses_ = [];
+    for (const c of marks.circles) {
+      const x = tx(c.u), y = ty(c.v), r = c.r * scale;
+      if (r < 0.75) continue;
+      const same = crosses_.find((q) => hypot(q.x - x, q.y - y) < 0.3);
+      if (same) same.r = max(same.r, r);
+      else crosses_.push({ x, y, r });
+    }
+    const d = [];
+    for (const { x, y, r } of crosses_) {
+      const L = r + CENTRE_OVER;
+      // A short dash crosses at the centre; for a circle big enough, a gap
+      // and a long dash out past the circle.
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        if (r < 3) d.push(seg(x, y, x + dx * L, y + dy * L));
+        else {
+          const a = min(1.5, r / 3);
+          d.push(seg(x, y, x + dx * a, y + dy * a), seg(x + dx * (a + 1), y + dy * (a + 1), x + dx * L, y + dy * L));
+        }
+      }
+    }
+    if (d.length) centre.push(`<path data-view="${k}" d="${d.join("")}"/>`);
+    notes.centre_lines += crosses_.length;
+    const axes = [];
+    for (const a of marks.axes) {
+      if (a.r * scale < 0.75) continue;
+      let p = [tx(a.u0), ty(a.v0)], q = [tx(a.u1), ty(a.v1)];
+      const l = hypot(q[0] - p[0], q[1] - p[1]);
+      if (l < 2) continue;
+      const e = [(q[0] - p[0]) / l, (q[1] - p[1]) / l];
+      p = [p[0] - e[0] * CENTRE_OVER, p[1] - e[1] * CENTRE_OVER];
+      q = [q[0] + e[0] * CENTRE_OVER, q[1] + e[1] * CENTRE_OVER];
+      // The same axis twice (a bore in a boss): one line, the longer.
+      const same = axes.find((o) => abs((o.p[0] - p[0]) * e[1] - (o.p[1] - p[1]) * e[0]) < 0.3 && abs(o.e[0] * e[1] - o.e[1] * e[0]) < 1e-3);
+      if (same) {
+        const t = (pt) => (pt[0] - same.p[0]) * same.e[0] + (pt[1] - same.p[1]) * same.e[1];
+        const lo = min(0, t(p), t(q)), hi = max(same.len, t(p), t(q));
+        same.p = [same.p[0] + same.e[0] * lo, same.p[1] + same.e[1] * lo];
+        same.len = hi - lo;
+      } else axes.push({ p, e, len: hypot(q[0] - p[0], q[1] - p[1]) });
+    }
+    if (axes.length) centre.push(`<path data-view="${k}" stroke-dasharray="${CHAIN}" d="${axes.map((a) => seg(a.p[0], a.p[1], a.p[0] + a.e[0] * a.len, a.p[1] + a.e[1] * a.len)).join("")}"/>`);
+    notes.centre_lines += axes.length;
+  }
+
+  // Running dimensions (ISO 129-1): one line from an origin, each value at
+  // its own arrow, so any number of stops takes one line. horizontal: the
+  // line runs across, over (side -1) or under (side 1) the rectangle V;
+  // else up and down, left (-1) or right (1) of it. stops: [{ at, from,
+  // lbl }] on paper, at along the line, from where its extension line starts.
+  // origin: { at, from }. Returns true if it found room.
+  const running = (horizontal, side, V, origin, stops, kind, view) => {
+    if (!stops.length) return true;
+    stops = stops.map((t) => ({ ...t, w: textWidth(t.lbl, 3.5) }));
+    const edge = horizontal ? (side < 0 ? V.y : V.y + V.h) : side < 0 ? V.x : V.x + V.w;
+    for (let level = 0; level < 6; level++) {
+      const line = edge + side * (7 + 6 * level);
+      // Values read along their extension lines, on the far side of the line.
+      const rects = stops.map((t) => (horizontal ? (side < 0 ? [t.at - 4.5, line - 1.5 - t.w - 1, t.at + 0.8, line - 1] : [t.at - 4.5, line + 1, t.at + 0.8, line + 1.5 + t.w + 1]) : side > 0 ? [line + 1, t.at - 4.5, line + 1.5 + t.w + 1, t.at + 0.8] : [line - 1.5 - t.w - 1, t.at - 4.5, line - 1, t.at + 0.8]));
+      const ats = [origin.at, ...stops.map((t) => t.at)];
+      const lo = min(...ats), hi = max(...ats);
+      const lineRect = horizontal ? [lo - 1, line - 0.6, hi + 1, line + 0.6] : [line - 0.6, lo - 1, line + 0.6, hi + 1];
+      if (![...rects, lineRect].every(free)) continue;
+      // No leader may cross the dimension line.
+      if (leaders.some(([p, q]) => crosses(p, q, lineRect))) continue;
+      // Its extension lines may not run through text either.
+      const exts = [origin, ...stops].map((t) => (horizontal ? [t.at - 0.3, min(t.from, line), t.at + 0.3, max(t.from, line)] : [min(t.from, line), t.at - 0.3, max(t.from, line), t.at + 0.3]));
+      const hit = exts.flatMap((r) => taken.filter((t) => meets(t, r) && !(t[0] <= V.x && t[1] <= V.y && t[2] >= V.x + V.w && t[3] >= V.y + V.h)));
+      if (hit.length) continue;
+      const d = [], o = [];
+      const P = (along, acr) => (horizontal ? [along, acr] : [acr, along]);
+      const segp = (p, q) => `M${c2(p[0])} ${c2(p[1])}L${c2(q[0])} ${c2(q[1])}`;
+      for (const t of [origin, ...stops]) d.push(segp(P(t.at, t.from), P(t.at, line + side * 2)));
+      const dimLine = `<path class="dim-line" d="${segp(P(lo, line), P(hi, line))}"/>`;
+      o.push(`<circle cx="${c2(P(origin.at, line)[0])}" cy="${c2(P(origin.at, line)[1])}" r="0.75"/>`);
+      for (const t of stops) {
+        const tip = P(t.at, line), s = Math.sign(t.at - origin.at) || 1;
+        o.push(arrow(tip[0], tip[1], horizontal ? s : 0, horizontal ? 0 : s));
+        const attrs = `class="dimension" data-dimension="${kind}" data-view="${view}" ${INK}`;
+        if (horizontal) {
+          const y = side < 0 ? line - 1.5 : line + 1.5 + t.w;
+          o.push(text(t.at - 1.2, y, 3.5, t.lbl, `${attrs} transform="rotate(-90 ${c2(t.at - 1.2)} ${c2(y)})"`));
+        } else o.push(text(side > 0 ? line + 1.5 : line - 1.5 - t.w, t.at - 1.2, 3.5, t.lbl, attrs));
+      }
+      dims.push(`<path d="${d.join("")}"/>${dimLine}${o.join("")}`);
+      taken.push(...rects);
+      dimLines.push(lineRect);
+      thin.push(...exts);
+      return true;
+    }
+    return false;
+  };
+
+  // A size across two lines on paper: a dimension line between a and b,
+  // over or beside V, standing off it at the first free level.
+  const across = (horizontal, side, V, a, b, fa, fb, label, view) => {
+    const edge = horizontal ? (side < 0 ? V.y : V.y + V.h) : side < 0 ? V.x : V.x + V.w;
+    const w = textWidth(label, 3.5);
+    for (let level = 0; level < 6; level++) {
+      const line = edge + side * (7 + 6 * level);
+      const mid = (a + b) / 2;
+      const rect = horizontal ? [mid - w / 2 - 1, line - 4.5, mid + w / 2 + 1, line - 0.5] : [line - 4.5, mid - w / 2 - 1, line - 0.5, mid + w / 2 + 1];
+      const lineRect = horizontal ? [min(a, b) - 1, line - 0.6, max(a, b) + 1, line + 0.6] : [line - 0.6, min(a, b) - 1, line + 0.6, max(a, b) + 1];
+      if (!free(rect) || !free(lineRect)) continue;
+      const P = (along, acr) => (horizontal ? [along, acr] : [acr, along]);
+      const segp = (p, q) => `M${c2(p[0])} ${c2(p[1])}L${c2(q[0])} ${c2(q[1])}`;
+      const out = [`<path d="${segp(P(a, fa), P(a, line + side * 2))}${segp(P(b, fb), P(b, line + side * 2))}"/><path class="dim-line" d="${segp(P(a, line), P(b, line))}"/>`];
+      const s = Math.sign(b - a) || 1;
+      const pa = P(a, line), pb = P(b, line);
+      out.push(arrow(pa[0], pa[1], horizontal ? -s : 0, horizontal ? 0 : -s), arrow(pb[0], pb[1], horizontal ? s : 0, horizontal ? 0 : s));
+      const attrs = `class="dimension" data-dimension="size" data-view="${view}" text-anchor="middle" ${INK}`;
+      const m = P(mid, line);
+      out.push(horizontal ? text(m[0], m[1] - 1.2, 3.5, label, attrs) : text(m[0] - 1.2, m[1], 3.5, label, `${attrs} transform="rotate(-90 ${c2(m[0] - 1.2)} ${c2(m[1])})"`));
+      dims.push(out.join(""));
+      taken.push(rect);
+      dimLines.push(lineRect);
+      thin.push(horizontal ? [a - 0.3, min(fa, line), a + 0.3, max(fa, line)] : [min(fa, line), a - 0.3, max(fa, line), a + 0.3], horizontal ? [b - 0.3, min(fb, line), b + 0.3, max(fb, line)] : [min(fb, line), b - 0.3, max(fb, line), b + 0.3]);
+      return true;
+    }
+    return false;
+  };
+
+  const sizeText = (c) => `${c.label ?? `⌀${dimensionText(2 * c.r)}`}${c.depth ? `, ${dimensionText(c.depth)} deep` : ""}`;
+  const plans = [];
+  for (const k of sized ? keys : []) {
+    const marks = views[k].marks;
+    if (!marks) continue;
+    const { tx, ty } = map(k);
+    const V = at[k];
+    // Holes, and bosses and turned steps, seen as circles.
+    const round_ = marks.circles.filter((c) => c.dim && (c.kind === "hole" || c.kind === "solid") && 2 * c.r * scale >= SMALLEST_HOLE);
+    // ---- positions: from the largest part's left and bottom edges ----
+    const boxOf = (name) => {
+      const b = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const L of views[k].parts.find((q) => q.name === name)?.lines ?? []) for (let n = 0; n < L.length; n += 2) (b[0] = min(b[0], L[n])), (b[1] = min(b[1], L[n + 1])), (b[2] = max(b[2], L[n])), (b[3] = max(b[3], L[n + 1]));
+      return b;
+    };
+    let datum = null;
+    for (const p of views[k].parts) {
+      const b = boxOf(p.name);
+      if (b[2] > b[0] && (!datum || (b[2] - b[0]) * (b[3] - b[1]) > (datum[2] - datum[0]) * (datum[3] - datum[1]))) datum = b;
+    }
+    const centres = [];
+    for (const c of round_) if (!centres.some((o) => hypot(o.u - c.u, o.v - c.v) < 1e-3 * (1 + abs(c.u)))) centres.push(c);
+    const mid = datum ? [(datum[0] + datum[2]) / 2, (datum[1] + datum[3]) / 2] : [0, 0];
+    // A bore in the middle of the part (a bush, a wheel) is placed by being in the middle.
+    const placed = datum && !(centres.length === 1 && hypot(centres[0].u - mid[0], centres[0].v - mid[1]) < 2e-3 * (datum[2] - datum[0] + datum[3] - datum[1])) ? centres : [];
+    const distinct = (vals) => [...new Set(vals.map((v) => round(v * 100) / 100))].sort((a, b) => a - b);
+    // A centre on the cutting line, in the middle of the part, is placed by
+    // the line itself (the plane of symmetry): its extension line would lie
+    // on the cutting line, so it gets none.
+    const { u: uw, v: vw } = VIEWS[views[k].view];
+    const a = "xyz".indexOf(section?.axis);
+    const onCut = (q, w, lo, hi) => a >= 0 && abs(w[a]) > 0.99 && abs(q - w[a] * section.offset) < 0.01 && abs(q - (lo + hi) / 2) < max(0.05, (hi - lo) * 2e-3);
+    let us = distinct(placed.map((c) => c.u)).filter((u) => u - datum[0] > 0.05 && !onCut(u, uw, datum[0], datum[2]));
+    let vs = distinct(placed.map((c) => c.v)).filter((v) => v - datum[1] > 0.05 && !onCut(v, vw, datum[1], datum[3]));
+    if (placed.some((c) => onCut(c.u, uw, datum[0], datum[2]) || onCut(c.v, vw, datum[1], datum[3]))) notes.on_centre = true;
+    if (us.length > MOST_POSITIONS || vs.length > MOST_POSITIONS) {
+      notes.left_out.push(`hole positions on the ${views[k].view} view (holes at ${max(us.length, vs.length)} places across; say which to dimension)`);
+      us = vs = [];
+    }
+    // Each stop with where its extension line starts on either side (alt: under or left).
+    const reachOf = (cs) => cs.map((c) => c.r * scale + CENTRE_OVER + 1);
+    const across_ = us.map((q) => {
+      const cs = placed.filter((c) => abs(c.u - q) < 0.01), r = reachOf(cs);
+      return { at: tx(q), from: min(...cs.map((c, i) => ty(c.v) - r[i])), alt: max(...cs.map((c, i) => ty(c.v) + r[i])), lbl: dimensionText(q - datum[0]) };
+    });
+    const up = vs.map((q) => {
+      const cs = placed.filter((c) => abs(c.v - q) < 0.01), r = reachOf(cs);
+      return { at: ty(q), from: max(...cs.map((c, i) => tx(c.u) + r[i])), alt: min(...cs.map((c, i) => tx(c.u) - r[i])), lbl: dimensionText(q - datum[1]) };
+    });
+    // The extension lines to come, so labels keep off them.
+    // (And the origins' extension lines, from the datum edges.)
+    const reserved = [...across_.map((t) => [t.at - 0.3, V.y - 45, t.at + 0.3, t.from]), ...up.map((t) => [t.from, t.at - 0.3, V.x + V.w + 45, t.at + 0.3])];
+    if (datum && across_.length) reserved.push([tx(datum[0]) - 0.3, V.y - 45, tx(datum[0]) + 0.3, V.y]);
+    if (datum && up.length) reserved.push([V.x + V.w, ty(datum[1]) - 0.3, V.x + V.w + 45, ty(datum[1]) + 0.3]);
+    thin.push(...reserved);
+    plans.push({ k, V, tx, ty, round_, across_, up, datum, reserved });
+  }
+
+  // ---- diameters on the circles, before the position lines go round them ----
+  const crossesLeader = (p, q) =>
+    leaders.some(([a, b]) => {
+      const d = (u, v, w) => (v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0]);
+      return d(p, q, a) * d(p, q, b) < 0 && d(a, b, p) * d(a, b, q) < 0;
+    });
+  for (const { k, V, tx, ty, round_, across_, up } of plans) {
+    // The sides the position lines will take: kept for them where there is another way.
+    const busy = { top: across_.length > 0, right: up.length > 0 };
+    const own = [V.x - 1, V.y - 1, V.x + V.w + 1, V.y + V.h + 1];
+    // The view's circles and its lines (points a millimetre apart), on paper.
+    const marks = views[k].marks.circles.map((c) => ({ x: tx(c.u), y: ty(c.v), r: c.r * scale }));
+    const ink = [];
+    for (const p of views[k].parts)
+      for (const L of p.lines)
+        for (let n = 2; n < L.length; n += 2) {
+          const x0 = tx(L[n - 2]), y0 = ty(L[n - 1]), x1 = tx(L[n]), y1 = ty(L[n + 1]);
+          const m = max(1, ceil(hypot(x1 - x0, y1 - y0)));
+          for (let i = 0; i <= m; i++) ink.push([x0 + ((x1 - x0) * i) / m, y0 + ((y1 - y0) * i) / m]);
+        }
+    const groups = new Map();
+    for (const c of round_) {
+      if (done.has(c.key)) continue;
+      const label = sizeText(c);
+      const key = `${c.part}|${c.kind}|${label}`;
+      const g = groups.get(key) ?? { label, list: [], source: c.source, error: 0, keys: [] };
+      if (!g.list.some((o) => hypot(o.u - c.u, o.v - c.v) < 1e-3 * (1 + abs(c.u)))) g.list.push(c);
+      g.keys.push(c.key);
+      g.error = max(g.error, c.error ?? 0);
+      groups.set(key, g);
+    }
+    // Biggest first: they have the fewest places to go.
+    for (const g of [...groups.values()].sort((a, b) => b.list[0].r - a.list[0].r)) {
+      const label = `${g.list.length > 1 ? `${g.list.length}× ` : ""}${g.label}`;
+      const w = textWidth(label, 3.5);
+      let best = null;
+      for (const c of g.list) {
+        const cx = tx(c.u), cy = ty(c.v), r = c.r * scale;
+        // The sides of the view, nearest the circle first.
+        const sides = [
+          ["right", V.x + V.w - cx],
+          ["left", cx - V.x],
+          ["top", cy - V.y],
+          ["bottom", V.y + V.h - cy],
+        ].sort((a, b) => a[1] - b[1]);
+        // Places on the part's own face, close by, where no line of the view,
+        // circle or centre line is: a short leader that stays inside.
+        const inside = [];
+        for (const d of [3, 6, 10])
+          for (const an of [-45, -135, 45, 135, 0, 180, -90, 90]) {
+            const a = (an * PI) / 180, ax = cx + cos(a) * (r + d), ay = cy + sin(a) * (r + d);
+            inside.push(cos(a) >= -1e-9 ? { x: ax + 1, y: ay - 1, side: 1, inside: true } : { x: ax - w - 1, y: ay - 1, side: -1, inside: true });
+          }
+        sides.forEach(([side], rank) => {
+          const tries = [];
+          for (const off of [3, 6, 9, 12, 16])
+            for (const shift of [0, -5, 5, -10, 10, -15, 15]) {
+              if (side === "right") tries.push({ x: V.x + V.w + off + 1, y: cy - 2 + shift, side: 1 });
+              else if (side === "left") tries.push({ x: V.x - off - w - 1, y: cy - 2 + shift, side: -1 });
+              else if (side === "top") tries.push({ x: cx + 2 + shift, y: V.y - off, side: 1 });
+              else tries.push({ x: cx + 2 + shift, y: V.y + V.h + off + 3.5, side: 1 });
+            }
+          if (rank === 0) tries.push(...inside);
+          for (const t of tries) {
+              // The label sits on a shoulder; the leader runs from the circle to the shoulder's end.
+              const sx = t.side > 0 ? t.x - 1 : t.x + w + 1, sy = t.y + 1;
+              const rect = [t.x - 1.5, t.y - 4.5, t.x + w + 1.5, t.y + 2.5];
+              const dirx = sx - cx, diry = sy - cy, dl = hypot(dirx, diry);
+              if (dl < r + 3) continue;
+              const px = cx + (dirx / dl) * r, py = cy + (diry / dl) * r;
+              // Not along the paper's axes, where it would run along extension lines.
+              const slope = (Math.atan2(abs(diry), abs(dirx)) * 180) / PI;
+              const cost = t.inside ? dl + 6 + (slope < 15 || slope > 75 ? 10 : 0) : dl + rank * 8 + (slope < 15 || slope > 75 ? 10 : 0) + (busy[side] ? 25 : 0);
+              if (best && cost >= best.cost) continue;
+              if (t.inside) {
+                // Wholly on the view, clear of its lines, circles and centre lines.
+                if (!(rect[0] > V.x && rect[1] > V.y && rect[2] < V.x + V.w && rect[3] < V.y + V.h)) continue;
+                if (marks.some((m) => meets([m.x - m.r - CENTRE_OVER, m.y - m.r - CENTRE_OVER, m.x + m.r + CENTRE_OVER, m.y + m.r + CENTRE_OVER], rect))) continue;
+                if (ink.some(([x, y]) => x > rect[0] && x < rect[2] && y > rect[1] && y < rect[3])) continue;
+                if (![...taken, ...thin, ...dimLines].every((q) => (q[0] === own[0] && q[1] === own[1] && q[2] === own[2]) || !meets(q, rect))) continue;
+              } else if (!free(rect)) continue;
+              // The leader may cross its own view and extension lines, but no
+              // dimension line, other view, text or leader.
+              if ([...taken, ...dimLines].some((q) => !(q[0] === own[0] && q[1] === own[1] && q[2] === own[2]) && crosses([px, py], [sx, sy], q))) continue;
+              if (crossesLeader([px, py], [sx, sy])) continue;
+              best = { cost, rect, t, sx, sy, px, py };
+            }
+        });
+      }
+      if (!best) {
+        notes.left_out.push(`the diameter ${label} on the ${views[k].view} view (no room)`);
+        continue;
+      }
+      const { t, sx, sy, px, py, rect } = best;
+      taken.push(rect);
+      leaders.push([[px, py], [sx, sy]]);
+      const ex = t.side > 0 ? t.x + w + 1 : t.x - 1;
+      dims.push(`<path class="leader" d="${seg(px, py, sx, sy)}${seg(sx, sy, ex, sy)}"/>`, arrow(px, py, px - sx, py - sy, 3, 0.5), text(t.x, t.y, 3.5, label, `class="dimension" data-dimension="diameter" data-view="${views[k].view}" ${INK}`));
+      for (const key of g.keys) done.add(key);
+      notes.holes.push({ view: views[k].view, text: label, from: g.source === "script" ? "the script" : "a circle fitted to the view" });
+      if (g.source === "fitted") notes.fitted.push({ diameter: dimensionText(2 * g.list[0].r), within_mm: round(g.error * 1000) / 1000 });
+    }
+  }
+
+  // ---- positions ----
+  for (const { k, V, tx, ty, across_, up, datum, reserved } of plans) {
+    // Its own extension lines were kept clear for it.
+    for (const r of reserved) thin.splice(thin.indexOf(r), 1);
+    if (!datum) continue;
+    const view = views[k].view;
+    // Over the view, else under it; right of it, else left.
+    const alt = (stops) => stops.map((t) => ({ ...t, from: t.alt }));
+    if (running(true, -1, V, { at: tx(datum[0]), from: V.y - 1.5 }, across_, "position", view) || running(true, 1, V, { at: tx(datum[0]), from: V.y + V.h + 1.5 }, alt(across_), "position", view)) notes.positions += across_.length;
+    else notes.left_out.push(`the hole positions across the ${view} view (no room)`);
+    if (running(false, 1, V, { at: ty(datum[1]), from: V.x + V.w + 1.5 }, up, "position", view) || running(false, -1, V, { at: ty(datum[1]), from: V.x - 1.5 }, alt(up), "position", view)) notes.positions += up.length;
+    else notes.left_out.push(`the hole positions up the ${view} view (no room)`);
+  }
+
+  // ---- the section: sizes not given yet ----
+  if (sized && section?.parts.length) {
+    const V = at.section;
+    const { tx, ty } = map("section");
+    const tol = 0.02;
+    const vb = viewBox(bounds, section.view);
+    // Holes and bosses on the plane, not sized on a view: a length with the diameter sign.
+    const inPlane = (section.marks ?? []).filter((m) => m.dim && 2 * m.r * scale >= SMALLEST_HOLE);
+    const walls = [];
+    for (const m of inPlane) {
+      const vertical = abs(m.u1 - m.u0) < abs(m.v1 - m.v0);
+      const c = vertical ? m.u0 : m.v0;
+      walls.push({ vertical, at: c - m.r }, { vertical, at: c + m.r });
+      if (done.has(m.key)) continue;
+      const label = sizeText(m);
+      // Across the walls, beyond the section on the side its ends are nearest.
+      const ok = vertical
+        ? across(true, 1, V, tx(c - m.r), tx(c + m.r), ty(min(m.v0, m.v1)), ty(min(m.v0, m.v1)), label, section.view)
+        : across(false, 1, V, ty(c + m.r), ty(c - m.r), tx(max(m.u0, m.u1)), tx(max(m.u0, m.u1)), label, section.view);
+      if (ok) {
+        done.add(m.key);
+        notes.holes.push({ view: `section A–A`, text: label, from: "the script" });
+      } else notes.left_out.push(`the diameter ${label} on section A–A (no room)`);
+    }
+    // Steps and walls: the levels of the cut faces' straight sides.
+    const hs = [], ws = [];
+    for (const p of section.parts)
+      for (const L of p.loops)
+        for (let n = 0; n < L.length; n += 2) {
+          const m = (n + 2) % L.length;
+          const du = L[m] - L[n], dv = L[m + 1] - L[n + 1], len = hypot(du, dv);
+          if (len * scale < 1) continue;
+          // Each level with how far out its edge reaches, for the extension line.
+          if (abs(dv) < 1e-4 * len) hs.push({ q: L[n + 1], reach: max(L[n], L[m]) });
+          else if (abs(du) < 1e-4 * len) ws.push({ q: L[n], reach: min(L[n + 1], L[m + 1]) });
+        }
+    const levels = (vals, isVertical, lo, hi) => {
+      const out = [];
+      for (const v of vals.map((e) => e.q).sort((a, b) => a - b)) {
+        if (out.some((o) => abs(o - v) < tol)) continue;
+        // Not the walls of a hole or boss (their diameter says it), not the
+        // datum, and not the far side when that is an overall size.
+        if (walls.some((w) => w.vertical === isVertical && abs(w.at - v) < tol)) continue;
+        out.push(v);
+      }
+      return out.filter((v) => v - lo > tol && !(abs(v - hi) < tol && abs(hi - lo - (isVertical ? vb[2] - vb[0] : vb[3] - vb[1])) < tol));
+    };
+    const loV = min(...hs.map((e) => e.q), Infinity), hiV = max(...hs.map((e) => e.q), -Infinity), loU = min(...ws.map((e) => e.q), Infinity), hiU = max(...ws.map((e) => e.q), -Infinity);
+    // The extension line starts just past the far end of the level's edge.
+    const reach = (list, q, far) => far(...list.filter((e) => abs(e.q - q) < tol).map((e) => e.reach));
+    const heights = hs.length ? levels(hs, false, loV, hiV) : [];
+    const widths = ws.length ? levels(ws, true, loU, hiU) : [];
+    const stop = (q, horizontal) => ({ at: horizontal ? tx(q) : ty(q), from: horizontal ? ty(reach(ws, q, min)) + 1.5 : tx(reach(hs, q, max)) + 1.5, lbl: dimensionText(q - (horizontal ? loU : loV)) });
+    if (heights.length) {
+      if (running(false, 1, V, { at: ty(loV), from: tx(reach(hs, loV, max)) + 1.5 }, heights.map((q) => stop(q, false)), "size", section.view)) notes.sizes += heights.length;
+      else notes.left_out.push("the step heights on section A–A (no room)");
+    }
+    if (widths.length) {
+      if (running(true, 1, V, { at: tx(loU), from: ty(reach(ws, loU, min)) + 1.5 }, widths.map((q) => stop(q, true)), "size", section.view)) notes.sizes += widths.length;
+      else notes.left_out.push("the wall widths on section A–A (no room)");
+    }
+  }
+  const svg = [];
+  if (centre.length) svg.push(`<g id="centre-lines" data-layer="CENTRE" stroke-width="${narrow}" stroke-linecap="butt">\n${centre.join("\n")}\n</g>\n`);
+  if (dims.length) svg.push(`<g id="hole-dimensions" data-layer="DIMENSIONS" stroke-width="${narrow}">\n${dims.join("\n")}\n</g>\n`);
+  return { svg: svg.join(""), notes, leaders, dimLines };
 }
 
 // Today's date as it goes in the title block: 2026-01-31.
@@ -1333,16 +1995,189 @@ export const sideViewOf = (projection) => (projection === "third" ? "right" : "l
 // over its workers instead): { svg, scale, iso, section: { axis, offset, area } }.
 // title and date go in the title block, with the rest of info (see sheetSVG).
 // section: { axis, offset }, both optional (see sectionPlane).
-export function drawingSVG(parts, { title, date = today(), info = {}, section, projection = "first", resolution, crease } = {}) {
-  const bounds = modelBounds(parts);
-  const plane = sectionPlane(bounds, section);
+export function drawingSVG(parts, { title, date = today(), info = {}, section, projection = "first", resolution, crease, hidden = false, size = "A3", detail = null } = {}) {
+  // The overall sizes from the surfaces, not the meshes (see surfaceBounds).
+  const bounds = surfaceBounds(parts);
+  // Holes and turned parts, which also decide where the section goes.
+  const features = partFeatures(parts);
+  const { plane, note } = choosePlane(features, bounds, section, parts.length, (axis) => planSheet({ bounds, axis, projection, size, roomy: parts.length <= MOST_PARTS }).scale);
   const opts = { resolution, crease };
-  const views = { front: viewOutline(parts, "front", opts), top: viewOutline(parts, "top", opts), side: viewOutline(parts, sideViewOf(projection), opts) };
+  const flat = { ...opts, hidden };
+  const views = { front: markedView(parts, "front", flat), top: markedView(parts, "top", flat), side: markedView(parts, sideViewOf(projection), flat) };
   // The isometric view is drawn only where the sheet has room for it.
-  if (planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(parts, "iso") }).iso) views.iso = viewOutline(parts, "iso", opts);
+  if (planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(parts, "iso"), size, roomy: parts.length <= MOST_PARTS }).iso) views.iso = viewOutline(parts, "iso", opts);
   const cut = sectionView(parts, plane, opts);
-  const sheet = sheetSVG({ info: { title, date, type: documentType(parts.length), ...info }, bounds, views, section: cut, projection });
-  return { ...sheet, section: { axis: cut.axis, offset: cut.offset, area: cut.area } };
+  cut.marks = sectionMarks(features, plane, cut.view);
+  const sheet = sheetSVG({ info: { title, date, type: documentType(parts.length), ...info }, bounds, views, section: cut, projection, size, detail, roomy: parts.length <= MOST_PARTS });
+  return { ...sheet, section: { axis: cut.axis, offset: cut.offset, area: cut.area, note } };
+}
+
+// ---- detail view ----
+// Polylines on paper cut to the inside of a circle.
+function clipToCircle(lines, cx, cy, r) {
+  const out = [];
+  for (const L of lines) {
+    let cur = null;
+    const inside = (x, y) => (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
+    for (let n = 2; n < L.length; n += 2) {
+      const x0 = L[n - 2], y0 = L[n - 1], x1 = L[n], y1 = L[n + 1];
+      // Where the segment crosses the circle: t in [0, 1].
+      const dx = x1 - x0, dy = y1 - y0, fx = x0 - cx, fy = y0 - cy;
+      const a = dx * dx + dy * dy, b = 2 * (fx * dx + fy * dy), c = fx * fx + fy * fy - r * r;
+      const disc = b * b - 4 * a * c;
+      let t0 = 0, t1 = 1;
+      if (a < 1e-18) continue;
+      if (disc <= 0) {
+        if (!inside(x0, y0)) {
+          cur = null;
+          continue;
+        }
+      } else {
+        const sq = sqrt(disc);
+        t0 = max(0, (-b - sq) / (2 * a));
+        t1 = min(1, (-b + sq) / (2 * a));
+        if (t0 >= t1) {
+          cur = null;
+          continue;
+        }
+      }
+      const ax = x0 + dx * t0, ay = y0 + dy * t0, bx = x0 + dx * t1, by = y0 + dy * t1;
+      if (!cur || t0 > 0) {
+        cur = [ax, ay];
+        out.push(cur);
+      }
+      cur.push(bx, by);
+      if (t1 < 1) cur = null;
+    }
+  }
+  return out.filter((l) => l.length >= 4);
+}
+
+// A detail view: a crowded part of one view drawn again at a larger
+// standard scale, in a free place on the sheet, with its circle and letter
+// on the view it comes from (ISO 128-3). spec: true picks the most crowded
+// place of the three views; or { view: "front", "top" or "side", at: [x, y,
+// z] (mm, its middle), radius (mm) }. Returns { svg, info } or { left_out }.
+function detailView({ views, at, map, names, scale, wide, narrow, taken, spec }) {
+  const keys = ["front", "top", "side"];
+  let k, cx, cy, R;
+  if (spec === true || spec?.at === undefined) {
+    // The most crowded place: line length per 4 mm square of paper.
+    const cell = 4;
+    let best = null;
+    for (const key of spec?.view ? [spec.view === "left" || spec.view === "right" ? "side" : spec.view] : keys) {
+      const { tx, ty } = map(key);
+      const bins = new Map();
+      for (const p of views[key].parts)
+        for (const L of p.lines)
+          for (let n = 2; n < L.length; n += 2) {
+            const x0 = tx(L[n - 2]), y0 = ty(L[n - 1]), x1 = tx(L[n]), y1 = ty(L[n + 1]);
+            const len = hypot(x1 - x0, y1 - y0), m = max(1, ceil(len));
+            for (let i = 0; i < m; i++) {
+              const t = (i + 0.5) / m, kx = floor((x0 + t * (x1 - x0)) / cell), ky = floor((y0 + t * (y1 - y0)) / cell);
+              const b = bins.get(kx * 10000 + ky) ?? { kx, ky, len: 0 };
+              b.len += len / m;
+              bins.set(kx * 10000 + ky, b);
+            }
+          }
+      for (const b of bins.values()) {
+        // Smoothed over the square and its neighbours.
+        let sum = 0;
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) sum += bins.get((b.kx + i) * 10000 + b.ky + j)?.len ?? 0;
+        if (!best || sum > best.sum) best = { key, sum, kx: b.kx, ky: b.ky, bins };
+      }
+    }
+    if (!best) return { left_out: "the detail view (nothing to show)" };
+    k = best.key;
+    // The crowded patch around it: squares at least half as full, joined to it.
+    const peak = best.bins.get(best.kx * 10000 + best.ky).len;
+    const seen = new Set([best.kx * 10000 + best.ky]), todo = [[best.kx, best.ky]];
+    let x0 = best.kx, x1 = best.kx, y0 = best.ky, y1 = best.ky;
+    while (todo.length) {
+      const [i, j] = todo.pop();
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const key = (i + di) * 10000 + j + dj;
+        if (seen.has(key) || (best.bins.get(key)?.len ?? 0) < peak / 2 || seen.size > 60) continue;
+        seen.add(key);
+        todo.push([i + di, j + dj]);
+        (x0 = min(x0, i + di)), (x1 = max(x1, i + di)), (y0 = min(y0, j + dj)), (y1 = max(y1, j + dj));
+      }
+    }
+    cx = ((x0 + x1 + 1) / 2) * cell;
+    cy = ((y0 + y1 + 1) / 2) * cell;
+    R = min(25, max(6, (hypot(x1 - x0 + 1, y1 - y0 + 1) * cell) / 2 + 1));
+  } else {
+    k = spec.view === "left" || spec.view === "right" ? "side" : spec.view ?? "front";
+    if (!keys.includes(k)) throw new Error(`A detail view is of the front, top or side view, not ${JSON.stringify(spec.view)}.`);
+    const { u, v } = VIEWS[names[k]];
+    const { tx, ty } = map(k);
+    const P = spec.at;
+    if (!Array.isArray(P) || P.length !== 3 || !P.every(Number.isFinite)) throw new Error("A detail view's at is a point [x, y, z] in mm.");
+    cx = tx(u[0] * P[0] + u[1] * P[1] + u[2] * P[2]);
+    cy = ty(v[0] * P[0] + v[1] * P[1] + v[2] * P[2]);
+    R = (spec.radius ?? 20 / scale) * scale;
+    if (!(R > 0)) throw new Error("A detail view's radius must be a positive number of mm.");
+  }
+  // The largest standard scale, at least twice the sheet's, whose circle has room.
+  const free = (r) => r[0] >= SHEET.left + 2 && r[1] >= SHEET.top + 2 && r[2] <= SHEET.right - 2 && r[3] <= SHEET.bottom - 2 && !taken.some((t) => meets(t, r));
+  for (const s of SCALES) {
+    if (s < scale * 2 * (1 - 1e-9)) break;
+    // At most 90 mm across on the sheet: a bigger patch is cut down to its middle.
+    const f = s / scale, Rk = min(R, 45 / f), D = Rk * f;
+    if (Rk < R / 2) continue;
+    // Places on a 5 mm grid, nearest the circle on the view first.
+    let spot = null;
+    for (let y = SHEET.top + 2 + D + 8; y + D + 10 <= SHEET.bottom - 2; y += 5)
+      for (let x = SHEET.left + 2 + D; x + D <= SHEET.right - 2; x += 5) {
+        const box = [x - D - 1, y - D - 8, x + D + 1, y + D + 9];
+        if (!free(box)) continue;
+        const d = hypot(x - cx, y - cy);
+        if (!spot || d < spot.d) spot = { x, y, d, box };
+      }
+    if (!spot) continue;
+    // The letter on the parent view, just outside its circle, where it is free.
+    let letter = null;
+    // It may sit over its own view, but on as few of its lines as can be,
+    // and on nothing else.
+    const own = at[k];
+    const { tx: px, ty: py } = map(k);
+    const onLines = (box) => {
+      let n = 0;
+      for (const p of views[k].parts)
+        for (const L of p.lines)
+          for (let i = 0; i < L.length; i += 2) {
+            const x = px(L[i]), y = py(L[i + 1]);
+            if (x > box[0] && x < box[2] && y > box[1] && y < box[3]) n++;
+          }
+      return n;
+    };
+    for (const off of [4, 8, 12])
+      for (const an of [-45, -135, 45, 135, -90, 0, 180, 90]) {
+        const a = (an * PI) / 180, lx = cx + cos(a) * (Rk + off), ly = cy + sin(a) * (Rk + off) + 1.8;
+        const box = [lx - 3, ly - 5, lx + 3, ly + 1];
+        if (!(box[0] >= SHEET.left + 2 && box[1] >= SHEET.top + 2 && !taken.some((t) => meets(t, box) && !(t[0] === own.x - 1 && t[1] === own.y - 1)))) continue;
+        const cost = onLines(box) * 10 + off;
+        if (!letter || cost < letter.cost) letter = { lx, ly, box, cost };
+      }
+    if (!letter) continue;
+    taken.push(spot.box, letter.box, [cx - Rk - 0.5, cy - Rk - 0.5, cx + Rk + 0.5, cy + Rk + 0.5]);
+    const { tx, ty } = map(k);
+    const T = (x, y) => [spot.x + (x - cx) * f, spot.y + (y - cy) * f];
+    const out = [`<g id="detail-B" class="detail" data-view="${names[k]}" data-scale="${scaleText(s)}">\n`];
+    out.push(`<g data-layer="DETAIL" stroke-width="${narrow}"><circle cx="${c2(cx)}" cy="${c2(cy)}" r="${c2(Rk)}"/><circle cx="${c2(spot.x)}" cy="${c2(spot.y)}" r="${c2(D)}"/></g>`);
+    out.push(text(letter.lx, letter.ly, 5, "B", `data-layer="DETAIL" text-anchor="middle" ${INK}`));
+    out.push(`<g data-layer="VISIBLE" stroke-width="${wide}">\n`);
+    for (const p of views[k].parts) {
+      const paper = p.lines.map((L) => Float64Array.from(L, (q, n) => (n % 2 ? ty(q) : tx(q))));
+      const inner = clipToCircle(paper, cx, cy, Rk).map((L) => Float64Array.from(L, (q, n) => (n % 2 ? T(0, q)[1] : T(q, 0)[0])));
+      if (inner.length) out.push(`<path data-part="${xml(p.name)}" d="${pathOf(inner, (q) => q, (q) => q)}"/>\n`);
+    }
+    out.push("</g>\n");
+    out.push(text(spot.x, spot.y + D + 7, 5, `B (${scaleText(s)})`, `id="detail-name" data-layer="DETAIL" text-anchor="middle" ${INK}`));
+    out.push("\n</g>\n");
+    return { svg: out.join(""), info: { view: names[k], scale: scaleText(s), letter: "B" } };
+  }
+  return { left_out: "the detail view (no room on the sheet for it at twice the scale or more)" };
 }
 
 // For the other sheets (floorplan.js): the same frame and title block.

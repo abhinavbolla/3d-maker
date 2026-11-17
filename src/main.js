@@ -12,6 +12,7 @@ import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
 import { makeFloorPlan } from "./app/floorplan.js";
 import { showExamples, exampleScript, tryText } from "./app/examples.js";
+import { mountInspectLine } from "./app/inspect-tools.js";
 
 const $ = (id) => document.getElementById(id);
 const kernel = createKernel();
@@ -59,6 +60,8 @@ const claude = createClaude({
 });
 
 const commands = createCommands({ store, viewport, kernel });
+// While parts are hidden, cut or exploded, a line above the prompt says so.
+const clearView = mountInspectLine({ viewport, dock: $("dock"), before: $("progress") });
 let bridgeActivity = "";
 const bridge = startBridge(commands, {
   onStatus() {},
@@ -335,6 +338,7 @@ const actions = {
     if (!store.state.doc.script) return;
     claude.stop();
     viewport.resetFit();
+    viewport.inspect.clear();
     $("reply").hidden = true;
     await store.commit(emptyDoc());
     say("New model. Undo brings the previous one back.");
@@ -350,6 +354,7 @@ const actions = {
       return say("That file is not a Draftsman model.", 6000);
     }
     viewport.resetFit();
+    viewport.inspect.clear();
     await store.load({ ...emptyDoc(), ...doc, session: null }, file.name).catch((err) => say(err.message, 8000));
     viewport.fitIfNew();
   },
@@ -359,8 +364,8 @@ const actions = {
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
   // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
-  // "step", "svg" (a drawing sheet), "png" (a studio picture of the view), "glb",
-  // "obj" or "ply".
+  // "step", "svg", "pdf" or "dxf" (a drawing sheet), "outline" (a section
+  // alone at 1:1, DXF), "png" (a studio picture of the view), "glb", "obj" or "ply".
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
     if (kind === "png") {
@@ -387,25 +392,28 @@ const actions = {
         return say(err.message, 8000);
       }
     }
-    // A floor plan of a building, saved as an SVG sheet like the drawing.
-    if (kind === "plan") {
+    // A floor plan of a building, saved as SVG, PDF or DXF like the drawing.
+    const planFormat = { plan: "svg", "plan-pdf": "pdf", "plan-dxf": "dxf" }[kind];
+    if (planFormat) {
       say("Making the floor plan", 0);
       try {
-        const plan = await makeFloorPlan({ store, kernel });
-        const where = await saveBytes(plan.result.bytes, `${fileName()}-plan.svg`, "svg");
+        const plan = await makeFloorPlan({ store, kernel }, { format: planFormat });
+        const where = await saveBytes(plan.result.bytes, `${fileName()}-plan.${planFormat}`, planFormat);
         if (where) plan.keep();
         return say(where ? `Exported ${where.split("/").pop()}. ${plan.result.line}` : "", 20000);
       } catch (err) {
         return say(err.message, 8000);
       }
     }
-    say(kind === "solid" ? "Joining the parts into one solid" : kind === "svg" ? "Making the drawing" : "Exporting", 0);
+    // Drawings: the sheet as SVG, PDF or DXF, or the section alone at 1:1 for cutting.
+    const sheet = { svg: {}, pdf: { format: "pdf" }, dxf: { format: "dxf" }, outline: { format: "dxf", outline: "section" } }[kind];
+    say(kind === "solid" ? "Joining the parts into one solid" : sheet ? "Making the drawing" : "Exporting", 0);
     try {
       const { parts, title } = store.state.result;
-      const drawing = kind === "svg" ? await makeDrawing({ store, kernel }) : null;
+      const drawing = sheet ? await makeDrawing({ store, kernel }, sheet) : null;
       const r = drawing ? drawing.result : kind === "3mf" ? await kernel.export3MF(parts, title) : kind === "step" ? await kernel.exportSTEP(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
-      const ext = kind === "svg" || kind === "3mf" || kind === "step" ? kind : "stl";
-      const where = await saveBytes(r.bytes, `${fileName()}.${ext}`, ext);
+      const ext = sheet ? r.format : kind === "3mf" || kind === "step" ? kind : "stl";
+      const where = await saveBytes(r.bytes, `${fileName()}${kind === "outline" ? "-outline" : ""}.${ext}`, ext);
       // A drawing whose save was cancelled leaves nothing remembered.
       if (where) drawing?.keep();
       // A drawing also says what went in its title block and how to change it.
@@ -449,7 +457,8 @@ addEventListener("keydown", (e) => {
   if (mod && e.key.toLowerCase() === "e") return e.preventDefault(), actions.export();
   if (typing) return;
   if (mod && e.key.toLowerCase() === "z") return e.preventDefault(), e.shiftKey ? store.redo() : store.undo();
-  if (e.key === "Escape") return store.select(null);
+  // Esc deselects, and then shows the whole model again.
+  if (e.key === "Escape") return store.state.selected ? store.select(null) : clearView();
   if (e.key === "f" && !mod) return viewport.fit();
   if (e.key.length === 1 && !mod && !e.altKey) $("input").focus();
 });
@@ -478,6 +487,9 @@ if (import.meta.env.DEV) {
     picture: (opts) => viewport.picture(opts),
     fit: (view, names) => viewport.fit(view, names),
     screenPosition: (name) => viewport.screenPosition(name),
+    // Where the exploded view has moved a part, and whether it is still moving.
+    offset: (name) => viewport.inspect.shift(name)?.toArray() ?? [0, 0, 0],
+    exploding: () => viewport.inspect.animating(),
     turningPoint: () => viewport.turningPoint(),
     call: (name, args = {}) => commands[name](args),
     history: () => ({ undo: store.state.past.length, redo: store.state.future.length }),

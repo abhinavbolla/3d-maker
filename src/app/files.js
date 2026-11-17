@@ -16,6 +16,8 @@ const FILTERS = {
   step: { name: "STEP model", extensions: ["step", "stp"] },
   png: { name: "PNG picture", extensions: ["png"] },
   svg: { name: "SVG drawing", extensions: ["svg"] },
+  pdf: { name: "PDF drawing", extensions: ["pdf"] },
+  dxf: { name: "DXF drawing", extensions: ["dxf"] },
   glb: { name: "glTF binary", extensions: ["glb"] },
   obj: { name: "OBJ mesh", extensions: ["obj"] },
   ply: { name: "PLY mesh", extensions: ["ply"] },

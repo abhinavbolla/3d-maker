@@ -37,6 +37,8 @@ To run it from the source instead, see the [README](../README.md#run-it).
 - Scroll with a mouse wheel, or pinch on a trackpad, to move towards what the pointer is on. Over empty space you keep flying, so you can travel to any part of a big model and look at it up close.
 - Double-click a point to bring it to the middle; the view then turns around it. Fit (or F) frames the whole model from a corner, and Esc deselects.
 - The view cube at the bottom right turns with the model. Click a side, an edge or a corner to look from there without losing your place, or drag the cube to turn the view. Its red, green and blue lines are the X, Y and Z axes, and the red and green lines on the ground are the X and Y axes.
+- To look inside, ask: "hide the blades", "show only the hub", "cut it in half so I can see the gearbox", "explode it". Hidden parts are not drawn and cannot be clicked. A section cuts the model with a plane and fills the cut faces, so solids look solid; you can ask for parts to be left whole. An exploded view moves the parts apart, keeping the parts of each plan step together. While any of this is on, a line above the prompt box says so, such as "Section at Y = 0 mm · 3 parts hidden"; click it or press Esc to show the whole model again (the first Esc deselects a part). It changes only the view: exports, drawings and undo see the whole model.
+- Ask for numbers rather than judging by eye: "how far is the mast from the tail boom?", "what does the hub weigh in aluminium?". Claude measures sizes, volumes, surface areas, centres of mass and masses, the shortest distance between two parts and the distance between two points, from the exact shapes as the script places them.
 - Moving parts play in the view; Pause stops them. They play at up to 60 frames a second, and at 30 while you work in another window (typing to Claude beside the app, say). While the window is hidden they wait, and go on from where they were when it shows again.
 
 ## What Claude can draw
@@ -58,6 +60,9 @@ The Export menu saves:
 - **STL**: each part its own closed shell, or all parts joined into one solid.
 - **STEP**: solids for CAD programs such as FreeCAD or Fusion, one named, coloured part each, in an assembly. See below for which parts come out exact.
 - **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
+- **Drawing, PDF**: the same sheet as a PDF at its real size, to print or send.
+- **Drawing, DXF**: the same sheet as a DXF for 2D CAD programs, on layers: VISIBLE, HIDDEN, CENTRE, SECTION, HATCH, DIMENSIONS, DETAIL, FRAME and TITLE.
+- **Outline, DXF**: one section alone at true size (1:1, in mm, no sheet), for a laser or water-jet cutter.
 - **Floor plan**: for a building, an A3 sheet as an SVG at 1:50 or 1:100: the walls cut 1200 mm above the floor and filled dark, windows in their openings, doors open with their swing, each room's name, area and inside sizes, dimension chains outside every wall (to each opening, and overall), the roof's edge dashed, a north arrow, a scale bar and the same title block as the drawing.
 - **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
 - **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
@@ -80,12 +85,15 @@ Those come out as true planes, cylinders, cones, spheres and tori, bounded by li
 
 The files are checked by a STEP reader of our own (`node test/check-step.mjs`): every solid closed, every vertex on its curves and surfaces, volumes and sizes matching the model. They have not yet been opened in a CAD program; if one refuses a file, please open an issue with it.
 
+### The drawing
 
 ![The rotor head as a drawing: front, top, side and isometric views, a section through the mast, overall sizes and a title block on an A3 sheet](rotor-head-drawing.png)
 
 The sheet shows the model from the front, from above and from the side, with hidden edges left out, and where there is room an isometric view at the top right. Next to the views is section A–A: the model cut by a plane, with the cut faces hatched, each part its own way, and what lies beyond the cut drawn behind them. The cutting line and the way the section looks are marked on one of the views.
 
 The views are laid out in first-angle projection (ISO: the top view under the front view, the view from the left on its right) or third-angle projection (the top view above it, the view from the right on its right). Which one follows the region your system's language names: third angle in the US, Canada and Japan, first angle elsewhere, and first angle (ISO's) when no region is named. Say "third angle" or "first angle" to change it.
+
+Holes and turned parts get centre lines. On a drawing of up to three parts, the sheet carries every size needed to make the parts, each once and on the view that shows it best. Holes and bosses seen end on get their diameters (equal holes together, as "4× ⌀9"; a tapped hole by its thread, as "M6"; a blind hole with its depth, as "⌀5, 12 deep") and their positions, measured from the largest part's left and bottom edges on one running dimension line each way. A hole that is not seen end on (under a boss, say) is sized on the section instead, as a length with the diameter sign. The section also gives the heights of steps (a boss above a plate) and the thicknesses of plates and walls. The sizes are the script's own values, not measurements: a `hole(9, 10)` is called out as ⌀9. A round hole the script does not describe as a cylinder (a bore in a revolved or lofted part) is found by fitting a circle to the view, and the app says how close the fit is. A bigger assembly gets centre lines only; its parts' sizes belong on their own drawings. Labels go where nothing else is, on the part's face next to their hole when there is room; a leader never crosses a dimension line or another leader, and a size that finds no room is left out with a word from the app.
 
 The overall width, depth and height are dimensioned in millimetres. The scale is the largest standard one that fits the sheet: 1:1, 1:2, 1:5, 1:10, 1:20, 1:50 and so on, or 2:1, 5:1 and up for small parts. Outlines are 0.5 mm wide and dimensions and hatching 0.25 mm, or thinner where a crowded assembly would run together at that weight.
 
@@ -94,7 +102,7 @@ The sheet follows ISO 5457 (frame, grid reference border, centring marks), and i
 | Field | Where it comes from |
 | --- | --- |
 | Title | The model's title. A title too long for its cell is split near its 30th character, and the rest goes in the supplementary title (or, if you gave one, the title gets smaller letters). A title too long even for that is cut short with … on the sheet, and the app says so. |
-| Identification number | Made up once for the model (such as 3DM-4K7Q2X) and saved with it, until you give your own. |
+| Identification number | Made up once for the model (such as DFT-4K7Q2X) and saved with it, until you give your own. A number saved by an older version of the app is kept as it is. |
 | Date of issue | Today. |
 | Document type | Part drawing, or Assembly drawing for more than one part. |
 | Scale, projection, units, sheet | From the sheet itself. |
@@ -111,7 +119,15 @@ The app remembers what you said once the drawing is saved; a drawing that fails,
 
 After each drawing the app says in one line what went on the sheet: what you said, what was remembered, what is blank, and how to change it.
 
-From the Export menu the section cuts across the model's longest side, at its middle. Ask Claude for a different one: "export a drawing with the section across z, 40 mm up".
+The section goes through the axes of holes, so they show at their full size: on a drawing of a few parts, through the most holes (then the plane that keeps the larger scale, then the biggest bore); otherwise across the longest side, moved onto the axis of a turned part it passes close to (a rotor mast). Ask Claude for a different one: "export a drawing with the section across z, 40 mm up". A section given within a hole's radius of its axis is moved onto the axis, and the app says so.
+
+More you can ask for:
+
+- **Hidden edges dashed**: "with hidden lines". Edges behind other surfaces are drawn as narrow dashed lines on the front, top and side views, never over a visible line. For that drawing only.
+- **Another sheet size**: "on A4" (upright) or A2, A1, A0 (across). The frame, its grid and the scale follow the sheet; the title block stays in the bottom right corner.
+- **A detail view**: "with a detail of the hub". A crowded place of one view is drawn again in a free part of the sheet at a larger standard scale (at least twice the sheet's), as view B with its scale, and a circle and the letter B mark it on the view it comes from. Claude can say which view and where, or let the app pick the most crowded place.
+- **PDF or DXF**: "as a PDF", "as a DXF".
+- **An outline to cut**: "a DXF of the plate's outline for the laser cutter". With no other say, the section goes across the model's thinnest side, at its middle, so it cuts through a plate rather than along it; a view's outline ("the top view's outline") works too, from the mesh. Round loops come out as true circles.
 
 Parts are drawn where the script puts them, not as their motion poses them, the same as in the STL and 3MF files. The views are drawn from the same meshes as those files, so a line can be off by the mesh's detail; the section is not, because it is cut from the exact shapes.
 
@@ -126,7 +142,7 @@ claude mcp add --scope user draftsman -- node /path/to/draftsman/mcp/server.mjs
 ## Limitations
 
 - **Exact CAD surfaces only for simple parts.** STEP export writes exact surfaces for boxes, cylinders, cones, spheres, tori, capsules, and extrusions and revolves of line-and-arc outlines; a part with a 3D cut, a join of touching shapes, a smooth blend or a free-form shape is written as flat faces from its mesh. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
-- **Drawings are a first version.** One A3 sheet as SVG: no PDF or DXF, no dashed hidden edges, no centre lines or parts list, and only the overall sizes are dimensioned. Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
+- **Drawings are early.** One sheet per drawing, no parts list, and besides the overall sizes only holes, bosses, steps and wall thicknesses are dimensioned (no radii, angles, chamfers, counterbores or tolerances). Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
 - **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods. A wall much thinner than the part's mesh cells (a 0.5 mm tube 400 mm long) is drawn a little more than a cell thick until the finer mesh comes in, so it is whole but too thick.
 - **Changes are prompts and sliders.** You can't drag parts around in the view.
 - **Collisions in motion** are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.
