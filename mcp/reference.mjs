@@ -119,6 +119,38 @@ METHODS (each returns a new shape; chain them)
   .radial(n, "z")                 n copies spaced evenly around the axis through the origin: blades, spokes, bolts
   .array(n, dx, dy, dz)           n copies, each moved one step further
 
+BUILDINGS (houses, cabins, offices: one storey; plan in XY, north is +Y)
+  These make the parts themselves (Floor slab, Outer walls, Inner walls, each door and window with its frame and glass, Roof); call them anywhere in the script.
+  house({ height: 2700, wall: 300, partition: 100, slab: 200, cut: 1200, north: 0 })   optional: wall height above the floor, wall thicknesses, slab under it all (the floor is at z = slab), plan cut height, north's angle from +Y
+  outerWalls([[x, y], ...], { thickness, names })   the OUTSIDE corners of the outer walls, going round. Each side is named by the way it faces: "South wall" (faces -Y), "East wall", "North wall", "West wall"; two facing the same way are "North wall 1", "North wall 2". names: your own, one per side
+  wall(name, [[x, y], ...], { thickness })   an inner wall along its CENTRE line. Ends on or in another wall are joined to it (T-junctions, corners, bends); ends inside the outer walls are trimmed to their inner face
+  door(wallName, at, { width: 900, height: 2100, hinge: "start"|"end", opens, name })   cut through the wall, with a lining and a leaf.
+    at: the opening's CENTRE along the wall: on an outer wall from its left end as seen from outside, on an inner wall from its first point.
+    opens: "in" (default) or "out" for an outer wall; for an inner wall the room it opens into ("Kitchen"), or "left"/"right" walking from the wall's first point. hinge: the end of the opening nearer the wall's start, or the other
+  window(wallName, at, { width: 1200, height: 1200, sill: 900, name })   frame, glazing (a mullion about every 1.2 m) and an outside sill
+  room(name, [x, y])              a point inside the room; its area comes from the walls round it (doors count as closed). get_model lists every wall, room area and opening
+  roof({ type: "gable"|"flat", pitch: 35, overhang: 400, ridge: "x"|"y", hidden })   on top of the walls; gable needs a rectangular outline (the gable ends are walls). hidden: true to look in from above
+  stair(name, [x, y], { direction: "y", width: 900, steps, going: 250 })   a straight flight from the floor
+  Real sizes: outer walls 250 to 400, inner 100 to 150, doors 800 to 1000 wide (front 1000), windows 600 to 2400 wide with sills about 900 (bathroom 1500); rooms are at least 2 m across, bathrooms at least 1.5 m.
+  export_floor_plan makes the architect's plan of it (walls cut at 1200, doors with swings, rooms with areas, dimensions).
+
+  EXAMPLE: a one-bedroom cabin, 7 x 5 m
+    title("Cabin");
+    outerWalls([[0, 0], [7000, 0], [7000, 5000], [0, 5000]]);          // inside: 6400 x 4400
+    wall("Bedroom wall", [[4000, 0], [4000, 5000]]);
+    wall("Bathroom wall", [[4000, 3200], [7000, 3200]]);
+    room("Living / kitchen", [2000, 2500]);
+    room("Bedroom", [5500, 1500]);
+    room("Bathroom", [5500, 4000]);
+    door("South wall", 2000, { width: 1000, name: "Front door" });
+    door("Bedroom wall", 1000, { opens: "Bedroom", hinge: "start" });
+    door("Bathroom wall", 600, { width: 800, opens: "Bathroom" });
+    window("South wall", 5500, { width: 1500 });
+    window("North wall", 4500, { width: 2400 });                          // from the north wall's left end seen from outside (x = 7000)
+    window("West wall", 2500);
+    window("East wall", 4100, { width: 600, height: 600, sill: 1500 });
+    roof({ type: "gable", pitch: 30, ridge: "x" });
+
 PARTS, VALUES, MOTION
   part(name, shape, { color: "#rrggbb", material, spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, follow, motion, hidden })
     Every visible piece must be a part with a unique, plain name ("Main rotor", "Left door"). The user clicks parts to select and tweak them.

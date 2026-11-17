@@ -252,6 +252,27 @@ try {
   check(long3.result && long3.result.sheet.supplementary_title.endsWith("…") && /The model's title was too long for the title block and is shortened on the sheet\./.test(long3.result.line), `a title too long even for both is cut at a word, and the line says so (${long3.result?.sheet.supplementary_title ?? long3.error})`);
   await call("edit_model", { old_text: `title(${JSON.stringify(`${longTitle} `.repeat(4).trim())});\n`, new_text: "" });
 
+  // A building's floor plan: refused for a model with no building, and for
+  // the test house a well-formed A3 sheet at 1:50 with its six rooms, their
+  // areas as worked by hand, the cut walls, and the drawing's own number.
+  check(/no building/.test((await call("export_floor_plan")).error ?? ""), "a floor plan of a model with no building is refused");
+  const houseSet = await call("set_model", { script: readFileSync(new URL("./models/house.js", import.meta.url), "utf8") });
+  const fp = await call("export_floor_plan", { drawn_by: "Ana Ruiz" });
+  const planSheet = await w(`(() => {
+    const doc = new DOMParser().parseFromString(new TextDecoder().decode(Uint8Array.from(atob(${JSON.stringify(fp.result?.base64 ?? "")}), (c) => c.charCodeAt(0))), "image/svg+xml");
+    return {
+      error: doc.querySelector("parsererror")?.textContent ?? null,
+      size: doc.documentElement.getAttribute("width") + " x " + doc.documentElement.getAttribute("height"),
+      rooms: [...doc.querySelectorAll("#rooms .room")].map((g) => g.getAttribute("data-room") + " " + g.getAttribute("data-area")).join(", "),
+      walls: (doc.querySelector("#walls .cut-walls")?.getAttribute("d") ?? "").split("M").length - 1,
+      fields: ["created-by", "number", "document-type", "scale"].map((id) => doc.querySelector("#" + id)?.textContent ?? "").join(" | "),
+      menu: document.querySelector('#export-menu [data-export="plan"] span')?.textContent,
+    };
+  })()`);
+  check(houseSet.result?.building?.rooms.length === 6 && fp.result && !planSheet.error && planSheet.size === "420mm x 297mm" && fp.result.scale === "1:50", `the house's floor plan is an A3 sheet at 1:50 (${fp.error ?? planSheet.error ?? `${planSheet.size}, ${fp.result.scale}`})`);
+  check(planSheet.rooms === "Living room 12.59, Bedroom 2 10.40, Hall 6.58, Bathroom 2.24, Kitchen 11.03, Bedroom 1 8.82" && planSheet.walls >= 10, `with every room and its area, and the cut walls (${planSheet.rooms}; ${planSheet.walls} wall outlines)`);
+  check(/^Ana Ruiz \| [\w-]+ \| Floor plan \| 1:50$/.test(planSheet.fields) && planSheet.menu === "Floor plan" && !/angle/.test(fp.result?.line ?? "angle"), `the title block is filled in as for a drawing, the line says no projection, and the Export menu offers it (${planSheet.fields}; ${fp.result?.line})`);
+
   // The number belongs to the document: kept through Claude rewriting the
   // script, a new one for New, and each document's own back through undo.
   await call("set_model", { script: 'part("Base", box(40, 40, 10), { color: "#4f7cac" });\npart("Peg", cylinder(6, 20).at(0, 0, 12));' });
