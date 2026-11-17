@@ -1821,6 +1821,31 @@ test("OBJ and MTL: one object per part with normals, in mm with Y up; PLY: one c
   }
 });
 
+test("measure: volume, centre of mass and nearest points from the distance functions", async () => {
+  const { solidMoments, nearestPoints } = await import("../src/kernel/measure.js");
+  const cases = [
+    [{ t: "sphere", r: 20 }, (4 / 3) * Math.PI * 8000],
+    [{ t: "cylinder", r: 10, h: 30 }, Math.PI * 3000],
+    [{ t: "torus", R: 20, r: 5 }, 2 * Math.PI ** 2 * 500],
+    [{ t: "subtract", a: { t: "box", s: [40, 40, 40] }, b: [{ t: "cylinder", r: 10, h: 50 }] }, 64000 - Math.PI * 100 * 40],
+  ];
+  for (const [node, exact] of cases) {
+    const { f, box } = compile(node);
+    const r = solidMoments(f, box);
+    assert.ok(Math.abs(r.volume / exact - 1) < 0.001, `${node.t} volume off by ${((r.volume / exact - 1) * 100).toFixed(3)}%`);
+    assert.ok(Math.hypot(...r.centre) < 0.01, `${node.t} centre of mass at ${r.centre}`);
+  }
+  // A half cylinder's centre of mass is 4r / 3 pi from its flat face.
+  const half = compile(runScript('part("H", cylinder(30, 10).cut(box(100, 100, 20).at(0, -50, 0)));', {}).parts[0].node);
+  const h = solidMoments(half.f, half.box);
+  assert.ok(Math.abs(h.volume / (Math.PI * 450 * 10) - 1) < 0.001, `half cylinder volume ${h.volume}`);
+  assert.ok(Math.abs(h.centre[1] - 40 / Math.PI) < 0.02, `half cylinder centre of mass at y ${h.centre[1]}, ${40 / Math.PI} expected`);
+  const a = runScript('part("A", box(40, 20, 10).at(0, 0, 5)); part("B", cylinder(10, 20).at(50, 0, 10));', {}).parts.map((p) => compile(p.node));
+  const region = [0, 1, 2].map((i) => Math.min(a[0].box[i], a[1].box[i])).concat([3, 4, 5].map((i) => Math.max(a[0].box[i], a[1].box[i])));
+  const g = nearestPoints(a[0].f, a[1].f, region, { cell: 0.02 });
+  assert.ok(Math.abs(g.gap - 20) < 0.01 && Math.abs(g.a[0] - 20) < 0.01 && Math.abs(g.b[0] - 40) < 0.01, JSON.stringify(g));
+});
+
 test("the app's Claude is allowed every tool the server offers", () => {
   const server = readFileSync(new URL("../mcp/server.mjs", import.meta.url), "utf8");
   const offered = [...server.matchAll(/^tool\(\s*"(\w+)"/gm)].map((m) => m[1]).sort();
