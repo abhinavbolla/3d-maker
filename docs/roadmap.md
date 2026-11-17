@@ -10,7 +10,7 @@ This page says where it stands against that goal and what comes next. The order 
 |---|---|
 | Making 3D models | By prompt, with sliders on parts. Outlines, extrude, revolve, sweep, loft, bodies from views, bend, twist, taper, threads and hardware. |
 | Mechanisms | Motion, joints checked over the whole loop, collision checks. |
-| Looking at the model | Studio view with shadows, a reflecting floor and materials. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
+| Looking at the model | Studio view with shadows, a reflecting floor, shading in the creases and materials, and a "shaded with edges" look. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
 | Pictures | PNG studio shots of any view. |
 | 2D drawings | One A3 sheet as SVG: front, top, side and isometric views with hidden edges left out, a hatched section, the overall sizes and an ISO title block. |
 | Files for other apps | Meshes only: STL and 3MF. |
@@ -21,13 +21,15 @@ This page says where it stands against that goal and what comes next. The order 
 
 ## The look
 
-A studio shot of a mechanism from a professional tool gets its look from four things: lighting, materials, crisp small edges, and framing. The first two are in. What is left:
+A studio shot of a mechanism from a professional tool gets its look from four things: lighting, materials, crisp small edges, and framing. The first two are in.
 
-1. **Shading in the creases.** Ambient occlusion darkens the gaps between parts and the inside of corners. It is what makes an assembly read as many parts fitted together.
-2. **Edge lines.** An optional "shaded with edges" look, where sharp edges and outlines are drawn as thin dark lines, as in engineering views.
+Done so far: shading in the creases (ambient occlusion, worked out once the view rests, so it costs nothing while anything moves), an optional "shaded with edges" look that Claude turns on by prompt, and brushed and anodised metal.
+
+What is left:
+
 3. **Small fillets and chamfers everywhere.** Real machined parts have a small break on every edge, and those edges catch the light. The kernel can round edges; what is missing is detail in the mesh where the surface curves tightly, so a 1 mm fillet on a 1 m part survives. This needs detail shared out by curvature, not only by surface area.
 4. **Smoother metal.** Polished materials show every mesh facet. Normals taken from the distance field itself, and finer view meshes on shiny parts, fix most of it.
-5. **Materials Claude chooses.** Parts can now be metal, paint, plastic, rubber or glass. Next: brushed and anodised metals, textures such as tread and knurling, and decals.
+5. **Materials Claude chooses.** Parts can now be metal, brushed or anodised metal, paint, plastic, rubber or glass. Next: brushed metal with a grain that follows the part, textures such as tread and knurling, and decals.
 6. **A camera Claude can direct.** Tools for Claude to place the camera, pick a lens and save a picture, so "give me a hero shot of the rotor head" works.
 
 ## 2D drawings

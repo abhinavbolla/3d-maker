@@ -1,7 +1,7 @@
 // The app's commands in a real app window (headless Chrome), without Claude:
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
-import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER } from "./harness.mjs";
+import { startHarness, checks, sleep, STEPPED_FRAMES, GL_COUNTER } from "./harness.mjs";
 import { writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -487,6 +487,33 @@ joint("Rod", "Piston", top);` });
   check(swiped.pinch > 3, `and a pinch zooms (${Math.round(swiped.pinch)} px)`);
   check(swiped.straight.dy < -15 && Math.abs(swiped.straight.dx) < 4, `and two fingers moved straight up slide the view, not zoom it (${JSON.stringify(swiped.straight)})`);
 
+  // Crease shading: a block standing on a plate, seen from the top. A
+  // finished frame with the shading is darker in the corner where the block
+  // meets the plate, and the same as without it on the open plate, on the
+  // block's top, on the floor beside the plate and on the background.
+  await call("set_model", { script: 'part("Plate", box(200, 200, 20).at(0, 0, 10), { color: "#9aa3ad", material: "plastic" }); part("Block", box(50, 50, 60).at(50, 50, 50), { color: "#9aa3ad", material: "plastic" });' });
+  await w('window.__3dmaker.fit("top")');
+  const shade = await w(`(() => {
+    const read = (creases) => {
+      const c = window.__3dmaker.frame({ creases });
+      const x = Object.assign(document.createElement("canvas"), { width: c.width, height: c.height }).getContext("2d");
+      x.drawImage(c, 0, 0);
+      return x.getImageData(0, 0, c.width, c.height);
+    };
+    const plain = read(false), shaded = read(true);
+    const k = plain.width / document.querySelector("#viewport canvas").clientWidth;
+    const P = window.__3dmaker.screenPosition("Plate"), B = window.__3dmaker.screenPosition("Block");
+    const dark = (x, y) => { const i = (Math.round(y * k) * plain.width + Math.round(x * k)) * 4; return [0, 1, 2].reduce((m, c) => Math.max(m, plain.data[i + c] - shaded.data[i + c]), -255); };
+    const patch = (x, y) => { let m = 0; for (let dx = -6; dx <= 6; dx++) for (let dy = -6; dy <= 6; dy++) m = Math.max(m, Math.abs(dark(x + dx, y + dy))); return m; };
+    // From the block's middle towards the plate's, across the corner.
+    const along = []; for (let t = 0; t <= 1; t += 0.01) along.push(dark(B.x + (P.x - B.x) * t, B.y + (P.y - B.y) * t));
+    const floor = { x: P.x + (P.x - B.x) * 2.3, y: P.y + (P.y - B.y) * 2.3 };
+    return { crease: Math.max(...along), plate: patch(P.x, P.y), block: patch(B.x, B.y), floor: patch(floor.x, floor.y), background: patch(10, 10) };
+  })()`);
+  check(shade.crease >= 15, `the crease shading darkens the corner where two parts meet (by ${shade.crease} of 255)`);
+  check(shade.plate <= 1 && shade.block <= 1, `and leaves open flat faces as they were (${shade.plate} and ${shade.block} of 255 at most)`);
+  check(shade.floor <= 1 && shade.background <= 1, `and the floor and the background (${shade.floor} and ${shade.background} of 255 at most)`);
+
 
   // What the view costs the GPU, counted below three.js on a Retina-sized
   // window, with the rotor head (47 parts that turn). A still view draws
@@ -541,6 +568,35 @@ joint("Rod", "Piston", top);` });
   const hidden = await cost(`window.page(true, false); window.__frames.step(30)`);
   const shown = await cost(`window.page(false, true); window.__frames.step(30)`);
   check(hidden.draws === 0 && shown.frames >= 29, `a hidden page draws nothing, and motion goes on when it shows (${hidden.draws} draws hidden, ${shown.frames} of 30 frames back)`);
+
+  // Crease shading costs nothing while things move: it is worked out once,
+  // when the view has rested, in one step of three passes, then nothing is
+  // drawn. A change that leaves the view as it was (a selection) keeps it.
+  await g(`document.getElementById("play").click(); window.__frames.step(2)`);
+  const quiet = await cost(`window.__frames.step(10)`);
+  await sleep(600);
+  const rested = await cost(`window.__frames.step(1)`);
+  const overlay = () => g(`(() => { const o = document.querySelectorAll("#viewport canvas")[1]; return Boolean(o && !o.hidden && o.width); })()`);
+  const shownAfter = await overlay();
+  check(quiet.draws === 0 && rested.frames === 1 && rested.passes === 3 && shownAfter, `once the view rests, the crease shading is worked out in one step of 3 passes (${(rested.samples / rested.canvas).toFixed(2)} samples per window pixel, ${Math.round(rested.triangles / 1000)} thousand triangles), not before (${quiet.draws} draws)`);
+  const restAfter = await cost(`window.__frames.step(120); await new Promise((r) => setTimeout(r, 2000))`);
+  check(restAfter.draws === 0, `after that a still view draws nothing (${JSON.stringify(restAfter)})`);
+  const picked2 = await cost(`window.__3dmaker.select(window.__3dmaker.state().parts[0]); window.__frames.step(2)`);
+  check(picked2.frames >= 1 && picked2.passes === 2 * picked2.frames && (await overlay()), `a selection draws the view once and keeps the shading (${picked2.passes} passes in ${picked2.frames} frames)`);
+  await g(`window.__3dmaker.select(null); window.__frames.step(2)`);
+  // Turning the view with the shading on and with it off costs the same.
+  const turnFrom = (js) => cost(`window.__3dmaker.fit(); ${js}; window.__frames.step(1); window.__gl.take(); const c = document.querySelector("#viewport canvas"); const ev = (t, x) => c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: 300, button: 0, buttons: 1, pointerId: 9, bubbles: true })); ev("pointerdown", 300); for (let i = 1; i <= 6; i++) { ev("pointermove", 300 + i * 10); window.__frames.step(1); } ev("pointerup", 360); window.__frames.step(1)`);
+  const turnOff = await turnFrom(`window.__3dmaker.look({ creases: false })`);
+  const turnOn = await turnFrom(`window.__3dmaker.look({ creases: true })`);
+  const sameCost = (a, b) => ["frames", "passes", "draws", "pixels", "samples", "triangles"].every((k) => a[k] === b[k]);
+  check(turnOn.frames === 7 && sameCost(turnOff, turnOn) && !(await overlay()), `turning the view costs the same with the shading as without, and hides it (${JSON.stringify(turnOn)})`);
+  // Edges: lines beside each part, a few draws more, no pass, sample or triangle more.
+  const turnEdges = await turnFrom(`await window.__3dmaker.call("set_look", { edges: true })`);
+  const remembered = await g(`localStorage.getItem("3d-maker:look")`);
+  const turnPlain = await turnFrom(`await window.__3dmaker.call("set_look", { edges: false })`);
+  const partCount = (await g("window.__3dmaker.state().parts")).length;
+  check(turnEdges.passes === turnOn.passes && turnEdges.samples === turnOn.samples && turnEdges.triangles === turnOn.triangles && turnEdges.draws > turnOn.draws && turnEdges.draws <= turnOn.draws + turnOn.frames * partCount, `edges on adds lines (${turnEdges.draws - turnOn.draws} draws more in ${turnOn.frames} frames) and no pass, sample or triangle`);
+  check(sameCost(turnPlain, turnOn) && /"edges":false/.test(await g(`localStorage.getItem("3d-maker:look")`)) && /"edges":true/.test(remembered), `edges off takes them away again, and the choice is remembered (${remembered})`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

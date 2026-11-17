@@ -119,14 +119,16 @@ const FINISH_FRAGMENT = /* glsl */ `
     float f = mix(1.0, open * open, strength);
     if (outlines > 0.5) {
       float pixel = pixelAt(P);
-      float line = 0.0;
-      for (int i = 0; i < 4; i++) {
-        vec2 o = i == 0 ? vec2(1.0, 0.0) : i == 1 ? vec2(-1.0, 0.0) : i == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
-        vec2 uv = vUv + o * texel;
-        float sd = texture2D(tDepth, uv).x;
-        line = max(line, sd >= 1.0 ? 1.0 : step(10.0 * pixel, P.z - viewAt(uv, sd).z));
-      }
-      f *= 1.0 - 0.82 * line;
+      // How many of the 8 pixels around lie far behind: a straight edge has
+      // 3, a step in a slanting edge fewer, which softens the steps.
+      float behind = 0.0;
+      for (int x = -1; x <= 1; x++)
+        for (int y = -1; y <= 1; y++) {
+          vec2 uv = vUv + vec2(float(x), float(y)) * texel;
+          float sd = texture2D(tDepth, uv).x;
+          behind += sd >= 1.0 ? 1.0 : step(10.0 * pixel, P.z - viewAt(uv, sd).z);
+        }
+      f *= 1.0 - 0.82 * clamp(behind / 3.0, 0.0, 1.0);
     }
     gl_FragColor = vec4(vec3(f), 1.0);
   }`;

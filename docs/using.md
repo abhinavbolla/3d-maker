@@ -17,6 +17,8 @@ The [README](../README.md) gets you to a first model. This page is the full guid
 - Scroll with a mouse wheel, or pinch on a trackpad, to move towards what the pointer is on. Over empty space you keep flying, so you can travel to any part of a big model and look at it up close.
 - Double-click a point to bring it to the middle; the view then turns around it. Fit (or F) frames the whole model from a corner, and Esc deselects.
 - The view cube at the bottom right turns with the model. Click a side, an edge or a corner to look from there without losing your place, or drag the cube to turn the view. Its red, green and blue lines are the X, Y and Z axes, and the red and green lines on the ground are the X and Y axes.
+- When the view comes to rest, the gaps between parts and the inside corners darken a little, so an assembly reads as parts fitted together. The shading fades in once nothing moves and is left out while you turn the view or parts move, so moving costs nothing extra. Pictures and Claude's screenshots always have it.
+- Ask for edges ("show it with edges") to see sharp edges as thin dark lines, as in engineering views; outlines join them once the view is still. "Turn the edges off" goes back. The app remembers the choice.
 - Moving parts play in the view; Pause stops them. They play at up to 60 frames a second, and at 30 while you work in another window (typing to Claude beside the app, say). While the window is hidden they wait, and go on from where they were when it shows again.
 
 ## What Claude can draw
@@ -25,7 +27,7 @@ The [README](../README.md) gets you to a first model. This page is the full guid
 - Bodies from their side and top outlines, the way they are drawn on paper, with rounded cross-sections (fuselages, car bodies, cabs).
 - Shapes that are twisted, tapered and bent, lattice infill (gyroid, diamond, grid, honeycomb), convex hulls, and raised or engraved text in our own single-stroke font.
 - Real hardware at ISO metric sizes: threads, bolts, nuts, washers, and the clearance, tapped, counterbored or countersunk holes that fit them. Moulded parts can have draft.
-- Materials: metal, paint, plastic, rubber and glass.
+- Materials: metal, brushed metal, anodised metal, paint, plastic, rubber and glass.
 - Motion: parts that turn, slide, follow each other or are linked by rods. Claude declares every joint, and the app checks over the whole motion that no joint comes apart and no parts pass into each other.
 
 ## Getting it out

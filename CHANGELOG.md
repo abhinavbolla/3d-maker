@@ -47,6 +47,15 @@ Notable changes to 3D Maker. The format follows
   remembers what you tell Claude, an isometric view, a grid border and heavier lines.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
+- Shading in the creases: once the view rests, the gaps between parts and inside corners are
+  darkened, worked out once in three passes at one pixel per CSS pixel and faded in. Frames
+  drawn while parts move or the view turns cost exactly what they did. Pictures and screenshots
+  include it.
+- A "shaded with edges" look: sharp edges as thin dark lines (prebuilt line geometry, no extra
+  pass) and outlines once the view is still. Claude turns it on or off with the new `set_look`
+  tool, and the app remembers it.
+- Two more materials a script can name: `brushed` and `anodised` metal.
+- `frame()` on the view draws one finished frame, crease shading included, synchronously.
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
