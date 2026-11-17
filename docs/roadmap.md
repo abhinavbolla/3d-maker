@@ -17,7 +17,7 @@ This page says where it stands against that goal and what comes next. The order 
 | Exact surfaces | In STEP files, for parts the script describes exactly without 3D cuts or joins. Elsewhere surfaces are fine meshes of distance fields. |
 | Direct editing | Sliders and prompts. No dragging, measuring or sectioning. |
 | Video | Motion plays in the view. Nothing is recorded. |
-| Installing | Runs from a clone of the repository. |
+| Installing | Installers for macOS, Windows and Linux, built for each release, with our own icon. Not signed yet. |
 
 ## The look
 
@@ -87,10 +87,13 @@ Rhino's strength is free-form curves and surfaces. To compete there:
 
 ## The app
 
-1. **Installers** for macOS, Windows and Linux, signed, with a real icon.
+Done so far: installers for macOS, Windows and Linux, built by a release workflow and attached to a draft release, with our own icon; and four examples on the empty window (a mug, a bolted bracket, a rotor head that moves and a helicopter) that open at once and suggest what to try next.
+
+What is left:
+
+1. **Signed installers.** The workflow signs as soon as the certificates exist ([releasing.md](releasing.md)); then automatic updates.
 2. **Settings**: units, theme, grid, and which Claude model to use.
-3. **A gallery of examples** to start from.
-4. **Touch and trackpad gestures** throughout.
+3. **Touch and trackpad gestures** throughout.
 
 ## How we measure progress
 

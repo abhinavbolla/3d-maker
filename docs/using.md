@@ -2,7 +2,27 @@
 
 The [README](../README.md) gets you to a first model. This page is the full guide.
 
+## Install
+
+Download the installer for your system from the [releases page](https://github.com/abhinavbolla/draftsman/releases): a `.dmg` for macOS (`aarch64` for Apple silicon, `x64` for Intel), an `.msi` or `-setup.exe` for Windows, and a `.deb`, `.rpm` or `.AppImage` for Linux.
+
+Before Draftsman can draw, you need two things it does not install for you:
+
+- **[Claude Code](https://claude.com/claude-code)**, installed and logged in: run `claude` once in a terminal and log in. Draftsman runs it for every prompt, on your own Claude plan; there is no API key to enter.
+- **[Node.js](https://nodejs.org) 20 or newer.** It runs the small server that connects Claude Code to the app window.
+
+Without them the app still opens, shows the examples and opens and exports files, and the prompt box says which one is missing.
+
+The installers are not signed yet, so your system warns you the first time:
+
+- **macOS** says it cannot check the app, or that it is damaged. Open it once, then in System Settings, Privacy & Security, click **Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Draftsman.app"` in Terminal.
+- **Windows** says "Windows protected your PC". Click **More info**, then **Run anyway**.
+
+To run it from the source instead, see the [README](../README.md#run-it).
+
 ## Making things
+
+- On an empty window, a few examples sit above the prompt box: a mug, a bracket with bolts, a rotor head that moves and a helicopter. Choosing one opens it at once, without Claude, and it is then your model like any other. The prompt box suggests two changes to try on it.
 
 - Type what you want in the box at the bottom and press Enter: "a desk lamp with a weighted base", "a helicopter whose rotors spin". Claude writes the model, looks at it from a few angles, and fixes what looks wrong.
 - Big or mechanical things (a helicopter, a rotor head, an engine) are built with a plan. Claude lists the sub-assemblies and their parts, then builds and checks them one at a time. A line above the prompt shows progress, like "5 of 20 done · now: Stationary swashplate". A step only counts as done once all its parts exist and are solid.
@@ -109,5 +129,5 @@ claude mcp add --scope user draftsman -- node /path/to/draftsman/mcp/server.mjs
 - **Changes are prompts and sliders.** You can't drag parts around in the view.
 - **Collisions in motion** are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.
 - **Text** has one font and no accents yet.
-- **Packaging.** The app runs from this folder, so there is no installer, signing or real icon yet.
+- **Unsigned installers.** Until the builds are signed, macOS and Windows warn you the first time you open the app (see [Install](#install)). There are no automatic updates.
 - **Sharing the app.** Running your own `claude -p` from an app is fine for your own use. Check Anthropic's terms before giving the app to others.

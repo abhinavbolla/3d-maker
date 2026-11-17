@@ -1,0 +1,280 @@
+name: Release
+
+# Builds the desktop app for macOS (Apple silicon and Intel), Windows and
+# Linux and attaches the installers to a draft GitHub release, which a person
+# then reads over and publishes. Runs when a version tag (v0.3.0) is pushed,
+# or by hand from the Actions tab with a tag and "Dry run" unticked.
+#
+# A dry run (by hand, "Dry run" ticked, the default) builds the same
+# installers from the branch or tag it was started on, but makes no release:
+# each machine's installers are kept as workflow artifacts for 7 days.
+#
+# Signing switches on by itself when its secrets exist and is skipped when
+# they do not: docs/releasing.md lists them, and what an unsigned build means
+# for the people who open it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, such as v0.3.0 (it must exist and match package.json's version). Leave empty for a dry run of the branch you start it on."
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run: build the installers and keep them as artifacts, with no tag check and no release"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Decides what this run is: a release of a tag, or a dry run of a ref.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            release=true; tag="$REF_NAME"; ref="$REF_NAME"
+          elif [ "$DRY_RUN" = "false" ]; then
+            if [ -z "$INPUT_TAG" ]; then
+              echo "::error::A release needs a tag. Give one, or tick Dry run."
+              exit 1
+            fi
+            release=true; tag="$INPUT_TAG"; ref="$INPUT_TAG"
+          else
+            release=false; tag=""; ref="${INPUT_TAG:-$GITHUB_SHA}"
+          fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [ "$release" = true ]; then echo "Release of $tag."; else echo "Dry run of $ref: no tag check, no release; the installers are kept as artifacts."; fi
+
+  # One draft release per tag, made before the builds.
+  draft:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+
+      - name: Check the tag matches package.json
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The tag is $TAG but package.json says $version. Tag v$version, or change the version first."
+            exit 1
+          fi
+
+      - name: Make the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG exists; the builds add to it."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "Draftsman ${TAG#v}" \
+              --notes "Installers for macOS, Windows and Linux. See CHANGELOG.md for what changed, and docs/using.md#install for how to install and what you need first."
+          fi
+
+  # Builds on four machines and keeps each one's installers as an artifact,
+  # in a dry run and a release alike. It only reads the repository.
+  build:
+    needs: [plan, draft]
+    # Runs after the draft in a release, and without it (skipped) in a dry run.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - name: macOS (Intel)
+            runner: macos-latest
+            target: x86_64-apple-darwin
+          - name: Windows
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: Linux
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # What Tauri needs to build on Linux (WebKitGTK and friends).
+      - name: Linux build packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
+
+      - run: npm ci
+
+      # macOS: sign with a Developer ID certificate and notarize when the
+      # secrets exist. Without them the app is signed ad hoc ("-"), which
+      # Apple silicon needs to run it at all, and is not notarized.
+      - name: macOS signing
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing with $APPLE_SIGNING_IDENTITY."
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            } >> "$GITHUB_ENV"
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              echo "Notarizing as $APPLE_ID."
+              {
+                echo "APPLE_ID=$APPLE_ID"
+                echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+                echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+              } >> "$GITHUB_ENV"
+            else
+              echo "::warning::Signed but not notarized: APPLE_ID, APPLE_PASSWORD or APPLE_TEAM_ID is not set."
+            fi
+          else
+            echo "::warning::No Apple certificate: the app is signed ad hoc and not notarized."
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
+      # Windows: import the code-signing certificate and give Tauri its
+      # thumbprint when the secrets exist; otherwise build unsigned.
+      - name: Windows signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:WINDOWS_CERTIFICATE) {
+            $pfx = Join-Path $env:RUNNER_TEMP "certificate.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            Remove-Item $pfx
+            $config = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://timestamp.digicert.com" } } } | ConvertTo-Json -Depth 4 -Compress
+            Set-Content -Path (Join-Path $env:RUNNER_TEMP "signing.json") -Value $config
+            "SIGNING_CONFIG=$(Join-Path $env:RUNNER_TEMP 'signing.json')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Output "Signing with certificate $($cert.Subject)."
+          } else {
+            Write-Output "::warning::No Windows certificate: the installers are not signed."
+          }
+
+      - name: Build
+        run: |
+          extra=()
+          if [ -n "${SIGNING_CONFIG:-}" ]; then extra=(--config "$SIGNING_CONFIG"); fi
+          npx tauri build --config src-tauri/tauri.release.conf.json --target "${{ matrix.target }}" "${extra[@]}"
+
+      # Gathers the installers in one folder and prints each one's size and SHA-256.
+      - name: Collect the installers
+        run: |
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          files=("$bundle"/dmg/*.dmg "$bundle"/msi/*.msi "$bundle"/nsis/*.exe "$bundle"/deb/*.deb "$bundle"/rpm/*.rpm "$bundle"/appimage/*.AppImage)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No installers were made in $bundle."
+            exit 1
+          fi
+          mkdir -p installers
+          cp "${files[@]}" installers/
+          cd installers
+          for f in *; do
+            ls -l "$f"
+            if [ "$RUNNER_OS" = "Windows" ]; then certutil -hashfile "$f" SHA256; else shasum -a 256 "$f"; fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.target }}
+          path: installers/
+          if-no-files-found: error
+          retention-days: 7
+
+  # A release only: attaches every machine's installers to the draft. Like
+  # before, a machine whose build failed adds nothing and the others still
+  # attach theirs.
+  publish:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.outputs.release == 'true' && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: installers
+          merge-multiple: true
+
+      - name: Attach the installers to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(installers/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No machine made any installers."
+            exit 1
+          fi
+          sha256sum "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
