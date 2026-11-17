@@ -278,7 +278,8 @@ export function planShots(shots, { fps, startAt = 0, ...ctx }) {
     const degrees = s.degrees !== undefined ? number(s.degrees, `${what}: degrees`, -3600, 3600) : move === "turntable" ? 360 : move === "orbit" ? 90 : 0;
     const rise = s.rise !== undefined ? number(s.rise, `${what}: rise`, -180, 180) : 0;
     const count = Math.max(1, Math.round(seconds * fps));
-    const motionAt = (k) => clock + (plays ? (k / fps) * speed : 0);
+    const from = clock; // this shot's own start, kept: clock moves on to the next shot
+    const motionAt = (k) => from + (plays ? (k / fps) * speed : 0);
     const camCtx = { ...ctx, box: (names) => boxAt(names, motionAt(0)), points: (names) => pointsAt(names, motionAt(0)), sweep: move === "turntable" || move === "orbit" ? degrees : 0, current: () => (last ? { ...last } : ctx.current()) };
 
     let start;
@@ -324,7 +325,7 @@ export function planShots(shots, { fps, startAt = 0, ...ctx }) {
     const loops = (move === "turntable" || move === "orbit") && Math.abs(degrees) % 360 === 0 && !rise;
     const lands = i === shots.length - 1 && count > 1 && move !== "hold" && move !== "follow" && !loops;
     const shape = EASE[ease];
-    planned.push({ first: frames, count, seconds, move, at: (k) => { const t = motionAt(k); return { camera: cameraAt(shape(lands ? k / (count - 1) : k / count), t), time: t }; } });
+    planned.push({ first: frames, count, seconds, move, time: motionAt, at: (k) => { const t = motionAt(k); return { camera: cameraAt(shape(lands ? k / (count - 1) : k / count), t), time: t }; } });
     last = cameraAt(1, motionAt(count));
     frames += count;
     clock = motionAt(count);
@@ -335,6 +336,11 @@ export function planShots(shots, { fps, startAt = 0, ...ctx }) {
     seconds: frames / fps,
     shots: planned.map(({ first, count, seconds, move }) => ({ first, count, seconds, move })),
     // Frame n's camera and motion time, from n alone.
+    // Frame n's motion time alone (the same number at(n) gives).
+    timeAt(n) {
+      const s = planned.findLast((p) => p.first <= n);
+      return s.time(n - s.first);
+    },
     at(n) {
       if (!(n >= 0 && n < frames)) throw new Error(`There is no frame ${n}.`);
       const s = planned.findLast((p) => p.first <= n);
