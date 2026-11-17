@@ -226,47 +226,46 @@ const VIEWER = String.raw`
   gl.enableVertexAttribArray(A.n);
 
   var ext = D.step.map(function (s) { return s * 65535; });
-  var points = []; /* every 7th vertex at rest, to frame the model by */
+  var lo = D.lo, size = ext;
+  /* The view turns about the middle of the model's box, and is framed by the
+     sphere round that middle that holds every vertex (at rest, and in every
+     pose of a part that moves), so no turn takes the model off the middle or
+     out of the window. */
+  var centre = [lo[0] + size[0] / 2, lo[1] + size[1] / 2, lo[2] + size[2] / 2];
+  var reach = 0;
+  function within(x, y, z) { reach = Math.max(reach, (x - centre[0]) * (x - centre[0]) + (y - centre[1]) * (y - centre[1]) + (z - centre[2]) * (z - centre[2])); }
   var parts = D.parts.map(function (p) {
     var buf = function (target, data) { var b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, gl.STATIC_DRAW); return b; };
+    var frames = p.frames ? new Float32Array(bytes(p.frames).buffer) : null;
     return {
       p: p,
       meshes: p.meshes.map(function (m) {
         var idx = bytes(m.idx), pos = bytes(m.pos);
         var q = new Uint16Array(pos.buffer);
-        for (var v = 0; v < q.length; v += 3 * 7) points.push(D.lo[0] + q[v] * D.step[0], D.lo[1] + q[v + 1] * D.step[1], D.lo[2] + q[v + 2] * D.step[2]);
+        for (var v = 0; v < q.length; v += 3) {
+          var x = lo[0] + q[v] * D.step[0], y = lo[1] + q[v + 1] * D.step[1], z = lo[2] + q[v + 2] * D.step[2];
+          within(x, y, z);
+          if (frames && v % 21 === 0) for (var k = 0; k < frames.length; k += 12 * 3) within(frames[k] * x + frames[k + 1] * y + frames[k + 2] * z + frames[k + 3], frames[k + 4] * x + frames[k + 5] * y + frames[k + 6] * z + frames[k + 7], frames[k + 8] * x + frames[k + 9] * y + frames[k + 10] * z + frames[k + 11]);
+        }
         return { q: buf(gl.ARRAY_BUFFER, pos), n: buf(gl.ARRAY_BUFFER, bytes(m.nrm)), i: buf(gl.ELEMENT_ARRAY_BUFFER, idx), count: idx.length / 2 };
       }),
-      frames: p.frames ? new Float32Array(bytes(p.frames).buffer) : null
+      frames: frames
     };
   });
 
-  var lo = D.lo, size = ext;
-  var centre = [lo[0] + size[0] / 2, lo[1] + size[1] / 2, lo[2] + size[2] / 2];
-  var radius = Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-3);
+  var radius = Math.max(Math.sqrt(reach), 1e-3);
   var FOV = 30 * Math.PI / 180;
+  /* Room kept clear for the title above and the hint and size below, and at
+     the sides, in CSS pixels; the same at top and bottom so the model sits
+     in the middle. */
+  var CLEAR_Y = 52, CLEAR_X = 16;
   var cam = {};
-  /* The first view: from the front right and a little above, aimed at the
-     middle of what is seen, as close as keeps the model inside 80% of the
-     window (taken from a sample of its vertices). */
+  /* The first view: from the front right and a little above, as close as
+     keeps the whole sphere between the words. */
   function reset() {
-    var aspect = cv.clientWidth / Math.max(cv.clientHeight, 1);
-    cam = { yaw: -55 * Math.PI / 180, pitch: 24 * Math.PI / 180, dist: radius, target: centre.slice() };
-    var a = axes(), tv = Math.tan(FOV / 2) * 0.8, th = tv * aspect;
-    var fit = function () {
-      var dist = radius * 0.05, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-      for (var i = 0; i < points.length; i += 3) {
-        var d = [points[i] - cam.target[0], points[i + 1] - cam.target[1], points[i + 2] - cam.target[2]];
-        var x = a.r[0] * d[0] + a.r[1] * d[1] + a.r[2] * d[2], y = a.u[0] * d[0] + a.u[1] * d[1] + a.u[2] * d[2], z = a.f[0] * d[0] + a.f[1] * d[1] + a.f[2] * d[2];
-        dist = Math.max(dist, Math.abs(x) / th - z, Math.abs(y) / tv - z);
-        x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
-      }
-      return { dist: dist, x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
-    };
-    /* Centre what is seen, then come as close as it allows. */
-    var f = fit();
-    for (var k = 0; k < 3; k++) cam.target[k] += a.r[k] * f.x + a.u[k] * f.y;
-    cam.dist = fit().dist;
+    var w = Math.max(cv.clientWidth, 1), h = Math.max(cv.clientHeight, 1), t = Math.tan(FOV / 2);
+    var tv = t * Math.max(h / 2 - CLEAR_Y, h / 4) / (h / 2), th = t * (w / h) * Math.max(w / 2 - CLEAR_X, w / 4) / (w / 2);
+    cam = { yaw: -55 * Math.PI / 180, pitch: 24 * Math.PI / 180, dist: radius / Math.sin(Math.atan(Math.min(tv, th))), target: centre.slice(), fitted: true };
   }
 
   function mul(a, b) {
@@ -352,10 +351,11 @@ const VIEWER = String.raw`
 
   var held = new Map(), pinch = null;
   function pan(dx, dy) {
+    cam.fitted = false;
     var a = axes(), k = 2 * cam.dist * Math.tan(FOV / 2) / Math.max(cv.clientHeight, 1);
     for (var i = 0; i < 3; i++) cam.target[i] += (-dx * a.r[i] + dy * a.u[i]) * k;
   }
-  function zoom(f) { cam.dist = Math.min(Math.max(cam.dist * f, radius * 0.05), radius * 40); }
+  function zoom(f) { cam.fitted = false; cam.dist = Math.min(Math.max(cam.dist * f, radius * 0.05), radius * 40); }
   function twoFingers() {
     var p = Array.from(held.values());
     return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2, d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) };
@@ -394,7 +394,8 @@ const VIEWER = String.raw`
     redraw();
   }, { passive: false });
   cv.addEventListener("dblclick", function () { reset(); redraw(); });
-  window.addEventListener("resize", redraw);
+  /* A window that changes size keeps the model framed, unless it was zoomed or moved. */
+  window.addEventListener("resize", function () { if (cam.fitted) { var y = cam.yaw, p = cam.pitch; reset(); cam.yaw = y; cam.pitch = p; } redraw(); });
   cv.addEventListener("webglcontextlost", function (e) { e.preventDefault(); });
   cv.addEventListener("webglcontextrestored", function () { location.reload(); });
   reset();

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { check3MF } from "./check-3mf.mjs";
 import { checkGLB, checkOBJ, checkPLY, checkHTML } from "./check-meshfile.mjs";
-import { lookAtHTML } from "./htmlfile-run.mjs";
+import { lookAtHTML, placed, describe } from "./htmlfile-run.mjs";
 import { checkStep } from "./check-step.mjs";
 
 const { check, fail, done } = checks();
@@ -149,7 +149,9 @@ try {
     writeFileSync(path, Buffer.from(ht.result.base64, "base64"));
     const v = await lookAtHTML(h, w, path);
     const pct = (x) => `${(x * 100).toFixed(1)}%`;
-    check(v.drew && v.first.share > 0.03 && v.dark.share > 0.03 && v.turned.share > 0.01, `opened from file://, the model is drawn (${pct(v.first.share)} of the window, ${pct(v.dark.share)} on dark) and a drag turns it (${pct(v.turned.share)} of pixels change)`);
+    const [wide, phone] = v.views;
+    check(wide.drew && wide.first.share > 0.03 && v.dark.share > 0.03 && wide.turned > 0.01, `opened from file://, the model is drawn (${pct(wide.first.share)} of the window, ${pct(v.dark.share)} on dark) and a drag turns it (${pct(wide.turned)} of pixels change)`);
+    for (const view of [wide, phone]) for (const k of ["first", "right", "left"]) check(placed(view[k]), `at ${view.size.join("x")}, ${k === "first" ? "the first view" : `after a drag ${k}`} keeps clear of the title and hint, near the middle (${describe(view[k])})`);
     check(!v.requests.length && !v.errors.length, `and nothing is fetched and nothing goes wrong (${[...v.requests, ...v.errors].slice(0, 3).join("; ") || "none"})`);
   }
   // The same from the Export menu: each saves its file (an OBJ also its MTL).

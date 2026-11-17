@@ -11,13 +11,24 @@ import { join, basename, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { checkHTML } from "./check-meshfile.mjs";
 
-// Opens the HTML file at path in its own window and takes its pictures.
+// The bands of the window where the page writes its title (top) and its hint
+// and size line (bottom), in CSS pixels: no part of the model may be drawn
+// there, at the first view or after a drag.
+export const BANDS = { top: 44, bottom: 40 };
+// Window sizes the file is looked at in: a wide one and a phone held upright.
+export const SIZES = [[960, 640], [390, 844]];
+
+// Opens the HTML file at path in its own windows and takes its pictures: in
+// each size, the first view and after a drag one way and then the other
+// (right and up, then left and down past the start), and in the first size
+// also in dark mode and, with motion, twice with the camera still.
 // win: an app window, where the PNGs are read (so the file's own page does
 // nothing but show the model). Returns the measurements and the PNGs.
-export async function lookAtHTML(h, win, path, { motion = false } = {}) {
-  // Pixels that differ from another picture of the same page (by more
-  // than 24 in red + green + blue): the share of the window, their mean
-  // brightness and the box round them.
+export async function lookAtHTML(h, win, path, { motion = false, sizes = SIZES } = {}) {
+  // Pixels that differ from another picture of the same page (by more than
+  // 24 in red + green + blue): their share of the window, mean brightness,
+  // the box round them, how many fall in the title and hint bands, and how
+  // far the box's middle is from the window's, as a share of its size.
   const diff = (png, other) =>
     win(`(async () => {
       const read = async (b64) => {
@@ -32,14 +43,17 @@ export async function lookAtHTML(h, win, path, { motion = false } = {}) {
       };
       const a = await read(${JSON.stringify(png)}), b = await read(${JSON.stringify(other)});
       const W = a.width, H = a.height, d = a.data, e = b.data;
-      let n = 0, bright = 0, x0 = W, y0 = H, x1 = -1, y1 = -1;
+      let n = 0, bright = 0, top = 0, bottom = 0, x0 = W, y0 = H, x1 = -1, y1 = -1;
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = (y * W + x) * 4;
         if (Math.abs(d[i] - e[i]) + Math.abs(d[i + 1] - e[i + 1]) + Math.abs(d[i + 2] - e[i + 2]) <= 24) continue;
         n++; bright += (d[i] + d[i + 1] + d[i + 2]) / 3;
+        if (y < ${BANDS.top}) top++;
+        if (y >= H - ${BANDS.bottom}) bottom++;
         x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
       }
-      return { share: n / (W * H), brightness: n ? Math.round(bright / n) : 0, box: [x0, y0, x1, y1], background: [...e.slice(0, 3)] };
+      const r = (v) => Math.round(v * 1000) / 1000;
+      return { share: n / (W * H), brightness: n ? Math.round(bright / n) : 0, box: [x0, y0, x1, y1], top, bottom, off: n ? [r((x0 + x1 + 1) / 2 / W - 0.5), r((y0 + y1 + 1) / 2 / H - 0.5)] : [0, 0], background: [...e.slice(0, 3)] };
     })()`);
   // The page with the model hidden: its background and words alone.
   const empty = async (page) => {
@@ -58,39 +72,56 @@ export async function lookAtHTML(h, win, path, { motion = false } = {}) {
     }
     return false;
   };
-  const out = { url };
-  const page = await h.openPage(url);
-  out.drew = await drawn(page);
-  await sleep(motion ? 200 : 600);
-  const first = await page.screenshot();
-  await page.drag([480, 330], [640, 270]);
-  await sleep(400);
-  const turned = await page.screenshot();
-  out.turned = await diff(turned, first);
-  if (motion) {
-    // Still camera, half a second later: the parts have moved.
-    const before = await page.screenshot();
-    await sleep(500);
-    const after = await page.screenshot();
-    out.moving = (await diff(after, before)).share;
+  const out = { url, views: [], requests: [], errors: [], pngs: {} };
+  for (const [width, height] of sizes) {
+    const page = await h.openPage(url, { width, height });
+    const drew = await drawn(page);
+    await sleep(motion ? 200 : 600);
+    const shots = { first: await page.screenshot() };
+    if (motion && !out.views.length) {
+      // Still camera, a moment later: the parts have moved. (Not a round
+      // fraction of a second, which a four-bladed rotor can turn through
+      // and look the same.)
+      await sleep(370);
+      out.moving = (await diff(await page.screenshot(), shots.first)).share;
+    }
+    const [cx, cy, dx, dy] = [width / 2, height / 2, Math.round(width * 0.2), Math.round(height * 0.1)];
+    await page.drag([cx, cy], [cx + dx, cy - dy]);
+    await sleep(400);
+    shots.right = await page.screenshot();
+    await page.drag([cx + dx, cy - dy], [cx - dx, cy + dy]);
+    await sleep(400);
+    shots.left = await page.screenshot();
+    const view = { size: [width, height], drew, turned: (await diff(shots.right, shots.first)).share };
+    const bg = await empty(page);
+    for (const [k, png] of Object.entries(shots)) {
+      view[k] = await diff(png, bg);
+      out.pngs[`${width}x${height}-${k}`] = png;
+    }
+    out.views.push(view);
+    if (!out.title) out.title = await page.evaluate("[document.title, document.getElementById('title').textContent, document.getElementById('size').textContent]");
+    out.requests.push(...page.requests.filter((u) => u !== url));
+    out.errors.push(...page.errors);
+    await page.close();
   }
-  const bg = await empty(page);
-  out.first = await diff(first, bg);
-  out.title = await page.evaluate("[document.title, document.getElementById('title').textContent, document.getElementById('size').textContent]");
-  out.requests = page.requests.filter((u) => u !== url);
-  out.errors = [...page.errors];
-  await page.close();
-  const dark = await h.openPage(url, { dark: true });
+  const [width, height] = sizes[0];
+  const dark = await h.openPage(url, { width, height, dark: true });
   await drawn(dark);
   await sleep(600);
   const night = await dark.screenshot();
   out.dark = await diff(night, await empty(dark));
+  out.pngs.dark = night;
   out.requests.push(...dark.requests.filter((u) => u !== url));
   out.errors.push(...dark.errors);
   await dark.close();
-  out.pngs = { first, turned, dark: night };
   return out;
 }
+
+// Whether a picture keeps the model clear of the words and near the middle:
+// no model pixel in the title or hint bands, and the middle of its drawn
+// box within 12% of the window's size of the window's middle.
+export const placed = (s) => s.share > 0.01 && !s.top && !s.bottom && Math.abs(s.off[0]) <= 0.12 && Math.abs(s.off[1]) <= 0.12;
+export const describe = (s) => `${(s.share * 100).toFixed(1)}%, box ${s.box.join(",")}, ${s.top} px in the title band, ${s.bottom} in the hint band, middle off by ${s.off.map((v) => `${Math.round(v * 100)}%`).join(", ")}`;
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const file = process.argv[2];
@@ -127,9 +158,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const v = await lookAtHTML(h, w, path, { motion });
     for (const [k, png] of Object.entries(v.pngs)) writeFileSync(join(dir, `${name}-${k}.png`), Buffer.from(png, "base64"));
     const pct = (x) => `${(x * 100).toFixed(1)}%`;
-    check(v.drew && v.first.share > 0.03, `drawn from ${v.url}: the model covers ${pct(v.first.share)} of the window, box ${v.first.box.join(",")}, brightness ${v.first.brightness} on ${v.first.background}`);
-    check(v.turned.share > 0.01, `a drag turns it: ${pct(v.turned.share)} of pixels changed`);
-    if (motion) check(v.moving > 0.002, `its motion plays: ${pct(v.moving)} of pixels changed in half a second with the camera still`);
+    for (const view of v.views) {
+      const at = view.size.join("x");
+      check(view.drew && placed(view.first), `${at}, first view: ${describe(view.first)}`);
+      check(view.turned > 0.01 && placed(view.right), `${at}, dragged right and up (${pct(view.turned)} of pixels changed): ${describe(view.right)}`);
+      check(placed(view.left), `${at}, then dragged left and down: ${describe(view.left)}`);
+    }
+    if (motion) check(v.moving > 0.002, `its motion plays: ${pct(v.moving)} of pixels changed in a moment with the camera still`);
     check(v.dark.share > 0.03 && v.dark.background.every((x) => x < 80), `on a dark background (${v.dark.background}) too: ${pct(v.dark.share)}, brightness ${v.dark.brightness}`);
     check(!v.requests.length, `no request left the page${v.requests.length ? `: ${v.requests.slice(0, 3).join(", ")}` : ""}`);
     check(!v.errors.length, `no console errors${v.errors.length ? `: ${v.errors.slice(0, 3).join("; ")}` : ""}`);
