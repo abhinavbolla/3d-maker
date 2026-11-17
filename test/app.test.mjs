@@ -270,7 +270,7 @@ try {
     };
   })()`);
   check(houseSet.result?.building?.rooms.length === 6 && fp.result && !planSheet.error && planSheet.size === "420mm x 297mm" && fp.result.scale === "1:50", `the house's floor plan is an A3 sheet at 1:50 (${fp.error ?? planSheet.error ?? `${planSheet.size}, ${fp.result.scale}`})`);
-  check(planSheet.rooms === "Living room 12.59, Bedroom 2 10.40, Hall 6.58, Bathroom 2.24, Kitchen 11.03, Bedroom 1 8.82" && planSheet.walls >= 10, `with every room and its area, and the cut walls (${planSheet.rooms}; ${planSheet.walls} wall outlines)`);
+  check(planSheet.rooms === "Living room 12.59, Bedroom 2 10.40, Hall 6.58, Bathroom 2.24, Kitchen 11.03, Bedroom 1 8.82" && planSheet.walls === 9, `with every room and its area, and the cut walls in nine pieces (the nine openings at 1200 split the outer ring; each inner wall joins one) (${planSheet.rooms}; ${planSheet.walls} wall outlines)`);
   check(/^Ana Ruiz \| [\w-]+ \| Floor plan \| 1:50$/.test(planSheet.fields) && planSheet.menu === "Floor plan" && !/angle/.test(fp.result?.line ?? "angle"), `the title block is filled in as for a drawing, the line says no projection, and the Export menu offers it (${planSheet.fields}; ${fp.result?.line})`);
 
   // The number belongs to the document: kept through Claude rewriting the
