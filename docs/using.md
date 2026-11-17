@@ -47,6 +47,7 @@ To run it from the source instead, see the [README](../README.md#run-it).
 - Real hardware at ISO metric sizes: threads, bolts, nuts, washers, and the clearance, tapped, counterbored or countersunk holes that fit them. Moulded parts can have draft.
 - Materials: metal, paint, plastic, rubber and glass.
 - Motion: parts that turn, slide, follow each other or are linked by rods. Claude declares every joint, and the app checks over the whole motion that no joint comes apart and no parts pass into each other.
+- Buildings of one storey: outer walls round a footprint, inner walls joined at corners and T-junctions, doors and windows cut into named walls (each with its frame, leaf or glass), a floor slab, a flat or gable roof and a straight stair. Rooms are named by a point inside them, and their areas come from the walls round them. Ask for "a two-bedroom house, about 9 by 7 metres", then for its floor plan.
 
 ## Getting it out
 
@@ -57,6 +58,7 @@ The Export menu saves:
 - **STL**: each part its own closed shell, or all parts joined into one solid.
 - **STEP**: solids for CAD programs such as FreeCAD or Fusion, one named, coloured part each, in an assembly. See below for which parts come out exact.
 - **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
+- **Floor plan**: for a building, an A3 sheet as an SVG at 1:50 or 1:100: the walls cut 1200 mm above the floor and filled dark, windows in their openings, doors open with their swing, each room's name, area and inside sizes, dimension chains outside every wall (to each opening, and overall), the roof's edge dashed, a north arrow, a scale bar and the same title block as the drawing.
 - **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
 - **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
 - **PLY**: one mesh, each vertex coloured with its part's colour, in millimetres with Z up, like the STL. The part names are in comment lines in its header.
