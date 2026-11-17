@@ -2,7 +2,6 @@
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
 import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER, sleep } from "./harness.mjs";
-import { startHarness, checks, sleep, STEPPED_FRAMES, GL_COUNTER } from "./harness.mjs";
 import { writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
