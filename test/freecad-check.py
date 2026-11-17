@@ -6,6 +6,7 @@
 #   STEP_DIR=out freecad.cmd test/freecad-check.py
 import json
 import os
+import re
 import sys
 import traceback
 
@@ -55,13 +56,12 @@ def run():
             check(close(total, want["by_hand_volume"]), "%s: volume %.3f mm3, by hand %.3f" % (name, total, want["by_hand_volume"]))
         lo = [min(p["bounds"][k] for p in want["parts"]) for k in range(3)]
         hi = [max(p["bounds"][k + 3] for p in want["parts"]) for k in range(3)]
-        b = shape.BoundBox
+        # The exact box: FreeCAD's quick BoundBox is loose around spheres and tori.
+        b = shape.optimalBoundingBox(False, False)
         got = [b.XMin, b.YMin, b.ZMin, b.XMax, b.YMax, b.ZMax]
-        # FreeCAD's box may be a little larger than a curved face; never smaller.
-        slack = 1e-2 * max(hi[k] - lo[k] for k in range(3))
+        slack = 1e-2
         check(
-            all(got[k] <= lo[k] + MM and got[k] >= lo[k] - slack for k in range(3))
-            and all(got[k + 3] >= hi[k] - MM and got[k + 3] <= hi[k] + slack for k in range(3)),
+            all(abs(got[k] - lo[k]) <= slack and abs(got[k + 3] - hi[k]) <= slack for k in range(3)),
             "%s: bounding box %s, written %s" % (name, [round(v, 3) for v in got], [round(v, 3) for v in lo + hi]),
         )
         kinds = sorted(set(type(f.Surface).__name__ for f in shape.Faces))
@@ -78,10 +78,13 @@ def run():
             labels = [o.Label for o in leaves]
             print("     parts as FreeCAD names them: " + ", ".join(labels[:14]) + (" ..." if len(labels) > 14 else ""))
             for p in want["parts"]:
-                match = [o for o in leaves if o.Label == p["name"]]
-                check(len(match) == 1, "%s: part \"%s\" is in the document under its name" % (name, p["name"]))
-                if len(match) == 1:
-                    v = match[0].Shape.Volume
+                # A part made of several separate solids comes in as one object for
+                # each, named Feet, Feet001, Feet002 and so on.
+                numbered = re.compile(re.escape(p["name"]) + r"(\d{3})?$")
+                match = [o for o in leaves if numbered.match(o.Label)]
+                check(len(match) == p["solids"], "%s: part \"%s\" is in the document under its name, %d solid(s)" % (name, p["name"], p["solids"]))
+                if match:
+                    v = sum(o.Shape.Volume for o in match)
                     check(close(v, p["volume"]), "%s: \"%s\" volume %.3f mm3, our reader %.3f" % (name, p["name"], v, p["volume"]))
 
             # Round trip: FreeCAD writes the document as STEP and reads it back.
