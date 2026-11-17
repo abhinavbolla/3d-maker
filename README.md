@@ -1,13 +1,15 @@
-# 3D Maker
+# Draftsman
 
-[![CI](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinavbolla/3d-maker/actions/workflows/ci.yml)
+[![CI](https://github.com/abhinavbolla/draftsman/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinavbolla/draftsman/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **CAD you talk to.** Describe a part or a whole machine, and Claude draws it in 3D, in real dimensions, with parts that move. Look around it, click a part to change it, and export a picture or a file for other apps.
 
-![A helicopter rotor head made in 3D Maker: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
+![A helicopter rotor head made in Draftsman: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
 
-> **3D Maker is in early development.** It runs from a clone of this repository, and there is no installer yet.
+> **Draftsman is in early development.** It runs from a clone of this repository, and there is no installer yet.
+>
+> Draftsman was formerly called 3D Maker.
 
 ## What works today
 
@@ -44,7 +46,7 @@ npm start          # or in your browser, at http://localhost:5173
 
 The [guide](docs/using.md) has every gesture and key, and what Claude can draw.
 
-## Why 3D Maker
+## Why Draftsman
 
 - **You describe; Claude draws.** There are no tool palettes to learn. It runs on the Claude Code you already have, with no API key.
 - **It is a model, not a picture.** Real millimetres, separate named parts, and mechanisms that are checked as they move.

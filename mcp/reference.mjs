@@ -1,9 +1,9 @@
-// The 3D Maker modelling language, as Claude reads it: every function, with
+// The Draftsman modelling language, as Claude reads it: every function, with
 // examples, and how to work. Claude Code shows an MCP server's instructions
 // only up to 4096 characters, so this is not the server's instructions: the
 // server returns it from its reference tool, and the app puts it in the
 // system prompt of the Claude runs it starts.
-export const REFERENCE = `3D Maker turns a short JavaScript model script into solid 3D parts the user sees live. You write the whole script with set_model (or change part of it with edit_model), then look at it with screenshot and fix what looks wrong.
+export const REFERENCE = `Draftsman turns a short JavaScript model script into solid 3D parts the user sees live. You write the whole script with set_model (or change part of it with edit_model), then look at it with screenshot and fix what looks wrong.
 
 Units are millimetres, +Z is up, the ground is z = 0, angles are degrees. Model real objects at real size (a mug is about 95 mm tall, a car about 4500 mm long). Every shape is a solid; joins, cuts and blends never fail.
 
@@ -64,7 +64,7 @@ PROFILES (flat outlines in their own XY plane, for extrude, revolve, sweep and l
     part("Bracket", extrude(rect(80, 40, 6).cut(circle(6).move(-25, 0), circle(6).move(25, 0)), 8).at(0, -150, 4));
 
   EXAMPLE: text, wrapping, twist, taper, lattice, hull
-    part("Plate", extrude(rect(120, 40, 5), 6).at(0, 0, 3).cut(extrude(text("3D MAKER", 12), 4).at(0, 0, 6)));   // engraved 2 mm deep
+    part("Plate", extrude(rect(120, 40, 5), 6).at(0, 0, 3).cut(extrude(text("DRAFTSMAN", 12), 4).at(0, 0, 6)));   // engraved 2 mm deep
     const R = 40;
     part("Mug", cylinder(R, 90).at(0, 200, 45));
     part("Label", extrude(text("COFFEE", 14), 1).at(0, 0, 0.5).bend(-R).rotateX(90).at(0, 200 - R, 50));   // wrapped round the mug, standing 1 mm proud

@@ -1,5 +1,5 @@
 [package]
-name = "three-d-maker"
+name = "draftsman"
 version = "0.1.0"
 description = "CAD you talk to: describe a part or a machine, and Claude draws it in 3D."
 license = "MIT"
@@ -10,7 +10,7 @@ rust-version = "1.90"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "three_d_maker_lib"
+name = "draftsman_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
