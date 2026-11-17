@@ -1,6 +1,6 @@
 ---
 name: draftsman
-description: How to model parts and machines in the Draftsman app through its MCP tools (reference, set_model, set_plan, finish_step, check_fit, screenshot, section_view, measure, the exports). Use when the user asks to model, change, check, measure, draw or export something in Draftsman.
+description: How to model parts, machines and buildings in the Draftsman app through its MCP tools (reference, set_model, set_plan, finish_step, check_fit, screenshot, section_view, measure, set_camera, record_video, the exports). Use when the user asks to model, change, check, measure, draw, film or export something in Draftsman.
 ---
 
 # Working in Draftsman
@@ -24,6 +24,10 @@ Write the whole script with one `set_model`, then `screenshot` and fix what look
 3. After each step, call `finish_step` with the step's name. Look at the picture it returns, and fix anything floating, passing through other parts, the wrong size or crude before the next step. Do not skip a step.
 4. When every step is done, take screenshots from two or three views and fix what is still wrong.
 
+## Buildings
+
+Houses, cabins and offices of one storey are built with the reference's building functions: `house()` for wall height and thicknesses, `outerWalls()` round the outside corners, `wall()` for inner walls, then `door()`, `window()`, `room()` (a point inside each room) and `roof()`. They make the parts themselves. Plan in XY with north +Y, at real sizes. `get_model` lists every wall, room area and opening. `export_floor_plan` gives the architect's plan, as `format` svg, pdf or dxf.
+
 ## Check, do not assume
 
 - **Look.** Call `screenshot` after every change. Use `view: "iso"`, then `"front"`, `"top"` or `"right"`; the straight views are flat and true to scale. `part` frames one part; `parts` frames several and shows the rest faintly. For moving parts, pass `at` (seconds) and look at two or three moments.
@@ -38,7 +42,15 @@ Export only when the user asks. Each export writes to `~/Downloads/<title>.<ext>
 
 - `export_stl` (3D printing; `solid: true` joins every part), `export_3mf` (slicers), `export_step` (CAD programs; tell the user which parts came out faceted or were left out), `export_glb` (Blender, games, the web, with the motion), `export_obj`, `export_ply`.
 - `export_drawing` makes a 2D sheet as `format` svg, pdf or dxf. Pass only title-block values the user gave in this conversation (`drawn_by`, `owner`, `approved_by`, `number`, `revision`, `subtitle`, `tolerances`); never guess a name or a company. `sheet`, `hidden_edges`, `detail`, `projection`, and `axis` with `offset` for the section, are there when the user asks. `outline` gives a single outline at 1:1 for a laser or water-jet cutter. Reply with the path and the `line` it returns, nothing more.
-- `set_look` with `edges: true` draws sharp edges as thin dark lines; use it when the user asks for edges.
+- The view shades the creases between parts by itself. `set_look` with `edges: true` adds sharp edges as thin dark lines, when the user asks for edges; `edges: false` turns them off.
+
+## Pictures and films
+
+Only when the user asks. They show the model as the view does: a section, hidden parts or an exploded view stay in them, so call `clear_view` first for the whole model.
+
+- `set_camera` moves the user's view (`view`, `azimuth`, `elevation`, `parts`, `lens_mm`); `save_as` keeps it as a named view.
+- `save_picture` saves a studio PNG from a `camera`. Look at the preview it returns.
+- For a film, plan a few `shots` of 2 to 6 s (`move`: hold, turntable, orbit, move or follow), try them with `preview_shots`, fix the ones that frame badly, then `record_video`. Slow fast rotors down with `speed` 0.25 to 0.5. Say in your reply whether it came out as mp4 or webm.
 
 ## When you are done
 
