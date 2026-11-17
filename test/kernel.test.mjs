@@ -129,6 +129,43 @@ test("sharp edges are drawn sharp, smooth surfaces smooth", () => {
   assert.equal(displayMesh(s).positions.length, s.positions.length);
 });
 
+test("with the distance function, small fillets are shaded round and sharp edges stay crisp", () => {
+  // [shape, budget, p99 before (deg), p99 now must be under]: the shading
+  // error without and with the distance function given to displayMesh.
+  const cases = [
+    // A 3 mm fillet at 2.6 mm cells: before, its faces were split apart and shaded flat.
+    [{ t: "box", s: [40, 30, 20], r: 3 }, 1500, 9],
+    [{ t: "torus", R: 20, r: 5 }, 1500, 3],
+    [{ t: "sphere", r: 20 }, 1500, 0.5],
+    [{ t: "cylinder", r: 10, h: 30 }, 6000, 1],
+    // Sharp edges: shaded flat to the edge.
+    [{ t: "subtract", a: { t: "union", c: [{ t: "box", s: [80, 60, 30] }, { t: "move", v: [0, 0, 20], c: { t: "cylinder", r: 15, h: 20 } }] }, b: [{ t: "cylinder", r: 8, h: 100 }] }, 6000, 1],
+  ];
+  for (const [node, budget, limit] of cases) {
+    const { f, box } = compile(node);
+    const m = meshSDF(f, box, { budget, normals: true });
+    const before = shadingError(f, displayMesh(m));
+    const d = displayMesh(m, undefined, f);
+    const after = shadingError(f, d);
+    const what = `${node.t} at budget ${budget}: p90 ${pct(before, 0.9).toFixed(1)} -> ${pct(after, 0.9).toFixed(1)}, p99 ${pct(before, 0.99).toFixed(1)} -> ${pct(after, 0.99).toFixed(1)} deg`;
+    assert.ok(pct(after, 0.99) < limit, what);
+    assert.ok(pct(after, 0.9) <= pct(before, 0.9) + 0.05, what);
+    // The same surface, and every triangle corner where it was.
+    assert.equal(d.indices.length, m.indices.length);
+    for (let n = 0; n < m.indices.length; n += 7) for (let a = 0; a < 3; a++) assert.equal(d.positions[d.indices[n] * 3 + a], m.positions[m.indices[n] * 3 + a]);
+  }
+  // The filleted block's 3 mm fillets were shaded in facets: p90 26 degrees.
+  const { f, box } = compile({ t: "box", s: [40, 30, 20], r: 3 });
+  const r = meshSDF(f, box, { budget: 1500, normals: true });
+  assert.ok(pct(shadingError(f, displayMesh(r, undefined, f)), 0.9) < 4);
+  // A box corner still gets three copies, each facing straight out of one face.
+  const b = compile({ t: "box", s: [40, 30, 20] });
+  const bd = displayMesh(meshSDF(b.f, b.box, { normals: true }), undefined, b.f);
+  const at = [];
+  for (let i = 0; i < bd.positions.length; i += 3) if (Math.hypot(bd.positions[i] - 20, bd.positions[i + 1] - 15, bd.positions[i + 2] - 10) < 0.5) at.push([...bd.normals.slice(i, i + 3)].map((v) => Math.round(v * 100) / 100));
+  assert.deepEqual(at.map(String).sort(), ["0,0,1", "0,1,0", "1,0,0"]);
+});
+
 test("the lighter copy of a mesh keeps its shape with far fewer triangles", () => {
   // Signed volume of a triangle mesh; it is only meaningful for a closed one.
   const volume = ({ positions: P, indices: I }) => {

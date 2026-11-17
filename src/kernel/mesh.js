@@ -536,18 +536,29 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   return out;
 }
 
+// Over a fold steeper than the crease angle, the surface counts as smooth
+// when no one of three steps turns its normal by more than this share of the
+// whole turn (half of it, on an evenly curved surface).
+const SMOOTH_STEP = 0.75;
 // A copy of a mesh for drawing, with normals that keep sharp edges sharp.
 // Around each vertex, neighbouring triangles that meet at less than the
 // crease angle are one smooth patch; each patch gets its own copy of the
-// vertex and its own normal. On a smooth patch the true surface normal
-// (passed in, from the distance function) is used where it agrees with the
-// triangles; at an edge or corner the patch's average is used instead, so the
-// shading of one face no longer bleeds across the edge into the next.
-export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg = 40) {
+// vertex and its own normal.
+// With the distance function f, a steeper fold between two triangles is
+// tested on the surface itself: a small fillet turns its normal smoothly
+// from one triangle to the next, a sharp edge all at once. So a fillet only
+// a cell or two across is shaded round instead of in facets, and a sharp
+// edge stays crisp. The normals come from f too: on a smooth patch the
+// surface normal at the vertex; on a patch that ends at an edge, the normal
+// a little way into that patch, which is its face's own normal.
+// Without f, the true normals passed in are used where they agree with the
+// triangles, and the patch's average elsewhere.
+export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg = 40, f = null) {
   const nv = P.length / 3;
   const nt = I.length / 3;
   const fn = new Float64Array(nt * 3); // area-weighted face normals
   const un = new Float64Array(nt * 3); // unit face normals
+  let size = 0; // mean edge length, for sampling f
   for (let t = 0; t < nt; t++) {
     const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
     const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
@@ -556,7 +567,9 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
     const l = Math.hypot(x, y, z) || 1;
     fn[t * 3] = x; fn[t * 3 + 1] = y; fn[t * 3 + 2] = z;
     un[t * 3] = x / l; un[t * 3 + 1] = y / l; un[t * 3 + 2] = z / l;
+    if (t < 256) size += Math.hypot(ux, uy, uz);
   }
+  size /= Math.min(nt, 256) || 1;
   // Triangles around each vertex (CSR).
   const start = new Uint32Array(nv + 1);
   for (let n = 0; n < I.length; n++) start[I[n] + 1]++;
@@ -565,8 +578,77 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
   const around = new Uint32Array(I.length);
   for (let n = 0; n < I.length; n++) around[fill[I[n]]++] = n; // corner index (t * 3 + r)
 
+  // The surface normal near a point, from f: one step onto the surface, then
+  // the gradient there.
+  const e = size * 1e-3;
+  const g4 = new Float64Array(4);
+  const grad = (x, y, z, out) => {
+    const a = f(x + e, y - e, z - e), b = f(x - e, y - e, z + e), d = f(x - e, y + e, z - e), g = f(x + e, y + e, z + e);
+    let nx = a - b - d + g, ny = -a - b + d + g, nz = -a + b - d + g;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    out[0] = nx / l; out[1] = ny / l; out[2] = nz / l; out[3] = (a + b + d + g) / 4;
+  };
+  const surfaceNormal = (x, y, z, out) => {
+    grad(x, y, z, g4);
+    const s = g4[3];
+    grad(x - g4[0] * s, y - g4[1] * s, z - g4[2] * s, out);
+  };
+  const centroid = (t, out) => {
+    const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+    for (let k = 0; k < 3; k++) out[k] = (P[a + k] + P[b + k] + P[c + k]) / 3;
+  };
+  const triNormal = new Map(); // triangle -> normal of f at its centre
+  const cpos = new Float64Array(3);
+  const normalOfTri = (t) => {
+    let n = triNormal.get(t);
+    if (!n) {
+      centroid(t, cpos);
+      n = new Float64Array(4);
+      surfaceNormal(cpos[0], cpos[1], cpos[2], n);
+      triNormal.set(t, n);
+    }
+    return n;
+  };
+  // Is the surface smooth across the edge (v, o) between triangles t and s?
+  // f's normal is followed from t's centre, past the edge's middle, to s's
+  // centre, in three steps: over a fillet it turns in all of them, over a
+  // sharp edge all in the middle one.
+  const smoothCache = new Map();
+  const q = new Float64Array(4), r0 = new Float64Array(3), r1 = new Float64Array(3);
+  const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+  const smoothAcross = (v, o, t, s) => {
+    const key = v < o ? v * nv + o : o * nv + v;
+    let ok = smoothCache.get(key);
+    if (ok !== undefined) return ok;
+    centroid(t, r0);
+    centroid(s, r1);
+    const mx = (P[v * 3] + P[o * 3]) / 2, my = (P[v * 3 + 1] + P[o * 3 + 1]) / 2, mz = (P[v * 3 + 2] + P[o * 3 + 2]) / 2;
+    // Not on the edge itself: on a sharp edge, f's normal there is a blend
+    // of the two faces', which would look like a smooth turn.
+    const pts = [
+      [(r0[0] + mx) / 2, (r0[1] + my) / 2, (r0[2] + mz) / 2],
+      [(r1[0] + mx) / 2, (r1[1] + my) / 2, (r1[2] + mz) / 2],
+    ];
+    let prev = normalOfTri(t), total = 0, most = 0;
+    for (const [x, y, z] of pts) {
+      const n = new Float64Array(4);
+      surfaceNormal(x, y, z, n);
+      const a = angle(prev, n);
+      total += a;
+      most = Math.max(most, a);
+      prev = n;
+    }
+    const a = angle(prev, normalOfTri(s));
+    total += a;
+    most = Math.max(most, a);
+    ok = most < SMOOTH_STEP * total;
+    smoothCache.set(key, ok);
+    return ok;
+  };
+
   const cosCrease = Math.cos((creaseDeg * Math.PI) / 180);
   const cosAgree = Math.cos((20 * Math.PI) / 180);
+  const cosTrust = Math.cos((60 * Math.PI) / 180);
   const pos = [];
   const nrm = [];
   const corner = new Uint32Array(I.length); // new vertex index per corner
@@ -576,6 +658,7 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
     return x;
   };
   const dot = (t, s) => un[t * 3] * un[s * 3] + un[t * 3 + 1] * un[s * 3 + 1] + un[t * 3 + 2] * un[s * 3 + 2];
+  const into = new Float64Array(4);
   for (let v = 0; v < nv; v++) {
     const s0 = start[v], s1 = start[v + 1];
     const k = s1 - s0;
@@ -591,7 +674,10 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
       for (const o of [I[t * 3 + ((r + 1) % 3)], I[t * 3 + ((r + 2) % 3)]]) {
         const j = byOther.get(o);
         if (j === undefined) byOther.set(o, i);
-        else if (dot(t, (around[s0 + j] / 3) | 0) >= cosCrease) parent[find(i)] = find(j);
+        else {
+          const s = (around[s0 + j] / 3) | 0;
+          if (dot(t, s) >= cosCrease || (f && smoothAcross(v, o, t, s))) parent[find(i)] = find(j);
+        }
       }
     }
     const groups = new Map();
@@ -600,6 +686,7 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(i);
     }
+    const whole = groups.size === 1;
     for (const list of groups.values()) {
       let x = 0, y = 0, z = 0;
       for (const i of list) {
@@ -608,7 +695,23 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
       }
       const l = Math.hypot(x, y, z) || 1;
       (x /= l), (y /= l), (z /= l);
-      if (G && G[v * 3] * x + G[v * 3 + 1] * y + G[v * 3 + 2] * z >= cosAgree) (x = G[v * 3]), (y = G[v * 3 + 1]), (z = G[v * 3 + 2]);
+      if (f && !whole) {
+        // A patch that ends at an edge: f's normal a little way into it.
+        let cx = 0, cy = 0, cz = 0;
+        for (const i of list) {
+          centroid((around[s0 + i] / 3) | 0, cpos);
+          cx += cpos[0]; cy += cpos[1]; cz += cpos[2];
+        }
+        const w = 0.5 / list.length;
+        surfaceNormal(P[v * 3] * 0.5 + cx * w, P[v * 3 + 1] * 0.5 + cy * w, P[v * 3 + 2] * 0.5 + cz * w, into);
+        if (into[0] * x + into[1] * y + into[2] * z >= cosTrust) (x = into[0]), (y = into[1]), (z = into[2]);
+      } else if (G) {
+        const d = G[v * 3] * x + G[v * 3 + 1] * y + G[v * 3 + 2] * z;
+        if (d >= (f ? cosTrust : cosAgree)) (x = G[v * 3]), (y = G[v * 3 + 1]), (z = G[v * 3 + 2]);
+      } else if (f) {
+        surfaceNormal(P[v * 3], P[v * 3 + 1], P[v * 3 + 2], into);
+        if (into[0] * x + into[1] * y + into[2] * z >= cosTrust) (x = into[0]), (y = into[1]), (z = into[2]);
+      }
       const id = pos.length / 3;
       pos.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
       nrm.push(x, y, z);

@@ -65,3 +65,6 @@ Notable changes to 3D Maker. The format follows
   between grid points, meshes flat plates, discs and blades stretched through their thickness, and
   refines for thin tubes and shells. A wall too thin for any cell the budget allows is drawn a
   little more than a cell thick instead of in shreds.
+- Smoother metal. Small fillets and tight curves are shaded round instead of in facets, and sharp
+  edges stay crisp: the view asks the distance function whether each fold in the mesh is a sharp
+  edge or a curve, and takes its normals from it.

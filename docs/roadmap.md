@@ -26,7 +26,7 @@ A studio shot of a mechanism from a professional tool gets its look from four th
 1. **Shading in the creases.** Ambient occlusion darkens the gaps between parts and the inside of corners. It is what makes an assembly read as many parts fitted together.
 2. **Edge lines.** An optional "shaded with edges" look, where sharp edges and outlines are drawn as thin dark lines, as in engineering views.
 3. **Small fillets and chamfers everywhere.** Real machined parts have a small break on every edge, and those edges catch the light. The kernel can round edges; what is missing is detail in the mesh where the surface curves tightly, so a 1 mm fillet on a 1 m part survives. This needs detail shared out by curvature, not only by surface area.
-4. **Smoother metal.** Polished materials show every mesh facet. Normals taken from the distance field itself, and finer view meshes on shiny parts, fix most of it.
+4. **Smoother metal.** Normals now come from the distance field, so small fillets and curves are shaded round and sharp edges stay crisp. What is left: finer view meshes on shiny parts, where the outline of a coarse mesh still shows its facets.
 5. **Materials Claude chooses.** Parts can now be metal, paint, plastic, rubber or glass. Next: brushed and anodised metals, textures such as tread and knurling, and decals.
 6. **A camera Claude can direct.** Tools for Claude to place the camera, pick a lens and save a picture, so "give me a hero shot of the rotor head" works.
 
