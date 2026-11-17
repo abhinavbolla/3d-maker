@@ -6,6 +6,7 @@ import { meshSDF } from "./mesh.js";
 import { convexHullPlanes } from "./hull.js";
 import { makePoseApi, sampleMotion, defaultLoop } from "./motion.js";
 import { layoutText } from "./font.js";
+import { makeBuilding, BUILDING_NAMES } from "./building.js";
 
 export const PALETTE = ["#9aa3ad", "#c9cdd2", "#5b6670", "#b8483e", "#d9a441", "#4f7cac", "#6b8f5e", "#2f3338"];
 const AXES = { x: 0, y: 1, z: 2 };
@@ -963,6 +964,8 @@ export const JOINT_TOLERANCE_MM = 1;
 // How a part's surface is drawn. Without one the view picks from the colour.
 const MATERIALS = ["metal", "paint", "plastic", "rubber", "glass"];
 const BLOCKED = ["self", "globalThis", "window", "fetch", "importScripts", "XMLHttpRequest", "WebSocket", "postMessage", "close", "indexedDB", "caches", "Worker", "Function"];
+// Buildings (building.js): their window() takes the place of the blocked global.
+for (const n of BUILDING_NAMES) API_NAMES.push(n), BLOCKED.includes(n) && BLOCKED.splice(BLOCKED.indexOf(n), 1);
 
 let lineOffset = null;
 function scriptLine(err) {
@@ -1086,11 +1089,13 @@ export function runScript(source, values = {}) {
   const loop = (seconds) => (loopSeconds = num(seconds, "loop seconds", { positive: true }));
   const print = (...a) => prints.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 
-  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, text, helix, sweep, loft, views, hull, bounds, thread, hole, bolt, nut, washer, metric, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop };
+  const building = makeBuilding({ part: (name, node, o) => part(name, new Shape(node), o), fail, num });
+  const api = { box, sphere, ellipsoid, cylinder, cone, capsule, torus, extrude, revolve, tube, circle, rect, polygon, path, airfoil, text, helix, sweep, loft, views, hull, bounds, thread, hole, bolt, nut, washer, metric, union, subtract, intersect, part, param, title, print, turn: poses.turn, slide: poses.slide, link: poses.link, still: poses.still, where, joint, loop, ...building.api };
   try {
     // In its own block, so the script may reuse a built-in name (const hole = ...).
     const fn = new Function(...API_NAMES, ...BLOCKED, `"use strict"; {\n${source}\n}\n//# sourceURL=model.js`);
     fn(...API_NAMES.map((n) => api[n]), ...BLOCKED.map(() => undefined));
+    building.finish();
   } catch (err) {
     const line = scriptLine(err);
     // "use strict" adds one line before the script.
@@ -1146,7 +1151,9 @@ export function runScript(source, values = {}) {
   const out = parts.map(({ own, ...p }) => ({ ...p, frames: sampled.frames.get(p.name) ?? null }));
   const motion = sampled.count ? { loop: loopLen, frames: sampled.count, joints: jointReport, links } : null;
   // joints also go on their own, so the fit check leaves their overlap out in a model that does not move.
-  return { title: modelTitle, parts: out, params, prints, warnings, motion, joints: jointReport };
+  const house = building.info();
+  if (house) warnings.push(...house.warnings);
+  return { title: modelTitle, parts: out, params, prints, warnings, motion, joints: jointReport, ...(house ? { building: house } : {}) };
 }
 
 function niceStep(range) {
