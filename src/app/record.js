@@ -61,6 +61,13 @@ function hash(pixels) {
   return (h >>> 0).toString(16);
 }
 
+// The mean brightness of the top-left 16 x 16 px of RGBA rows given bottom up.
+function corner(px, w, h) {
+  let sum = 0;
+  for (let y = h - 16; y < h; y++) for (let x = 0; x < 16; x++) for (let c = 0; c < 3; c++) sum += px[(y * w + x) * 4 + c];
+  return Math.round(sum / (16 * 16 * 3));
+}
+
 export class Cancelled extends Error {
   constructor() {
     super("The recording was cancelled. No file was written.");
@@ -72,7 +79,8 @@ export class Cancelled extends Error {
 // viewport: the view (its camera hooks and studio). ctx: as for planShots.
 // onFrame(done, total): after each frame. signal: an AbortSignal to cancel.
 // stills: frame numbers to keep a small JPEG of (for Claude to look at).
-// test: { hashes: true } returns each frame's pixel hash; { slowMs } waits
+// test: { hashes: true } returns each frame's pixel hash; { corners: true }
+// the mean brightness (0-255) of each frame's top-left 16 x 16 px; { slowMs } waits
 // that long after each frame, to show that slow frames change nothing;
 // { track: part } returns that part's pose matrix in each frame.
 // creases: crease shading on every frame (on unless turned off).
@@ -113,6 +121,7 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
   if (exact) viewport.useExactPoses(exact);
   const cam = toThree(plan.at(0).camera, width / height, size);
   const hashes = [];
+  const corners = [];
   const tracked = []; // test.track: that part's pose in each frame
   const kept = {};
   try {
@@ -124,7 +133,11 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
       // The seam for the finished frame: everything that makes a frame
       // (pose, shadows, mirror, shading) happens inside studio.draw.
       const canvas = studio.draw(cam, time);
-      if (test.hashes) hashes.push(hash(studio.pixels()));
+      if (test.hashes || test.corners) {
+        const px = studio.pixels();
+        if (test.hashes) hashes.push(hash(px));
+        if (test.corners) corners.push(corner(px, width, height));
+      }
       if (test.track) tracked.push(ctx.partsAt(time).get(test.track)?.matrix.elements);
       if (stills.includes(n)) kept[n] = studio.still(480);
       const frame = new VideoFrame(canvas, { timestamp: Math.round(n * frameUs), duration: Math.round(frameUs) });
@@ -159,6 +172,7 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
     end: plan.end,
     stills: kept,
     ...(test.hashes ? { hashes } : {}),
+    ...(test.corners ? { corners } : {}),
     ...(test.track ? { tracked, times: Array.from({ length: plan.frames }, (_, n) => plan.timeAt(n)) } : {}),
   };
 }

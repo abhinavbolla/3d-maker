@@ -386,7 +386,12 @@ const actions = {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
     if (kind === "video") return exportVideo();
     if (kind === "png") {
-      const { png } = viewport.picture();
+      let png;
+      try {
+        ({ png } = viewport.picture());
+      } catch (err) {
+        return say(err.message, 8000);
+      }
       const where = await saveBytes(Uint8Array.from(atob(png), (c) => c.charCodeAt(0)), `${fileName()}.png`, "png");
       return say(where ? `Saved ${where.split("/").pop()}` : "");
     }

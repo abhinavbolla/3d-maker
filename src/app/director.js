@@ -219,7 +219,7 @@ export function createDirector({ store, viewport, kernel, onRecording = () => {}
           if (err instanceof Cancelled) throw new Error("The user cancelled the recording. No file was written.");
           throw err;
         }
-        const { bytes, stills: kept, end, hashes, tracked, times, ...facts } = result;
+        const { bytes, stills: kept, end, hashes, corners, tracked, times, ...facts } = result;
         film = { id: ++filmId, bytes };
         return {
           name: title(),
@@ -231,6 +231,7 @@ export function createDirector({ store, viewport, kernel, onRecording = () => {}
           end_camera: describe(end),
           stills: Object.entries(kept).map(([n, jpeg]) => ({ frame: Number(n), at_seconds: r1(Number(n) / fps), jpeg })),
           ...(hashes ? { hashes } : {}),
+          ...(corners ? { corners } : {}),
           ...(tracked ? { tracked, times } : {}),
         };
       },
