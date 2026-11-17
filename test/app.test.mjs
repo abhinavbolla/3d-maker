@@ -1,12 +1,14 @@
 // The app's commands in a real app window (headless Chrome), without Claude:
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
 // Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
+import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER, sleep } from "./harness.mjs";
 import { startHarness, checks, sleep, STEPPED_FRAMES, GL_COUNTER } from "./harness.mjs";
 import { writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { check3MF } from "./check-3mf.mjs";
+import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
 
 const { check, fail, done } = checks();
 const h = await startHarness({ port: 5179 });
@@ -118,6 +120,26 @@ try {
   const m3 = await call("export_3mf");
   const r3 = m3.result ? check3MF(Buffer.from(m3.result.base64, "base64")) : { problems: [m3.error], objects: [] };
   check(!r3.problems.length && r3.objects.map((o) => `${o.name} ${o.color}`).join(", ") === "Base #4F7CACFF, Peg #D9A441FF", `3MF has both parts, named, coloured and closed (${r3.objects.map((o) => `${o.name} ${o.color} ${o.triangles}`).join(", ") || r3.problems})`);
+
+  // glTF, OBJ (with its MTL) and PLY, read back by test/check-meshfile.mjs.
+  const glb = await call("export_glb");
+  const rg = glb.result ? checkGLB(Buffer.from(glb.result.base64, "base64")) : { problems: [glb.error], parts: [] };
+  check(!rg.problems.length && rg.parts.map((p) => `${p.name} ${Math.round(p.bounds[5] - p.bounds[2])}`).join(", ") === "Base 10, Peg 20" && !rg.animations.length, `GLB has both parts, named, closed, sized in mm (${rg.parts.map((p) => `${p.name} ${p.triangles}`).join(", ") || rg.problems})`);
+  const ob = await call("export_obj", { mtl: "peg.obj" });
+  const ro = ob.result ? checkOBJ(Buffer.from(ob.result.base64, "base64").toString(), Buffer.from(ob.result.mtl_base64, "base64").toString()) : { problems: [ob.error], parts: [] };
+  check(!ro.problems.length && ro.mtllib === "peg.mtl" && ro.parts.map((p) => p.name).join(", ") === "Base, Peg", `OBJ and its MTL have both parts, with normals and materials (${ro.problems.join("; ") || ro.parts.map((p) => p.material?.name).join(", ")})`);
+  const pl = await call("export_ply");
+  const rp = pl.result ? checkPLY(Buffer.from(pl.result.base64, "base64")) : { problems: [pl.error], parts: [] };
+  check(!rp.problems.length && rp.parts.map((p) => `${p.name} ${p.colors}`).join(", ") === "Base #4f7cac, Peg #d9a441", `PLY has both parts, coloured per vertex (${rp.parts.map((p) => `${p.name} ${p.colors}`).join(", ") || rp.problems})`);
+  // The same from the Export menu: each saves its file (an OBJ also its MTL).
+  await w(`(() => { window.__saved = []; HTMLAnchorElement.prototype.click = function () { window.__saved.push(this.download); }; return true; })()`);
+  for (const kind of ["glb", "obj", "ply"]) {
+    await w(`document.querySelector('#export-menu [data-export="${kind}"]').click(), true`);
+    for (let i = 0; i < 100 && !/^Exported/.test(await w('document.getElementById("status").textContent')); i++) await sleep(100);
+    await w(`document.getElementById("status").textContent = "", true`);
+  }
+  const saved = await w("window.__saved");
+  check(saved.join(", ") === "model.glb, model.obj, model.mtl, model.ply", `the Export menu saves glTF, OBJ with its MTL, and PLY (${saved.join(", ")})`);
 
   // The same model as a drawing: a well-formed SVG sheet with three views,
   // a section through both parts, and the overall sizes (40 x 40, and 27

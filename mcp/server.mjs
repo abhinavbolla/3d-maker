@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { z } from "zod";
 import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve, extname } from "node:path";
+import { dirname, resolve, extname, basename, join } from "node:path";
 import { REFERENCE } from "./reference.mjs";
 
 const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
@@ -234,6 +234,34 @@ tool(
     projection: z.enum(["first", "third", ""]).optional().describe('"first" (ISO, Europe and most of the world) or "third" angle (US, Canada, Japan). Default: from the region the user\'s system names, else first.'),
   },
   async ({ path, ...args }) => save(await call("export_drawing", args), path, "svg"),
+);
+
+tool(
+  "export_glb",
+  "Export all visible parts as a glTF binary file (.glb) for Blender, game engines and web viewers: one named node per part with its colour and material (metal, paint, plastic, rubber, glass), in metres with Y up as glTF requires, and the model's motion as an animation that loops. path defaults to ~/Downloads/<title>.glb. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_glb"), path, "glb"),
+);
+
+tool(
+  "export_obj",
+  "Export all visible parts as an OBJ file, one object per part with normals, in millimetres with Y up, and its colours and materials in an MTL file of the same name beside it. Parts are at rest, without motion. path defaults to ~/Downloads/<title>.obj. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => {
+    const r = await call("export_obj", { mtl: path ? basename(path) : "" });
+    const { mtl_name, mtl_base64, ...rest } = r;
+    const out = JSON.parse((await save(rest, path, "obj")).content[0].text);
+    const mtlPath = join(dirname(out.path), mtl_name);
+    await writeFile(mtlPath, Buffer.from(mtl_base64, "base64"));
+    return json({ ...out, mtl_path: mtlPath });
+  },
+);
+
+tool(
+  "export_ply",
+  "Export all visible parts as a binary PLY file: one mesh, each vertex coloured with its part's colour, in millimetres with Z up. Parts are at rest. path defaults to ~/Downloads/<title>.ply. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_ply"), path, "ply"),
 );
 
 await listen();

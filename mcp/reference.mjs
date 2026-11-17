@@ -123,7 +123,7 @@ PARTS, VALUES, MOTION
   part(name, shape, { color: "#rrggbb", material, spin: { axis, center, rpm }, swing: { axis, center, angle, seconds }, follow, motion, hidden })
     Every visible piece must be a part with a unique, plain name ("Main rotor", "Left door"). The user clicks parts to select and tweak them.
     material is how the surface is drawn: "metal" (machined or cast metal), "brushed" (brushed or satin-finished metal: panels, covers, tubes), "anodised" (coloured anodised aluminium: give it the colour), "paint" (glossy painted skin), "plastic" (satin), "rubber" (matt: tyres, seals, grips) or "glass" (see-through: windows, canopies, lenses). Give every part the material the real one has. Without it, grey parts are drawn as metal, near-black ones as rubber and coloured ones as paint.
-    spin rotates the part forever around the line through center along axis ("x", "y", "z" or [x, y, z]): rotors, wheels, fans. swing rocks it back and forth by ±angle: doors, pendulums, wings. Motion is only shown in the app, not exported.
+    spin rotates the part forever around the line through center along axis ("x", "y", "z" or [x, y, z]): rotors, wheels, fans. swing rocks it back and forth by ±angle: doors, pendulums, wings. Motion plays in the app and goes into a glTF export (export_glb); the other exports hold the parts at rest.
   param(label, value, { min, max, step, part })
     Returns the number to use, and gives the user a slider. Always set part to the part it mainly affects, so the slider appears when they click that part. Add 1 to 3 sliders per important part for its main dimensions (length, width, count, angle). Keep labels short ("Length", "Blades").
   title("Name")                   names the model (used for the exported file)
