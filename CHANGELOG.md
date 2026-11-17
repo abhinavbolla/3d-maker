@@ -22,6 +22,17 @@ Notable changes to Draftsman. The format follows
   parts with tapering edges are meshed stretched through their thickness.
 - Motion and mechanisms: parts that turn, slide, follow and link, joints checked over the whole
   motion, and fit checks that find parts passing into each other at rest and in motion.
+- A Claude Code plugin (`claude plugin marketplace add abhinavbolla/draftsman`, then
+  `claude plugin install draftsman@draftsman`) that adds Draftsman's MCP server and a skill with
+  the way to work in it, and how to add the server to Claude Desktop, Cursor, VS Code or any other
+  MCP client, in `docs/using.md`. `AGENTS.md` gives contributors' coding agents the hard rules and
+  what enforces each.
+- `test/tools.test.mjs`, in `npm test`: rules for the MCP tool list (names, descriptions,
+  arguments, enums, tools named in the text) and a ceiling on its size, which every client reads
+  in every conversation. Every tool argument now has a description, `measure`'s material is
+  picked from the materials it knows, and the tool list is a quarter smaller (41.3 KB to about
+  31 KB): what reads like a manual (how to plan a film, what goes on a drawing, which parts STEP
+  writes exactly) moved to the `reference` tool, and a camera's fields are described once.
 - Plans for big models: Claude lists the sub-assemblies and their parts, then builds and checks
   them one step at a time, with progress shown above the prompt.
 - Export as STL (each part its own shell), STL as one solid, and 3MF with named, coloured parts.

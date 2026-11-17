@@ -105,7 +105,7 @@ Rhino's strength is free-form curves and surfaces. To compete there:
 
 ## The app
 
-Done so far: installers for macOS, Windows and Linux, built by a release workflow and attached to a draft release, with our own icon; and four examples on the empty window (a mug, a bolted bracket, a rotor head that moves and a helicopter) that open at once and suggest what to try next.
+Done so far: installers for macOS, Windows and Linux, built by a release workflow and attached to a draft release, with our own icon; four examples on the empty window (a mug, a bolted bracket, a rotor head that moves and a helicopter) that open at once and suggest what to try next; and a Claude Code plugin that adds the MCP server and a skill in one step, with the way to add the server to other MCP clients.
 
 What is left:
 
