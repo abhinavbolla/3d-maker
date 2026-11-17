@@ -10,6 +10,7 @@ import { loadAutosave } from "./app/autosave.js";
 import { saveBytes, openText, saveOBJ } from "./app/files.js";
 import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
+import { showExamples, exampleScript, tryText } from "./app/examples.js";
 
 const $ = (id) => document.getElementById(id);
 const kernel = createKernel();
@@ -145,7 +146,7 @@ function fitInput() {
   t.style.overflowY = t.scrollHeight > 160 ? "auto" : "hidden";
   renderSend();
 }
-$("input").addEventListener("input", fitInput);
+$("input").addEventListener("input", () => (fitInput(), renderStart()));
 
 // ---- part card: the selected part's sliders ----
 let cardKey = "";
@@ -255,12 +256,14 @@ function renderAll() {
   $("facts").textContent = size ? `${count} ${count === 1 ? "part" : "parts"}, ${size.map((v) => Math.round(v)).join(" × ")} mm` : "";
   $("views").hidden = !count;
   $("viewcube").hidden = !count;
-  $("start").hidden = Boolean(count) || Boolean(working) || !$("reply").hidden;
+  renderStart();
   if (count) moveHint();
   document.title = title ? `${title} · Draftsman` : "Draftsman";
   $("chip").hidden = !selected;
   $("chip-name").textContent = selected ?? "";
-  $("input").placeholder = selected ? `Change ${selected}` : result?.parts.length ? "Describe a change" : "Describe what to make";
+  // An example suggests what to try until its script is changed.
+  const tryNext = example && store.state.doc.script === example.script ? tryText(example.ex) : "";
+  $("input").placeholder = selected ? `Change ${selected}` : tryNext || (result?.parts.length ? "Describe a change" : "Describe what to make");
   const motion = viewport.hasMotion();
   $("play").hidden = $("play-rule").hidden = !motion;
   $("play").textContent = viewport.isPlaying() ? "Pause" : "Play";
@@ -270,6 +273,41 @@ function renderAll() {
   renderProgress();
 }
 store.subscribe(renderAll);
+
+// The invitation and examples show only on an empty window, and go as soon
+// as you type.
+function renderStart() {
+  const count = store.state.result?.parts.length ?? 0;
+  $("start").hidden = Boolean(count) || Boolean(working) || Boolean(opening) || !$("reply").hidden || Boolean($("input").value.trim());
+}
+
+// ---- examples: a ready model, opened without Claude ----
+let example = null; // { ex, script } of the example opened last
+let opening = null; // the example being opened
+async function openExample(ex) {
+  if (opening || working) return;
+  opening = ex;
+  renderStart();
+  const saying = `Opening the ${ex.name.toLowerCase()}`;
+  say(saying, 0);
+  try {
+    const script = await exampleScript(ex.id);
+    viewport.resetFit();
+    // Not a step in the undo history, so undo never goes back to the empty window.
+    await store.commit({ ...emptyDoc(), script }, { history: false });
+    example = { ex, script };
+    viewport.fitIfNew();
+    // Unless the first-model hint has taken the status line meanwhile.
+    if (note === saying) say("");
+  } catch (err) {
+    say(err.message, 8000);
+  } finally {
+    opening = null;
+    renderAll();
+    $("input").focus();
+  }
+}
+showExamples($("ideas"), openExample);
 
 // Said once, the first time a model is on screen.
 function moveHint() {
@@ -283,13 +321,6 @@ function moveHint() {
 }
 
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => viewport.fit(b.dataset.view === "fit" ? "iso" : b.dataset.view)));
-document.querySelectorAll("#ideas button").forEach((b) =>
-  b.addEventListener("click", () => {
-    $("input").value = b.textContent;
-    fitInput();
-    $("input").focus();
-  }),
-);
 
 $("play").addEventListener("click", () => {
   viewport.setPlaying(!viewport.isPlaying());
@@ -438,6 +469,7 @@ if (import.meta.env.DEV) {
     screenPosition: (name) => viewport.screenPosition(name),
     turningPoint: () => viewport.turningPoint(),
     call: (name, args = {}) => commands[name](args),
+    history: () => ({ undo: store.state.past.length, redo: store.state.future.length }),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
   };
 }
