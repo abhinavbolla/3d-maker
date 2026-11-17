@@ -838,21 +838,43 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // and returns the canvas. Read it before giving the browser back control
   // (toDataURL, drawImage, new VideoFrame): the canvas is not kept after
   // that. The window goes back to drawing itself on its next frame.
-  function finishedFrame({ creases = true } = {}) {
-    pose(time);
-    if (guides.visible) sizePivot();
-    renderer.shadowMap.autoUpdate = false;
-    renderer.shadowMap.needsUpdate = shadowsMoved;
+  //
+  // With width and height (px) it draws at that size instead, one pixel per
+  // pixel, with the camera's shape following it, and hands the canvas to
+  // read(canvas) while the frame is on it; the window's own size comes back
+  // before it returns what read returned.
+  function finishedFrame({ creases = true, width, height } = {}, read) {
+    const sized = width > 0 && height > 0;
+    const was = { ratio: renderer.getPixelRatio(), aspect: camera.aspect };
     try {
-      draw();
-      shadowsMoved = false;
+      if (sized) {
+        renderer.setPixelRatio(1);
+        renderer.setSize(Math.round(width), Math.round(height), false);
+        sizeMirror(Math.round(width), Math.round(height), 4);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+      pose(time);
+      if (guides.visible) sizePivot();
+      renderer.shadowMap.autoUpdate = false;
+      renderer.shadowMap.needsUpdate = shadowsMoved;
+      try {
+        draw();
+        shadowsMoved = false;
+      } finally {
+        renderer.shadowMap.autoUpdate = true;
+      }
+      look.hide();
+      if (creases) look.paint(camera, renderer.domElement.width, renderer.domElement.height, null);
+      return read ? read(renderer.domElement) : renderer.domElement;
     } finally {
-      renderer.shadowMap.autoUpdate = true;
+      if (sized) {
+        renderer.setPixelRatio(was.ratio);
+        camera.aspect = was.aspect;
+        resize();
+      }
+      render();
     }
-    look.hide();
-    if (creases) look.paint(camera, renderer.domElement.width, renderer.domElement.height, null);
-    render();
-    return renderer.domElement;
   }
 
   setStage(null);

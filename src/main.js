@@ -411,7 +411,7 @@ if (import.meta.env.DEV) {
     setValue: (key, value) => store.setValue(key, value, { final: true }),
     exportSTL: () => commands.export_stl({}),
     picture: (opts) => viewport.picture(opts),
-    frame: (opts) => viewport.frame(opts),
+    frame: (opts, read) => viewport.frame(opts, read),
     look: (v) => viewport.setLook(v ?? {}),
     fit: (view, names) => viewport.fit(view, names),
     screenPosition: (name) => viewport.screenPosition(name),

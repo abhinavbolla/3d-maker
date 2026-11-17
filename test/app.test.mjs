@@ -513,6 +513,20 @@ joint("Rod", "Piston", top);` });
   check(shade.crease >= 15, `the crease shading darkens the corner where two parts meet (by ${shade.crease} of 255)`);
   check(shade.plate <= 1 && shade.block <= 1, `and leaves open flat faces as they were (${shade.plate} and ${shade.block} of 255 at most)`);
   check(shade.floor <= 1 && shade.background <= 1, `and the floor and the background (${shade.floor} and ${shade.background} of 255 at most)`);
+  // A finished frame at a given size, for recording: read while it is on the
+  // canvas, shaded, and the window's own size back afterwards.
+  const sizedFrame = await w(`(() => {
+    const c = document.querySelector("#viewport canvas"), before = [c.width, c.height];
+    const got = window.__draftsman.frame({ width: 640, height: 360 }, (k) => {
+      const x = Object.assign(document.createElement("canvas"), { width: k.width, height: k.height }).getContext("2d");
+      x.drawImage(k, 0, 0);
+      const d = x.getImageData(0, 0, k.width, k.height).data;
+      let parts = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - d[i + 2]) < 30 && d[i] > 90 && d[i] < 200) parts++;
+      return { size: [k.width, k.height], parts };
+    });
+    return { ...got, before, after: [c.width, c.height] };
+  })()`);
+  check(sizedFrame.size.join() === "640,360" && sizedFrame.parts > 1000 && sizedFrame.after.join() === sizedFrame.before.join(), `frame() draws at a given size and gives the window its size back (${JSON.stringify(sizedFrame)})`);
 
 
   // What the view costs the GPU, counted below three.js on a Retina-sized
