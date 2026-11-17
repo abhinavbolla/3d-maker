@@ -280,7 +280,11 @@ export function planShots(shots, { fps, startAt = 0, ...ctx }) {
     const count = Math.max(1, Math.round(seconds * fps));
     const from = clock; // this shot's own start, kept: clock moves on to the next shot
     const motionAt = (k) => from + (plays ? (k / fps) * speed : 0);
-    const camCtx = { ...ctx, box: (names) => boxAt(names, motionAt(0)), points: (names) => pointsAt(names, motionAt(0)), sweep: move === "turntable" || move === "orbit" ? degrees : 0, current: () => (last ? { ...last } : ctx.current()) };
+    // Framing takes in where the parts go during the shot (a spinning rotor
+    // is framed for its whole disc), except when following one part, which
+    // is framed as it starts.
+    const spread = plays && move !== "follow" ? [0, 1, 2, 3, 4, 5, 6, 7].map((i) => motionAt((i / 8) * count)) : [motionAt(0)];
+    const camCtx = { ...ctx, box: (names) => boxAt(names, motionAt(0)), points: (names) => spread.flatMap((t) => pointsAt(names, t)), sweep: move === "turntable" || move === "orbit" ? degrees : 0, current: () => (last ? { ...last } : ctx.current()) };
 
     let start;
     try {
