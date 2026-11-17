@@ -1075,6 +1075,27 @@ joint("Rod", "Piston", top);` });
   check(times.length === 12 && times.every((t, n) => Math.abs(t - n / 30) < 1e-9), `over two shots, frame n is posed at n/30 s into the motion (${times.slice(6, 9).map((t) => t.toFixed(4))})`);
   const recOff = Math.max(...(tracked.result?.tracked ?? [[NaN]]).map(hubOff));
   check(liveOff < 0.1 && recOff < 0.1, `a fast rotor's hub stays on its axis: ${liveOff.toFixed(4)} mm off in the view between samples, ${recOff.toFixed(4)} mm in recorded frames`);
+
+  // A picture, a recording refused for a bad camera setting, then a
+  // recording: its first and last frames stand on the light paper backdrop.
+  const backdrop = async () => (await vc("record_video", { shots: [{ seconds: 0.3, move: "orbit", degrees: 20, camera: { azimuth: 30, elevation: 15, lens_mm: 85 } }], width: 160, height: 90, test: { corners: true } })).result?.corners ?? [];
+  const alone = await backdrop();
+  await vc("save_picture", { camera: { azimuth: 40, elevation: 15, lens_mm: 85 }, width: 320, height: 180 });
+  const refused = await vc("record_video", { shots: [{ seconds: 1, camera: { azimuth: 30, up: [0, 0, 1] } }], width: 160, height: 90 });
+  const afterRefused = await backdrop();
+  check(/no setting "up"/.test(refused.error ?? "") && alone[0] > 180 && afterRefused[0] > 180 && afterRefused.at(-1) > 180 && Math.abs(afterRefused[0] - alone[0]) <= 2, `after a picture and a refused recording, a film's first and last frames have the light backdrop (corner ${afterRefused[0]} and ${afterRefused.at(-1)} of 255; ${alone[0]} for a film on its own)`);
+  // The browser can take the graphics context away. While it is gone a film
+  // is refused, not recorded black; once it is back, films are as before,
+  // the studio light the parts reflect made again (it comes back black).
+  const brightness = async () => (await vc("record_video", { shots: [{ seconds: 0.1, camera: { view: "iso" } }], width: 160, height: 90, test: { hashes: true, corners: true } })).result;
+  const wholeBefore = await brightness();
+  await v(`(() => { const gl = document.querySelector("#viewport canvas").getContext("webgl2"); window.__lose = gl.getExtension("WEBGL_lose_context"); window.__lose.loseContext(); })()`);
+  await sleep(300);
+  const whileLost = await vc("record_video", { shots: [{ seconds: 0.1 }], width: 160, height: 90 });
+  await v("window.__lose.restoreContext()");
+  await sleep(1500);
+  const wholeAfter = await brightness();
+  check(/graphics were reset/.test(whileLost.error ?? "") && wholeAfter?.hashes?.[0] === wholeBefore?.hashes?.[0], `with the graphics context lost a film is refused (${(whileLost.error ?? "made").slice(0, 40)}…), and once it is back the frame is the same picture as before (corner ${wholeBefore?.corners?.[0]}, then ${wholeAfter?.corners?.[0]})`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

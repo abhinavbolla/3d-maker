@@ -351,7 +351,26 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // The key light stands still with the model, so the shadow map only needs
   // drawing again when parts move or change, not when the view turns.
   let shadowsMoved = true;
+  // The browser can take the view's graphics context away (the GPU process
+  // restarts, or runs out of memory) and give a new one back. three.js
+  // rebuilds what it draws every frame, but not what was drawn once into a
+  // texture: the studio the materials reflect comes back black, so parts
+  // look dark. It is made again here, and the backdrops uploaded again.
+  // While the context is gone nothing can be drawn: pictures and films
+  // refuse (see filmStudio) rather than come out black.
+  let contextLost = false;
+  renderer.domElement.addEventListener("webglcontextlost", () => (contextLost = true));
   renderer.domElement.addEventListener("webglcontextrestored", () => {
+    contextLost = false;
+    const gen = new THREE.PMREMGenerator(renderer);
+    const old = scene.environment;
+    scene.environment = gen.fromScene(studio(), 0.03).texture;
+    gen.dispose();
+    old?.dispose();
+    paper.needsUpdate = true;
+    if (theme) theme.bg.needsUpdate = true;
+    key.shadow.map?.dispose();
+    key.shadow.map = null;
     shadowsMoved = true;
     render();
   });
@@ -900,40 +919,68 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // While a film studio is open the live view draws nothing, whatever the window
   // does, and the canvas shows each finished frame as it is made.
   let recording = false;
+  const GONE = "The view's graphics were reset by the browser (its GPU context was lost), so nothing could be drawn. Nothing was saved; try again in a moment.";
   // creases: lay the crease shading over each frame (look.js), worked out
   // afresh for that frame's pose and camera at the film's size.
   function filmStudio(W, H, { creases = true } = {}) {
     if (recording) throw new Error("A recording is already being made.");
+    const gl = renderer.getContext();
+    if (contextLost || gl.isContextLost()) throw new Error(GONE);
     recording = true;
     cancelAnimationFrame(frame);
     frame = 0;
-    stopTurning();
-    // The view as it is shown (hidden parts, the section, the exploded view)
-    // is what is filmed; an explosion still under way is finished first.
-    inspect.settle();
-    look.hide();
     const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, guides: guides.visible, fit: renderer.domElement.style.objectFit };
-    selected = null;
-    highlight();
-    grid.visible = guides.visible = false;
-    scene.background = paper;
-    renderer.setPixelRatio(1);
-    renderer.setSize(W, H, false);
-    renderer.domElement.style.objectFit = "contain";
-    sizeMirror(W, H, 4);
-    renderer.shadowMap.autoUpdate = true;
-    const gl = renderer.getContext();
+    // Puts back everything the studio changed, once: after the last frame,
+    // and as well when setting up or a frame fails.
+    let open = true;
+    function end() {
+      if (!open) return;
+      open = false;
+      grid.visible = was.grid;
+      guides.visible = was.guides;
+      scene.background = theme.bg;
+      renderer.setPixelRatio(was.ratio);
+      renderer.domElement.style.objectFit = was.fit;
+      selected = was.selected;
+      recording = false;
+      shadowsMoved = true;
+      pose(time);
+      highlight();
+      resize();
+    }
+    try {
+      stopTurning();
+      // The view as it is shown (hidden parts, the section, the exploded view)
+      // is what is filmed; an explosion still under way is finished first.
+      inspect.settle();
+      look.hide();
+      selected = null;
+      highlight();
+      grid.visible = guides.visible = false;
+      scene.background = paper;
+      renderer.setPixelRatio(1);
+      renderer.setSize(W, H, false);
+      renderer.domElement.style.objectFit = "contain";
+      sizeMirror(W, H, 4);
+      renderer.shadowMap.autoUpdate = true;
+    } catch (err) {
+      end();
+      throw err;
+    }
     let small = null;
     return {
       // One finished frame at the film's size, posed at motion time t: the
       // full meshes, the shadow map drawn again for this pose, the floor's
       // mirror, and the crease shading worked out for this frame (the same
-      // steps as picture()).
+      // steps as picture()). A frame drawn without a context would be
+      // black, so it is refused instead.
       draw(cam, t) {
+        if (contextLost || gl.isContextLost()) throw new Error(GONE);
         pose(t);
         content.updateMatrixWorld(true);
         renderer.render(scene, cam);
         if (creases) look.paint(cam, W, H, null);
+        if (gl.isContextLost()) throw new Error(GONE);
         return renderer.domElement;
       },
       // The frame just drawn, as RGBA rows from the bottom up.
@@ -951,19 +998,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
         small.getContext("2d").drawImage(renderer.domElement, 0, 0, small.width, small.height);
         return small.toDataURL("image/jpeg", 0.85).split(",")[1];
       },
-      end() {
-        grid.visible = was.grid;
-        guides.visible = was.guides;
-        scene.background = theme.bg;
-        renderer.setPixelRatio(was.ratio);
-        renderer.domElement.style.objectFit = was.fit;
-        selected = was.selected;
-        recording = false;
-        shadowsMoved = true;
-        pose(time);
-        highlight();
-        resize();
-      },
+      end,
     };
   }
   // Up to about 1500 of a mesh's vertices, for framing it tightly.
