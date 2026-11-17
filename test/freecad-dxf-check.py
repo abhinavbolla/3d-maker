@@ -137,7 +137,7 @@ def run():
         check(got["objects"] > 0, "%s: %d objects in the document" % (name, got["objects"]))
         n = want["counts"].get("CIRCLE", 0)
         check(len(got["circles"]) == n, "%s: %d circles, written %d" % (name, len(got["circles"]), n))
-        check(got["line_edges"] == want["lineEdges"], "%s: %d straight edges (lines, polyline sides, filled triangles), written %d" % (name, got["line_edges"], want["lineEdges"]))
+        check(got["line_edges"] == want["lineEdges"], "%s: %d straight edges (lines and polyline sides), written %d" % (name, got["line_edges"], want["lineEdges"]))
         if "TEXT" in want["counts"]:
             check(got["texts"] == want["counts"]["TEXT"], "%s: %d texts, written %d" % (name, got["texts"], want["counts"]["TEXT"]))
         for layer, edges in sorted(want["edgesByLayer"].items()):

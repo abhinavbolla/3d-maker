@@ -19,6 +19,7 @@ import { toPLY } from "../src/kernel/ply.js";
 import { drawingSVG, sectionCut } from "../src/kernel/drawing.js";
 import { sheetDXF, outlineDXF } from "../src/kernel/dxf.js";
 import { readSheet } from "../src/kernel/svgread.js";
+import { readDXF } from "./check-dxf.mjs";
 
 const out = process.argv[2];
 if (!out) {
@@ -149,7 +150,13 @@ function sheetEntities(svg) {
       type = n === 2 && !m.closed ? "LINE" : "POLYLINE";
       edges = m.closed ? n : n - 1;
     } else if (m.kind === "fill") {
-      type = m.pts.length <= 8 ? "SOLID" : "POLYLINE";
+      // A small fill is a SOLID and its outline, a closed POLYLINE.
+      if (m.pts.length <= 8) {
+        counts.SOLID = (counts.SOLID ?? 0) + 1;
+        byLayer[layer] ??= {};
+        byLayer[layer].SOLID = (byLayer[layer].SOLID ?? 0) + 1;
+      }
+      type = "POLYLINE";
       edges = m.pts.length / 2;
     } else if (m.kind === "circle" || m.kind === "disc") {
       type = "CIRCLE";
@@ -181,6 +188,9 @@ function sheetEntities(svg) {
   const text = sheetDXF(svg);
   writeFileSync(join(out, "bracket-sheet.dxf"), text);
   const e = sheetEntities(svg);
+  // The rules above are dxf.js's; our own reader must count the same.
+  const read = readDXF(text);
+  if (read.problems.length || JSON.stringify(Object.entries(read.counts).sort()) !== JSON.stringify(Object.entries(e.counts).sort())) throw new Error(`bracket-sheet.dxf: read back ${JSON.stringify(read.counts)}, expected ${JSON.stringify(e.counts)}`);
   // The known circle: the biggest one on the sheet (the projection symbol's).
   const known = [...e.circles].sort((a, b) => b.r - a.r)[0];
   expected.dxf["bracket-sheet.dxf"] = { kind: "sheet", ...e, known_circle: known };
