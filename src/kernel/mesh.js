@@ -17,6 +17,135 @@ const K2 = 131072;
 const OFF2 = 65536;
 const key3x2 = (i, j, k) => ((i + OFF2) * K2 + (j + OFF2)) * K2 + (k + OFF2);
 
+// Tables keyed by whole numbers (the grid keys above, up to 2^53). The mesher
+// looks up millions of them, and JavaScript's own Map is slow for numbers
+// that do not fit in 31 bits. These are open-addressing tables over typed
+// arrays, never more than half full.
+function hashKey(key) {
+  let h = (key >>> 0) ^ Math.imul((key / 4294967296) | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  return h ^ (h >>> 13);
+}
+// key -> number. place(key) is where the key is or would go: it is there
+// already when keys[place] === key, and put() fills an empty place.
+class NumMap {
+  constructor() {
+    this.cap = 4096;
+    this.keys = new Float64Array(this.cap).fill(-1);
+    this.vals = new Float64Array(this.cap);
+    this.size = 0;
+  }
+  place(key) {
+    if (this.size * 2 >= this.cap) this.grow();
+    const keys = this.keys, mask = this.cap - 1;
+    let s = hashKey(key) & mask;
+    while (keys[s] !== key && keys[s] !== -1) s = (s + 1) & mask;
+    return s;
+  }
+  put(s, key, v) {
+    this.keys[s] = key;
+    this.vals[s] = v;
+    this.size++;
+  }
+  grow() {
+    const { keys, vals, cap } = this;
+    this.cap = cap * 2;
+    const k2 = (this.keys = new Float64Array(this.cap).fill(-1)), v2 = (this.vals = new Float64Array(this.cap));
+    const mask = this.cap - 1;
+    for (let n = 0; n < cap; n++) {
+      if (keys[n] === -1) continue;
+      let s = hashKey(keys[n]) & mask;
+      while (k2[s] !== -1) s = (s + 1) & mask;
+      k2[s] = keys[n];
+      v2[s] = vals[n];
+    }
+  }
+}
+// key -> its place in the order the keys were added (0, 1, 2, ...).
+class Index {
+  constructor() {
+    this.cap = 4096;
+    this.keys = new Float64Array(this.cap).fill(-1);
+    this.slots = new Int32Array(this.cap);
+    this.size = 0;
+  }
+  // The key's place, or -1.
+  find(key) {
+    const keys = this.keys, mask = this.cap - 1;
+    let s = hashKey(key) & mask;
+    while (keys[s] !== key) {
+      if (keys[s] === -1) return -1;
+      s = (s + 1) & mask;
+    }
+    return this.slots[s];
+  }
+  // The key's place; a new key goes at the end, at what the size was.
+  add(key) {
+    if (this.size * 2 >= this.cap) this.grow();
+    const keys = this.keys, mask = this.cap - 1;
+    let s = hashKey(key) & mask;
+    while (keys[s] !== key) {
+      if (keys[s] === -1) {
+        keys[s] = key;
+        this.slots[s] = this.size;
+        return this.size++;
+      }
+      s = (s + 1) & mask;
+    }
+    return this.slots[s];
+  }
+  // Room for n keys, so the table does not grow on the way there.
+  reserve(n) {
+    let to = this.cap;
+    while (to < n * 2) to *= 2;
+    if (to > this.cap) this.grow(to);
+  }
+  grow(to = this.cap * 2) {
+    const { keys, slots, cap } = this;
+    this.cap = to;
+    const k2 = (this.keys = new Float64Array(this.cap).fill(-1)), s2 = (this.slots = new Int32Array(this.cap));
+    const mask = this.cap - 1;
+    for (let n = 0; n < cap; n++) {
+      if (keys[n] === -1) continue;
+      let s = hashKey(keys[n]) & mask;
+      while (k2[s] !== -1) s = (s + 1) & mask;
+      k2[s] = keys[n];
+      s2[s] = slots[n];
+    }
+  }
+}
+
+// f at the corners of a grid (origin O, cell size c), worked out once each.
+// The corners are kept in blocks of 8 x 8 x 8, found through a table of the
+// blocks, so a cell's eight corners are mostly side by side in memory and the
+// last block used is usually the one wanted next.
+class Corners {
+  constructor(f, O, c) {
+    this.f = f;
+    (this.x = O[0]), (this.y = O[1]), (this.z = O[2]), (this.c = c);
+    this.blocks = new Index();
+    this.vals = new Float64Array(0); // 512 per block; NaN where not worked out yet
+    this.key = -1; // the block last used, and where it starts in vals
+    this.base = 0;
+  }
+  at(i, j, k) {
+    const key = key3(i >> 3, j >> 3, k >> 3);
+    if (key !== this.key) {
+      const b = this.blocks.add(key) * 512;
+      if (b >= this.vals.length) {
+        const more = new Float64Array(Math.max(8192, b * 2)).fill(NaN, b);
+        more.set(this.vals);
+        this.vals = more;
+      }
+      (this.key = key), (this.base = b);
+    }
+    const o = this.base + (i & 7) + ((j & 7) << 3) + ((k & 7) << 6);
+    let v = this.vals[o];
+    if (v !== v) this.vals[o] = v = this.f(this.x + i * this.c, this.y + j * this.c, this.z + k * this.c);
+    return v;
+  }
+}
+
 const HALF_DIAG = Math.sqrt(3) / 2;
 const THIN_CAP = 6;
 // Walls thinner than a cell hidden in more than this share of the cells:
@@ -84,23 +213,23 @@ function wallThickness(f, c) {
   }
   return -d + s;
 }
-function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Map()) {
-  const at = (i, j, k) => {
-    const key = key3(i, j, k);
-    let v = vals.get(key);
-    if (v === undefined) vals.set(key, (v = f(O[0] + i * c, O[1] + j * c, O[2] + k * c)));
-    return v;
-  };
-  const gaps = new Map(); // edge key -> a wall hides inside it
+function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Corners(f, O, c)) {
+  const O0 = O[0], O1 = O[1], O2 = O[2];
+  const at = (i, j, k) => vals.at(i, j, k);
+  const gaps = new NumMap(); // edge key -> 1 where a wall hides inside it, else 0
   const cv = new Float64Array(8);
   const thick = []; // a sample of the hidden walls' thicknesses
   let slivers = 0, walls = 0;
   for (let n = 0, m = 0; n < kept.length; n += 3, m++) {
     const i = kept[n], j = kept[n + 1], k = kept[n + 2];
     const inside = centres[m] < 0;
+    // Cells come in pairs side by side along x: the second one's low
+    // corners are the first one's high corners.
+    const beside = n > 0 && i === kept[n - 3] + 1 && j === kept[n - 2] && k === kept[n - 1];
+    if (beside) (cv[0] = cv[1]), (cv[2] = cv[3]), (cv[4] = cv[5]), (cv[6] = cv[7]);
     let all = true;
     for (let q = 0; q < 8; q++) {
-      cv[q] = at(i + (q & 1), j + ((q >> 1) & 1), k + ((q >> 2) & 1));
+      if (!beside || q & 1) cv[q] = at(i + (q & 1), j + ((q >> 1) & 1), k + ((q >> 2) & 1));
       if (cv[q] < 0 === inside) all = false;
     }
     if (all) {
@@ -109,8 +238,7 @@ function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Map()
       if (inside && withWalls) {
         walls++;
         if (thick.length < 64) {
-          const [i0, j0, k0] = [i + 0.5, j + 0.5, k + 0.5];
-          (HIT[0] = O[0] + i0 * c), (HIT[1] = O[1] + j0 * c), (HIT[2] = O[2] + k0 * c), (HIT[3] = centres[m]);
+          (HIT[0] = O0 + (i + 0.5) * c), (HIT[1] = O1 + (j + 0.5) * c), (HIT[2] = O2 + (k + 0.5) * c), (HIT[3] = centres[m]);
           thick.push(wallThickness(f, c));
         }
       }
@@ -120,15 +248,17 @@ function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Map()
     // Only solid walls between two outside corners: a slot thinner than a
     // cell fills in, which loses no material.
     for (let e = 0; e < 12; e++) {
-      const [c0, c1] = EDGE_CORNERS[e];
-      const f0 = cv[c0], f1 = cv[c1];
+      const c0 = EC0[e];
+      const f0 = cv[c0], f1 = cv[EC1[e]];
       if (f0 < 0 || f1 < 0 || f0 + f1 >= c) continue;
       const a = e >> 2;
       const ci = i + (c0 & 1), cj = j + ((c0 >> 1) & 1), ck = k + ((c0 >> 2) & 1);
       const ekey = key3(ci, cj, ck) * 3 + a;
-      let g = gaps.get(ekey);
-      if (g === undefined) {
-        const x0 = O[0] + ci * c, y0 = O[1] + cj * c, z0 = O[2] + ck * c;
+      const gs = gaps.place(ekey);
+      let g;
+      if (gaps.keys[gs] === ekey) g = gaps.vals[gs] === 1;
+      else {
+        const x0 = O0 + ci * c, y0 = O1 + cj * c, z0 = O2 + ck * c;
         const dx = a === 0 ? c : 0, dy = a === 1 ? c : 0, dz = a === 2 ? c : 0;
         // First, cheaply: a wall between the ends has the distance falling
         // from both ends into the edge, so rising away from it on both sides
@@ -142,7 +272,7 @@ function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Map()
           f(x0 + dx * s, y0 + dy * s, z0 + dz * s) < f0 - 0.3 * s * c &&
           f(x0 + dx * (1 - s), y0 + dy * (1 - s), z0 + dz * (1 - s)) < f1 - 0.3 * s * c &&
           wallInEdge(f, x0, y0, z0, x0 + dx, y0 + dy, z0 + dz, f0, f1, c);
-        gaps.set(ekey, g);
+        gaps.put(gs, ekey, g ? 1 : 0);
         if (g && thick.length < 64) thick.push(wallThickness(f, c));
       }
       if (g) {
@@ -166,6 +296,10 @@ for (let a = 0; a < 3; a++) {
       EDGE_CORNERS[a * 4 + ub + 2 * vb] = [base, base | (1 << a)];
     }
 }
+const EC0 = Int8Array.from(EDGE_CORNERS, (p) => p[0]), EC1 = Int8Array.from(EDGE_CORNERS, (p) => p[1]);
+// For each pattern of inside corners, the edges the surface crosses (bit e).
+const CROSS = new Uint16Array(256);
+for (let mask = 0; mask < 256; mask++) for (let e = 0; e < 12; e++) if (((mask >> EC0[e]) & 1) !== ((mask >> EC1[e]) & 1)) CROSS[mask] |= 1 << e;
 // Faces: for axis a and side s, corners C00, C10, C11, C01 and edges E0..E3 in cyclic order.
 const FACES = [];
 for (let a = 0; a < 3; a++) {
@@ -176,6 +310,8 @@ for (let a = 0; a < 3; a++) {
       a, s, u, v,
       corners: [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)],
       edges: [u * 4 + 0 + 2 * s, v * 4 + s + 2, u * 4 + 1 + 2 * s, v * 4 + s],
+      // The face's centre, in half cells from the cell's low corner.
+      off: [0, 1, 2].map((x) => (x === a ? s * 2 : 1)),
     });
   }
 }
@@ -247,9 +383,9 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   let lost = null; // what was missed where cells stopped too coarse for walls
   // f at this level's grid corners: looking for missed detail fills it, and
   // dual contouring goes on from it at the last level.
-  let levelVals = new Map();
+  let levelVals;
   for (let level = 0; ; level++) {
-    levelVals = new Map();
+    levelVals = new Corners(f, O, c);
     kept = [];
     centres = [];
     const lim = LIP * c * HALF_DIAG;
@@ -318,40 +454,39 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   }
 
   // ---- 2. dual contouring at cell size c ----
-  const cornerVals = lost ? new Map() : levelVals;
-  const corner = (i, j, k) => {
-    const key = key3(i, j, k);
-    let v = cornerVals.get(key);
-    if (v === undefined) {
-      v = f(O[0] + i * c, O[1] + j * c, O[2] + k * c);
-      cornerVals.set(key, v);
-    }
-    return v;
-  };
-  const faceVals = new Map();
+  const O0 = O[0], O1 = O[1], O2 = O[2];
+  const cornerVals = lost ? new Corners(f, O, c) : levelVals;
+  const corner = (i, j, k) => cornerVals.at(i, j, k);
+  const faceVals = new NumMap();
   const faceCentre = (I, J, Kk) => {
     const key = key3x2(I, J, Kk);
-    let v = faceVals.get(key);
-    if (v === undefined) {
-      v = f(O[0] + (I / 2) * c, O[1] + (J / 2) * c, O[2] + (Kk / 2) * c);
-      faceVals.set(key, v);
-    }
+    const s = faceVals.place(key);
+    if (faceVals.keys[s] === key) return faceVals.vals[s];
+    const v = f(O0 + (I / 2) * c, O1 + (J / 2) * c, O2 + (Kk / 2) * c);
+    faceVals.put(s, key, v);
     return v;
   };
 
-  const seen = new Set();
+  // The cells the surface passes through, followed from the ones the search
+  // kept.
+  const seen = new Index();
+  seen.reserve(centres.length * 1.25);
   const queue = [];
   const push = (i, j, k) => {
-    const key = key3(i, j, k);
-    if (seen.has(key)) return;
-    seen.add(key);
-    queue.push(i, j, k);
+    const n = seen.size;
+    if (seen.add(key3(i, j, k)) === n) queue.push(i, j, k);
   };
   for (let n = 0; n < kept.length; n += 3) push(kept[n], kept[n + 1], kept[n + 2]);
 
-  const active = new Map(); // cell key -> { i, j, k, vals, vtx }
-  const edges = new Map(); // global edge key -> [i, j, k, axis, insideAtStart]
-  const vals = new Float64Array(8);
+  // The cells the surface crosses, and the grid edges it crosses, each in
+  // the order they are found.
+  const cellAt = []; // per cell: i, j, k, which corners are inside, and where its edges start in cellEdges
+  const cellEdges = []; // per cell: the edges it is crossed on, in order of e
+  const edges = new Index(); // edge key -> its place in edgeAt and edgeEnds
+  edges.reserve(centres.length);
+  const edgeAt = []; // per edge: i, j, k, axis and whether its start is inside
+  const edgeEnds = []; // per edge: f at its two ends
+  const cv = new Float64Array(8);
   let incomplete = false;
 
   for (let q = 0; q < queue.length; q += 3) {
@@ -360,30 +495,32 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
       break;
     }
     const i = queue[q], j = queue[q + 1], k = queue[q + 2];
+    // A cell beside the last one along x has its high corners for low ones.
+    const beside = q > 0 && i === queue[q - 3] + 1 && j === queue[q - 2] && k === queue[q - 1];
+    if (beside) (cv[0] = cv[1]), (cv[2] = cv[3]), (cv[4] = cv[5]), (cv[6] = cv[7]);
     let mask = 0;
     for (let ci = 0; ci < 8; ci++) {
-      vals[ci] = corner(i + (ci & 1), j + ((ci >> 1) & 1), k + ((ci >> 2) & 1));
-      if (vals[ci] < 0) mask |= 1 << ci;
+      if (!beside || ci & 1) cv[ci] = corner(i + (ci & 1), j + ((ci >> 1) & 1), k + ((ci >> 2) & 1));
+      if (cv[ci] < 0) mask |= 1 << ci;
     }
     if (mask === 0 || mask === 255) continue;
-    active.set(key3(i, j, k), { i, j, k, vals: Float64Array.from(vals), mask, vtx: new Int32Array(12).fill(-1) });
+    cellAt.push(i, j, k, mask, cellEdges.length);
+    const cross = CROSS[mask];
     for (let e = 0; e < 12; e++) {
-      const [c0, c1] = EDGE_CORNERS[e];
-      if (((mask >> c0) & 1) === ((mask >> c1) & 1)) continue;
+      if (!((cross >> e) & 1)) continue;
+      const c0 = EC0[e];
       const a = e >> 2;
       const ci = i + (c0 & 1), cj = j + ((c0 >> 1) & 1), ck = k + ((c0 >> 2) & 1);
-      const ekey = key3(ci, cj, ck) * 3 + a;
-      if (edges.has(ekey)) continue;
-      edges.set(ekey, [ci, cj, ck, a, (mask >> c0) & 1]);
+      const n = edges.size;
+      const edge = edges.add(key3(ci, cj, ck) * 3 + a);
+      cellEdges.push(edge);
+      if (edge !== n) continue;
+      edgeAt.push(ci, cj, ck, a, (mask >> c0) & 1);
+      edgeEnds.push(cv[c0], cv[EC1[e]]);
       // The four cells around this edge all touch the surface.
-      const u = (a + 1) % 3, v = (a + 2) % 3;
-      const p = [ci, cj, ck];
-      for (const [du, dv] of [[0, 0], [-1, 0], [-1, -1], [0, -1]]) {
-        const cell = [...p];
-        cell[u] += du;
-        cell[v] += dv;
-        push(cell[0], cell[1], cell[2]);
-      }
+      if (a === 0) push(ci, cj, ck), push(ci, cj - 1, ck), push(ci, cj - 1, ck - 1), push(ci, cj, ck - 1);
+      else if (a === 1) push(ci, cj, ck), push(ci, cj, ck - 1), push(ci - 1, cj, ck - 1), push(ci - 1, cj, ck);
+      else push(ci, cj, ck), push(ci - 1, cj, ck), push(ci - 1, cj - 1, ck), push(ci, cj - 1, ck);
     }
   }
 
@@ -409,26 +546,21 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
     out[o + 1] = ny / len;
     out[o + 2] = nz / len;
   };
-  const hits = new Map(); // edge key -> Float64Array [px, py, pz, nx, ny, nz]
-  const hit = (ekey) => {
-    let h = hits.get(ekey);
-    if (h) return h;
-    const [i, j, k, a] = edges.get(ekey);
-    const p0 = [O[0] + i * c, O[1] + j * c, O[2] + k * c];
-    const at = (t) => {
-      const p = [...p0];
-      p[a] += t * c;
-      return p;
-    };
-    const end = [i, j, k];
-    end[a] += 1;
+  const nEdges = edges.size;
+  const H = new Float64Array(nEdges * 6); // per edge: px, py, pz, nx, ny, nz
+  const hitDone = new Uint8Array(nEdges);
+  const hit = (n) => {
+    if (hitDone[n]) return;
+    hitDone[n] = 1;
+    const i = edgeAt[n * 5], j = edgeAt[n * 5 + 1], k = edgeAt[n * 5 + 2], a = edgeAt[n * 5 + 3];
+    const x0 = O0 + i * c, y0 = O1 + j * c, z0 = O2 + k * c;
     // Regula falsi, Illinois variant: when one end keeps its place, its
     // value is halved, so it converges even where the distances on the two
     // sides grow at very different rates (thin walls, stretched meshes).
-    let ta = 0, fa = corner(i, j, k), tb = 1, fb = corner(end[0], end[1], end[2]);
+    let ta = 0, fa = edgeEnds[n * 2], tb = 1, fb = edgeEnds[n * 2 + 1];
     let t = fa / (fa - fb), side = 0;
     for (let it = 0; it < 12; it++) {
-      const ft = f(...at(t));
+      const ft = f(a === 0 ? x0 + t * c : x0, a === 1 ? y0 + t * c : y0, a === 2 ? z0 + t * c : z0);
       if (Math.abs(ft) < c * 1e-6) break;
       if (ft < 0 === fa < 0) {
         (ta = t), (fa = ft);
@@ -442,18 +574,22 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
       if (tb - ta < 1e-5 || Math.abs(fa - fb) < 1e-12) break;
       t = ta + ((tb - ta) * fa) / (fa - fb);
     }
-    h = new Float64Array(6);
-    const p = at(t);
-    h[0] = p[0];
-    h[1] = p[1];
-    h[2] = p[2];
-    grad(p[0], p[1], p[2], h, 3);
-    hits.set(ekey, h);
-    return h;
+    const x = a === 0 ? x0 + t * c : x0, y = a === 1 ? y0 + t * c : y0, z = a === 2 ? z0 + t * c : z0;
+    H[n * 6] = x;
+    H[n * 6 + 1] = y;
+    H[n * 6 + 2] = z;
+    grad(x, y, z, H, n * 6 + 3);
   };
 
   // One vertex per surface patch in each active cell.
   const pos = [];
+  const nCells = cellAt.length / 5;
+  // Per edge, the vertices of the four cells around it: (0,0) (-1,0) (-1,-1)
+  // (0,-1) across the edge. A cell holds the edge at local place ub + 2 vb,
+  // which is 0, 1, 3, 2 for those four.
+  const around = new Int32Array(nEdges * 4).fill(-1);
+  const PLACE = [0, 1, 3, 2];
+  const edgeOf = new Int32Array(12); // this cell's crossed edges, by e
   const parent = new Int8Array(12);
   const find = (x) => {
     while (parent[x] !== x) x = parent[x] = parent[parent[x]];
@@ -464,52 +600,60 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
     y = find(y);
     if (x !== y) parent[x] = y;
   };
-  const edgeKeyOf = (cell, e) => {
-    const c0 = EDGE_CORNERS[e][0];
-    return key3(cell.i + (c0 & 1), cell.j + ((c0 >> 1) & 1), cell.k + ((c0 >> 2) & 1)) * 3 + (e >> 2);
-  };
-  const crosses = (mask, e) => {
-    const [c0, c1] = EDGE_CORNERS[e];
-    return ((mask >> c0) & 1) !== ((mask >> c1) & 1);
-  };
-
-  for (const cell of active.values()) {
-    const { mask } = cell;
-    for (let e = 0; e < 12; e++) parent[e] = e;
+  const roots = new Int8Array(12), group = new Int8Array(12), patchEdges = new Int8Array(12);
+  const hitAt = new Int32Array(12); // where in H each of a patch's edges is
+  const V = new Float64Array(3);
+  for (let n = 0; n < nCells; n++) {
+    const ci = cellAt[n * 5], cj = cellAt[n * 5 + 1], ck = cellAt[n * 5 + 2], mask = cellAt[n * 5 + 3];
+    const cross = CROSS[mask];
+    for (let e = 0, p = cellAt[n * 5 + 4]; e < 12; e++) {
+      parent[e] = e;
+      if ((cross >> e) & 1) edgeOf[e] = cellEdges[p++];
+    }
     for (const face of FACES) {
-      const ex = face.edges.filter((e) => crosses(mask, e));
-      if (ex.length === 2) join(ex[0], ex[1]);
-      else if (ex.length === 4) {
-        const idx = [cell.i, cell.j, cell.k];
-        const I = idx.map((x) => x * 2);
-        I[face.a] += face.s * 2;
-        I[face.u] += 1;
-        I[face.v] += 1;
-        const centreInside = faceCentre(I[0], I[1], I[2]) < 0;
+      const fe = face.edges;
+      let count = 0, e0 = 0, e1 = 0;
+      for (let q = 0; q < 4; q++) {
+        if (!((cross >> fe[q]) & 1)) continue;
+        if (count === 0) e0 = fe[q];
+        else if (count === 1) e1 = fe[q];
+        count++;
+      }
+      if (count === 2) join(e0, e1);
+      else if (count === 4) {
+        const centreInside = faceCentre(ci * 2 + face.off[0], cj * 2 + face.off[1], ck * 2 + face.off[2]) < 0;
         const c00Inside = ((mask >> face.corners[0]) & 1) === 1;
-        const [E0, E1, E2, E3] = face.edges;
-        if (centreInside === c00Inside) join(E0, E1), join(E2, E3);
-        else join(E3, E0), join(E1, E2);
+        if (centreInside === c00Inside) join(fe[0], fe[1]), join(fe[2], fe[3]);
+        else join(fe[3], fe[0]), join(fe[1], fe[2]);
       }
     }
-    const groups = new Map();
+    // The patches, in the order of their first edges.
+    let patches = 0;
     for (let e = 0; e < 12; e++) {
-      if (!crosses(mask, e)) continue;
+      if (!((cross >> e) & 1)) continue;
       const r = find(e);
-      if (!groups.has(r)) groups.set(r, []);
-      groups.get(r).push(e);
+      let g = 0;
+      while (g < patches && roots[g] !== r) g++;
+      if (g === patches) roots[patches++] = r;
+      group[e] = g;
     }
-    const lo = [O[0] + cell.i * c, O[1] + cell.j * c, O[2] + cell.k * c];
-    let prev = null;
-    for (const list of groups.values()) {
-      const hs = list.map((e) => hit(edgeKeyOf(cell, e)));
-      const v = solveVertex(hs, lo, c);
+    const lx = O0 + ci * c, ly = O1 + cj * c, lz = O2 + ck * c;
+    let px = 0, py = 0, pz = 0;
+    for (let g = 0; g < patches; g++) {
+      let m = 0;
+      for (let e = 0; e < 12; e++) {
+        if (!((cross >> e) & 1) || group[e] !== g) continue;
+        hit(edgeOf[e]);
+        hitAt[m] = edgeOf[e] * 6;
+        patchEdges[m++] = e;
+      }
+      solveVertex(H, hitAt, m, lx, ly, lz, c, V);
       // Two patches in one cell must not share a point.
-      if (prev && Math.hypot(v[0] - prev[0], v[1] - prev[1], v[2] - prev[2]) < 0.01 * c) for (let a = 0; a < 3; a++) v[a] += (hs[0][a] - v[a]) * 0.1;
-      prev = v;
+      if (g && Math.hypot(V[0] - px, V[1] - py, V[2] - pz) < 0.01 * c) for (let a = 0; a < 3; a++) V[a] += (H[hitAt[0] + a] - V[a]) * 0.1;
+      (px = V[0]), (py = V[1]), (pz = V[2]);
       const index = pos.length / 3;
-      pos.push(v[0], v[1], v[2]);
-      for (const e of list) cell.vtx[e] = index;
+      pos.push(V[0], V[1], V[2]);
+      for (let q = 0; q < m; q++) around[edgeOf[patchEdges[q]] * 4 + PLACE[patchEdges[q] & 3]] = index;
     }
   }
 
@@ -518,25 +662,15 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   let missing = 0;
   const P = pos;
   const d2 = (a, b) => (P[a * 3] - P[b * 3]) ** 2 + (P[a * 3 + 1] - P[b * 3 + 1]) ** 2 + (P[a * 3 + 2] - P[b * 3 + 2]) ** 2;
-  const OFFS = [[0, 0, 0], [1, 0, 1], [1, 1, 3], [0, 1, 2]]; // [du, dv, local ub + 2 vb] for cells (0,0) (-1,0) (-1,-1) (0,-1)
-  for (const [i, j, k, a, insideAtStart] of edges.values()) {
-    const u = (a + 1) % 3, v = (a + 2) % 3;
-    const quad = [];
-    for (const [du, dv, local] of OFFS) {
-      const cc = [i, j, k];
-      cc[u] -= du;
-      cc[v] -= dv;
-      const cell = active.get(key3(cc[0], cc[1], cc[2]));
-      const vi = cell ? cell.vtx[a * 4 + local] : -1;
-      if (vi < 0) break;
-      quad.push(vi);
-    }
-    if (quad.length < 4) {
+  for (let n = 0; n < nEdges; n++) {
+    const v0 = around[n * 4], v1 = around[n * 4 + 1], v2 = around[n * 4 + 2], v3 = around[n * 4 + 3];
+    // A cell that was never reached (the cell cap) leaves its place empty.
+    if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) {
       missing++;
       continue;
     }
-    if (!insideAtStart) quad.reverse();
-    const [q0, q1, q2, q3] = quad;
+    const inside = edgeAt[n * 5 + 4];
+    const q0 = inside ? v0 : v3, q1 = inside ? v1 : v2, q2 = inside ? v2 : v1, q3 = inside ? v3 : v0;
     if (d2(q0, q2) <= d2(q1, q3)) idx.push(q0, q1, q2, q0, q2, q3);
     else idx.push(q1, q2, q3, q1, q3, q0);
   }
@@ -677,50 +811,64 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
   };
   const dot = (t, s) => un[t * 3] * un[s * 3] + un[t * 3 + 1] * un[s * 3 + 1] + un[t * 3 + 2] * un[s * 3 + 2];
   const into = new Float64Array(4);
+  // Around one vertex: the other ends of its edges, each with the first
+  // triangle seen on it, and its triangles' patches. Short lists, searched
+  // as they are.
+  let other = new Int32Array(64), first = new Int32Array(64), patch = new Int32Array(32), roots = new Int32Array(32);
   for (let v = 0; v < nv; v++) {
     const s0 = start[v], s1 = start[v + 1];
     const k = s1 - s0;
     if (!k) continue;
+    if (k > patch.length) (other = new Int32Array(k * 4)), (first = new Int32Array(k * 4)), (patch = new Int32Array(k * 2)), (roots = new Int32Array(k * 2));
     parent.length = k;
     for (let i = 0; i < k; i++) parent[i] = i;
     // Triangles sharing an edge (v, x) are neighbours; join them if smooth.
-    const byOther = new Map();
+    let others = 0;
     for (let i = 0; i < k; i++) {
       const cn = around[s0 + i];
       const t = (cn / 3) | 0;
       const r = cn - t * 3;
-      for (const o of [I[t * 3 + ((r + 1) % 3)], I[t * 3 + ((r + 2) % 3)]]) {
-        const j = byOther.get(o);
-        if (j === undefined) byOther.set(o, i);
+      for (let w = 1; w <= 2; w++) {
+        const o = I[t * 3 + ((r + w) % 3)];
+        let m = 0;
+        while (m < others && other[m] !== o) m++;
+        if (m === others) (other[others] = o), (first[others++] = i);
         else {
+          const j = first[m];
           const s = (around[s0 + j] / 3) | 0;
           if (dot(t, s) >= cosCrease || (f && smoothAcross(v, o, t, s))) parent[find(i)] = find(j);
         }
       }
     }
-    const groups = new Map();
+    // The patches, in the order of their first triangles.
+    let patches = 0;
     for (let i = 0; i < k; i++) {
-      const g = find(i);
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(i);
+      const r = find(i);
+      let g = 0;
+      while (g < patches && roots[g] !== r) g++;
+      if (g === patches) roots[patches++] = r;
+      patch[i] = g;
     }
-    const whole = groups.size === 1;
-    for (const list of groups.values()) {
-      let x = 0, y = 0, z = 0;
-      for (const i of list) {
+    const whole = patches === 1;
+    for (let g = 0; g < patches; g++) {
+      let x = 0, y = 0, z = 0, count = 0;
+      for (let i = 0; i < k; i++) {
+        if (patch[i] !== g) continue;
         const t = (around[s0 + i] / 3) | 0;
         x += fn[t * 3]; y += fn[t * 3 + 1]; z += fn[t * 3 + 2];
+        count++;
       }
       const l = Math.hypot(x, y, z) || 1;
       (x /= l), (y /= l), (z /= l);
       if (f && !whole) {
         // A patch that ends at an edge: f's normal a little way into it.
         let cx = 0, cy = 0, cz = 0;
-        for (const i of list) {
+        for (let i = 0; i < k; i++) {
+          if (patch[i] !== g) continue;
           centroid((around[s0 + i] / 3) | 0, cpos);
           cx += cpos[0]; cy += cpos[1]; cz += cpos[2];
         }
-        const w = 0.5 / list.length;
+        const w = 0.5 / count;
         surfaceNormal(P[v * 3] * 0.5 + cx * w, P[v * 3 + 1] * 0.5 + cy * w, P[v * 3 + 2] * 0.5 + cz * w, into);
         if (into[0] * x + into[1] * y + into[2] * z >= cosTrust) (x = into[0]), (y = into[1]), (z = into[2]);
       } else if (G) {
@@ -733,7 +881,7 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
       const id = pos.length / 3;
       pos.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
       nrm.push(x, y, z);
-      for (const i of list) corner[around[s0 + i]] = id;
+      for (let i = 0; i < k; i++) if (patch[i] === g) corner[around[s0 + i]] = id;
     }
   }
   return { positions: Float32Array.from(pos), normals: Float32Array.from(nrm), indices: corner };
@@ -825,18 +973,52 @@ export function lightMesh({ positions: P, normals: N, indices: I }, cell) {
 // nudged slightly towards that loop so the copies stay apart. Every edge is
 // then shared by exactly two triangles.
 function splitPinches(pos, idx) {
-  const count = new Map();
+  // Edges not shared by exactly two triangles. Each edge is filed under its
+  // lower vertex, and each vertex's few edges are sorted and counted: no
+  // table of every edge is needed.
+  const nv = pos.length / 3;
+  const start = new Uint32Array(nv + 1);
+  for (let n = 0; n < idx.length; n += 3)
+    for (let e = 0; e < 3; e++) {
+      const a = idx[n + e], b = idx[n + ((e + 1) % 3)];
+      start[(a < b ? a : b) + 1]++;
+    }
+  for (let v = 0; v < nv; v++) start[v + 1] += start[v];
+  const fill = start.slice(0, nv);
+  const far = new Uint32Array(idx.length); // the higher vertex of each edge, by lower vertex
+  for (let n = 0; n < idx.length; n += 3)
+    for (let e = 0; e < 3; e++) {
+      const a = idx[n + e], b = idx[n + ((e + 1) % 3)];
+      if (a < b) far[fill[a]++] = b;
+      else far[fill[b]++] = a;
+    }
   const ek = (a, b) => (a < b ? a * 4294967296 + b : b * 4294967296 + a);
+  const bad = new Set();
+  for (let v = 0; v < nv; v++) {
+    const s0 = start[v], s1 = start[v + 1];
+    for (let n = s0 + 1; n < s1; n++) {
+      const x = far[n];
+      let m = n - 1;
+      for (; m >= s0 && far[m] > x; m--) far[m + 1] = far[m];
+      far[m + 1] = x;
+    }
+    for (let n = s0, m; n < s1; n = m) {
+      for (m = n + 1; m < s1 && far[m] === far[n]; m++);
+      if (m - n !== 2) bad.add(v * 4294967296 + far[n]);
+    }
+  }
+  if (!bad.size) return;
+  // Their ends, in the order the edges first come up in the triangles.
+  const suspects = new Set();
   for (let n = 0; n < idx.length; n += 3)
     for (let e = 0; e < 3; e++) {
       const k = ek(idx[n + e], idx[n + ((e + 1) % 3)]);
-      count.set(k, (count.get(k) ?? 0) + 1);
+      if (bad.has(k)) suspects.add(Math.floor(k / 4294967296)), suspects.add(k % 4294967296);
     }
-  const suspects = new Set();
-  for (const [k, v] of count) if (v !== 2) suspects.add(Math.floor(k / 4294967296)), suspects.add(k % 4294967296);
-  if (!suspects.size) return;
   const adj = new Map([...suspects].map((v) => [v, []]));
-  for (let n = 0; n < idx.length; n += 3) for (let e = 0; e < 3; e++) adj.get(idx[n + e])?.push(n);
+  const suspect = new Uint8Array(nv);
+  for (const v of suspects) suspect[v] = 1;
+  for (let n = 0; n < idx.length; n += 3) for (let e = 0; e < 3; e++) if (suspect[idx[n + e]]) adj.get(idx[n + e]).push(n);
 
   for (const a of suspects) {
     // Directed ring: triangle (a, x, y) contributes x -> y.
@@ -896,18 +1078,23 @@ function splitPinches(pos, idx) {
 
 // Least-squares point closest to all tangent planes, pulled gently towards
 // their average so flat patches stay well placed, then kept inside the cell.
-function solveVertex(hitsList, lo, c) {
-  const n = hitsList.length;
+// H holds the crossings (point, then normal); at[0..n) are the places in it
+// of this patch's; the cell's low corner is (lx, ly, lz); the point goes to out.
+function solveVertex(H, at, n, lx, ly, lz, c, out) {
   let mx = 0, my = 0, mz = 0;
-  for (const h of hitsList) (mx += h[0]), (my += h[1]), (mz += h[2]);
+  for (let q = 0; q < n; q++) {
+    const o = at[q];
+    (mx += H[o]), (my += H[o + 1]), (mz += H[o + 2]);
+  }
   mx /= n;
   my /= n;
   mz /= n;
   const L = 0.05;
   let a00 = L, a01 = 0, a02 = 0, a11 = L, a12 = 0, a22 = L, b0 = 0, b1 = 0, b2 = 0;
-  for (const h of hitsList) {
-    const nx = h[3], ny = h[4], nz = h[5];
-    const d = nx * (h[0] - mx) + ny * (h[1] - my) + nz * (h[2] - mz);
+  for (let q = 0; q < n; q++) {
+    const o = at[q];
+    const nx = H[o + 3], ny = H[o + 4], nz = H[o + 5];
+    const d = nx * (H[o] - mx) + ny * (H[o + 1] - my) + nz * (H[o + 2] - mz);
     a00 += nx * nx; a01 += nx * ny; a02 += nx * nz;
     a11 += ny * ny; a12 += ny * nz; a22 += nz * nz;
     b0 += nx * d; b1 += ny * d; b2 += nz * d;
@@ -925,10 +1112,10 @@ function solveVertex(hitsList, lo, c) {
   // nearly flat detail); the average point is the safe choice there. Keeping
   // vertices a hair inside their cell stops neighbours from coinciding.
   const m = 0.02 * c;
-  const near = (v, l) => v >= l - c / 2 && v <= l + c * 1.5;
-  if (!(near(x, lo[0]) && near(y, lo[1]) && near(z, lo[2]))) (x = mx), (y = my), (z = mz);
-  const clamp = (v, l) => Math.min(Math.max(v, l + m), l + c - m);
-  return [clamp(x, lo[0]), clamp(y, lo[1]), clamp(z, lo[2])];
+  if (!(x >= lx - c / 2 && x <= lx + c * 1.5 && y >= ly - c / 2 && y <= ly + c * 1.5 && z >= lz - c / 2 && z <= lz + c * 1.5)) (x = mx), (y = my), (z = mz);
+  out[0] = Math.min(Math.max(x, lx + m), lx + c - m);
+  out[1] = Math.min(Math.max(y, ly + m), ly + c - m);
+  out[2] = Math.min(Math.max(z, lz + m), lz + c - m);
 }
 
 // ---- mesh helpers ----

@@ -55,6 +55,15 @@ cd src-tauri && cargo test -- --include-ignored   # also finds and runs your Cla
 
 It needs Google Chrome. It does not drive the desktop window itself, because WebDriver for Tauri does not run on macOS; the desktop app's way of starting Claude is covered by the Rust test.
 
+## Build time
+
+```bash
+node test/build-time.mjs                      # the test models, three runs each
+node test/build-time.mjs --parts model.js     # one script, with its slowest parts
+```
+
+This times a build the way the app does one: the script, then every part meshed at preview detail and again at fine detail, each with its copy for drawing and its lighter copy. It runs on one thread, so the times are the work itself and not how many workers the machine has. Beside each time it prints a hash of every vertex, normal and index that was built. A change that should only make builds faster must leave the hashes as they were; compare two versions by running each from its own checkout, one after the other, since other work on the machine moves the times.
+
 ## GPU load
 
 ```bash
