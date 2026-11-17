@@ -97,6 +97,7 @@ const AO_FRAGMENT = /* glsl */ `
 // much further away is drawn as a line.
 const FINISH_FRAGMENT = /* glsl */ `
   uniform sampler2D tAO;
+  uniform sampler2D tParts;
   uniform float strength;
   uniform float outlines;
   varying vec2 vUv;
@@ -121,12 +122,18 @@ const FINISH_FRAGMENT = /* glsl */ `
       float pixel = pixelAt(P);
       // How many of the 8 pixels around lie far behind: a straight edge has
       // 3, a step in a slanting edge fewer, which softens the steps.
+      // A section's cut face (its part's number in alpha, below 1) also
+      // gets a line where it meets anything else: its own part's outside,
+      // or the cut face of the next part in the same plane.
       float behind = 0.0;
+      float id = texture2D(tParts, vUv).a;
       for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++) {
           vec2 uv = vUv + vec2(float(x), float(y)) * texel;
           float sd = texture2D(tDepth, uv).x;
-          behind += sd >= 1.0 ? 1.0 : step(10.0 * pixel, P.z - viewAt(uv, sd).z);
+          float other = texture2D(tParts, uv).a;
+          bool cutEdge = id < 0.999 && abs(other - id) > 0.002;
+          behind += sd >= 1.0 || cutEdge ? 1.0 : step(10.0 * pixel, P.z - viewAt(uv, sd).z);
         }
       f *= 1.0 - 0.82 * clamp(behind / 3.0, 0.0, 1.0);
     }
@@ -144,6 +151,31 @@ const APPLY_FRAGMENT = /* glsl */ `
     float f = mix(1.0, texture2D(tFactor, vUv).r, amount);
     gl_FragColor = vec4(vec3(linear > 0.5 ? pow(f, 2.2) : f), 1.0);
   }`;
+
+// For a part cut by a section, the inside of its far wall shows through the
+// cut (the rest of its inside is hidden behind its front faces, as always):
+// there the depth and normal pass draws the cut face instead, flat, on
+// the plane, facing the side cut away, with the part's number in alpha
+// (other surfaces have 1) so the outlines can find where it ends. The plane
+// is three.js's first clipping plane, in view space: n . p + w >= 0 is kept.
+const CUT_FACE = /* glsl */ `
+  gl_FragDepth = gl_FragCoord.z;
+  #if NUM_CLIPPING_PLANES > 0
+  // Only where the inside shows: no front face of any part is nearer here
+  // (tFront: the depth of the front faces alone, drawn just before).
+  if (!gl_FrontFacing && gl_FragCoord.z <= texture2D(tFront, gl_FragCoord.xy / frontSize).x + 1e-7) {
+    vec4 pl = clippingPlanes[0];
+    vec3 P = -vClipPosition;
+    float along = dot(pl.xyz, P);
+    vec3 X = isOrthographic ? P + vec3(0.0, 0.0, -(along + pl.w) / (abs(pl.z) > 1e-6 ? pl.z : 1e-6)) : P * (-pl.w / (abs(along) > 1e-9 ? along : 1e-9));
+    vec4 c = projectionMatrix * vec4(X, 1.0);
+    // Where two parts overlap, their cut faces lie at one depth; the one
+    // numbered lower is put in front, by a hair, so it wins everywhere
+    // instead of pixel by pixel.
+    gl_FragDepth = clamp(c.z / c.w * 0.5 + 0.5 + mod(floor(cutId * 255.0 + 0.5), 16.0) * 1e-6, 0.0, 1.0);
+    gl_FragColor = vec4(-pl.xyz * 0.5 + 0.5, cutId);
+  }
+  #endif`;
 
 export function createCreases(renderer) {
   const quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -165,7 +197,7 @@ export function createCreases(renderer) {
     return { scene, material };
   };
   const ao = pass(AO_FRAGMENT, { tNormal: { value: null }, kernel: { value: hemisphere() } });
-  const finish = pass(FINISH_FRAGMENT, { tAO: { value: null }, strength: { value: 0.75 }, outlines: { value: 0 } });
+  const finish = pass(FINISH_FRAGMENT, { tAO: { value: null }, tParts: { value: null }, strength: { value: 0.75 }, outlines: { value: 0 } });
   const apply = pass(APPLY_FRAGMENT, { tFactor: { value: null }, amount: { value: 1 }, linear: { value: 0 } }, {
     transparent: true,
     blending: THREE.CustomBlending,
@@ -183,10 +215,13 @@ export function createCreases(renderer) {
     const flat = { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false };
     const parts = new THREE.WebGLRenderTarget(w, h, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
     parts.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
+    const fronts = new THREE.WebGLRenderTarget(w, h, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    fronts.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
     targets = {
       w,
       h,
       parts,
+      fronts,
       ao: new THREE.WebGLRenderTarget(w, h, { ...flat, format: THREE.RedFormat }),
       factor: new THREE.WebGLRenderTarget(w, h, { ...flat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter }),
     };
@@ -194,21 +229,45 @@ export function createCreases(renderer) {
   }
   function dispose() {
     if (!targets) return;
-    for (const k of ["parts", "ao", "factor"]) targets[k].dispose();
+    for (const k of ["parts", "fronts", "ao", "factor"]) targets[k].dispose();
     targets.parts.depthTexture.dispose();
+    targets.fronts.depthTexture.dispose();
     targets = null;
   }
 
   // One normal material per part material, so a part's clipping planes and
   // sides carry over to the depth picture.
   const normalOf = new WeakMap();
+  let numbered = 0;
+  const front = { value: null };
+  const frontSize = { value: new THREE.Vector2(1, 1) };
   function normalMaterial(m) {
     let n = normalOf.get(m);
-    if (!n) normalOf.set(m, (n = new THREE.MeshNormalMaterial()));
+    if (!n) {
+      normalOf.set(m, (n = new THREE.MeshNormalMaterial()));
+      n.userData.cutId = { value: ((numbered++ % 250) + 1) / 255 };
+      n.userData.cut = false;
+      n.onBeforeCompile = (shader) => {
+        if (!n.userData.cut) return;
+        shader.uniforms.cutId = n.userData.cutId;
+        shader.uniforms.tFront = front;
+        shader.uniforms.frontSize = frontSize;
+        const end = shader.fragmentShader.lastIndexOf("}");
+        shader.fragmentShader = "uniform mat4 projectionMatrix;\nuniform float cutId;\nuniform sampler2D tFront;\nuniform vec2 frontSize;\n" + shader.fragmentShader.slice(0, end) + CUT_FACE + "\n}\n";
+      };
+      n.customProgramCacheKey = () => (n.userData.cut ? "cut-face" : "");
+    }
     n.side = m.side;
     n.clippingPlanes = m.clippingPlanes;
     n.clipIntersection = m.clipIntersection;
     n.clipShadows = m.clipShadows;
+    // A part cut by a section (inspect.js) shows the inside of its far wall
+    // where its cut face is. Here that is put where the cut face really is.
+    const cut = Boolean(m.userData.cap?.on && m.clippingPlanes?.length);
+    if (cut !== n.userData.cut) {
+      n.userData.cut = cut;
+      n.needsUpdate = true;
+    }
     return n;
   }
 
@@ -234,6 +293,19 @@ export function createCreases(renderer) {
       renderer.shadowMap.autoUpdate = false;
       renderer.autoClear = true;
       renderer.setClearColor(0x8080ff, 1);
+      // With a section, first the front faces alone (see CUT_FACE): one
+      // pass more, only while something is cut.
+      const cut = swapped.filter(([o, , drawn]) => drawn && o.material.userData.cut).map(([o]) => o.material);
+      if (cut.length) {
+        const sides = cut.map((m) => m.side);
+        cut.forEach((m) => (m.side = THREE.FrontSide));
+        frontSize.value.set(w, h);
+        front.value = null;
+        renderer.setRenderTarget(t.fronts);
+        renderer.render(root, camera);
+        cut.forEach((m, i) => (m.side = sides[i]));
+        front.value = t.fronts.depthTexture;
+      }
       renderer.setRenderTarget(t.parts);
       renderer.render(root, camera);
     } finally {
@@ -254,6 +326,7 @@ export function createCreases(renderer) {
       renderer.setRenderTarget(t.ao);
       renderer.render(ao.scene, quadCamera);
       finish.material.uniforms.tAO.value = t.ao.texture;
+      finish.material.uniforms.tParts.value = t.parts.texture;
       finish.material.uniforms.outlines.value = outlines ? 1 : 0;
       renderer.setRenderTarget(t.factor);
       renderer.render(finish.scene, quadCamera);

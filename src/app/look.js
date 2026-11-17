@@ -5,7 +5,7 @@
 // - While anything moves (parts, the view turning, a slider), nothing: the
 //   frame is drawn as before, and the shading is hidden.
 // - Once nothing has been drawn for REST_MS, one step works out the shading
-//   for the view as it is (three passes at one pixel per CSS pixel, or per
+//   for the view as it is (three passes, four with a section, at one pixel per CSS pixel, or per
 //   device pixel with edges on, for the outlines) and lays
 //   it over the canvas as a still image that fades in. The view itself is
 //   not drawn again, and after that nothing is drawn until something changes.
@@ -107,17 +107,17 @@ export function createLook(container, { renderer, camera, content, parts, reach,
   // ---- edges ----
   function dress(entry) {
     const on = look.edges;
-    if (on && !entry.edges) entry.object.add((entry.edges = edgeLines(entry.part.mesh)));
+    if (on && !entry.edges) entry.object.add((entry.edges = edgeLines(entry.part.mesh, entry.mesh)));
     if (!on && entry.edges) {
       entry.object.remove(entry.edges);
       entry.edges.geometry.dispose();
+      entry.edges.material.dispose();
       entry.edges = null;
     }
-    // The faces give way a little, so lines that lie on them win.
-    Object.assign(entry.mesh.material, { polygonOffset: on, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
   }
   function drop(entry) {
     entry.edges?.geometry.dispose();
+    entry.edges?.material.dispose();
   }
   // Hides or shows every part's lines (they stay out of the floor's mirror).
   function lines(on) {
