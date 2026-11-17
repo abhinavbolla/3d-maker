@@ -116,7 +116,8 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
     const m = [0, 0, 0, 0]; // left, bottom (model -y), right, top, in paper mm
     for (const { w, n } of chains) {
       const o = w.out;
-      const reachOut = (B.roof ? B.roof.overhang * s : 0) + DIM.first - 3 + (n - 1) * DIM.step + DIM.text + 2;
+      const swingOut = max(0, ...B.openings.filter((o) => o.wall === w.name && o.kind === "door" && o.opens < 0).map((o) => o.leaf.width * s + 1));
+      const reachOut = max(B.roof ? B.roof.overhang * s : 0, swingOut) + DIM.first - 3 + (n - 1) * DIM.step + DIM.text + 2;
       const k = abs(o[0]) > abs(o[1]) ? (o[0] < 0 ? 0 : 2) : o[1] < 0 ? 1 : 3;
       m[k] = max(m[k], reachOut);
     }
@@ -263,63 +264,72 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
     const sharers = B.rooms.filter((q) => q.shared === r.name).map((q) => q.name);
     const name = [r.name, ...sharers].join(" / ");
     const area = `${r.area_m2.toFixed(2)} m²`;
-    const wN = textWidth(name, LABEL.name), wA = textWidth(area, LABEL.area);
-    const lw = max(wN, wA), lh = LABEL.name + LABEL.line + LABEL.area;
     const pb = poly.reduce((b, [x, y]) => [min(b[0], x), min(b[1], y), max(b[2], x), max(b[3], y)], [Infinity, Infinity, -Infinity, -Infinity]);
     const cx = (pb[0] + pb[2]) / 2, cy = (pb[1] + pb[3]) / 2;
-    // The label as near the middle of the room as it can be, clear of doors and stairs.
+    // The label as near the middle of the room as it can be, clear of doors
+    // and stairs; in smaller letters (down to 2 mm) in a small room.
     let best = null;
-    const fits = (x, y, size = 1) => {
-      const b = rect(x - lw / 2, y - lh / 2, x + lw / 2, y + lh / 2);
-      return boxInPoly(grow(b, 1.2 * size), poly) && !occupied.some((o) => hits(o, b)) ? b : null;
-    };
-    for (let k = 0; k < 2000 && !best; k++) {
-      // Points round the middle, spiralling out.
-      const ring = floor(Math.sqrt(k)), ang = k * 2.39996;
-      const x = cx + cos(ang) * ring * 1.2, y = cy + sin(ang) * ring * 1.2;
-      const b = fits(x, y);
-      if (b) best = { x, y, b };
+    for (const k of [1, 0.8, 0.65]) {
+      const sn = LABEL.name * k, sa = max(2, LABEL.area * k);
+      const lw = max(textWidth(name, sn), textWidth(area, sa)), lh = sn + LABEL.line * k + sa;
+      for (let i = 0; i < 2000 && !best; i++) {
+        // Points round the middle, spiralling out.
+        const ring = floor(Math.sqrt(i)), ang = i * 2.39996;
+        const x = cx + cos(ang) * ring * 1.2, y = cy + sin(ang) * ring * 1.2;
+        const b = rect(x - lw / 2, y - lh / 2, x + lw / 2, y + lh / 2);
+        if (boxInPoly(grow(b, 1.2 * k), poly) && !occupied.some((o) => hits(o, b))) best = { x, y, b, sn, sa, lh };
+      }
+      if (best) break;
     }
     facts.rooms.push({ name, area_m2: r.area_m2, labelled: Boolean(best) });
     if (!best) continue;
     occupied.push(best.b);
-    labels.push(`<g class="room" data-room="${xml(name)}" data-area="${r.area_m2.toFixed(2)}">${text(best.x, best.y - lh / 2 + LABEL.name * 0.9, LABEL.name, name, `text-anchor="middle" ${INK}`)}${text(best.x, best.y + lh / 2 - 0.1, LABEL.area, area, `class="area" text-anchor="middle" ${INK}`)}</g>\n`);
+    labels.push(`<g class="room" data-room="${xml(name)}" data-area="${r.area_m2.toFixed(2)}">${text(best.x, best.y - best.lh / 2 + best.sn * 0.9, best.sn, name, `text-anchor="middle" ${INK}`)}${text(best.x, best.y + best.lh / 2 - 0.1, best.sa, area, `class="area" text-anchor="middle" ${INK}`)}</g>\n`);
     // Inside sizes: wall to wall across the room, along x and along y (in
-    // the plan's own axes), on lines clear of the label, the doors and each other.
+    // the plan's own axes), on lines clear of the label, the doors and each
+    // other. The room's main size is wanted, so of the lines that fit, the
+    // longest wins (an L-shaped room is sized across its larger part), and
+    // of those, the one nearest a fifth of the way in. A line where the
+    // room's size changes (along a wall's free end) is passed over.
     for (const [axis, d] of [["width", [1, 0]], ["length", [0, 1]]]) {
       const across = [d[1], d[0]];
       const size = [pb[2] - pb[0], pb[3] - pb[1]][axis === "width" ? 1 : 0];
       const lo = axis === "width" ? pb[1] : pb[0];
-      let done = false;
-      // Tried from a fifth of the way across the room, out from the label's side.
-      const order = [];
-      for (let f = 0.12; f <= 0.88; f += 0.02) order.push(f);
-      order.sort((p, q) => abs(p - 0.2) - abs(q - 0.2));
-      for (const f of order) {
-        const o = lo + size * f;
-        const p = axis === "width" ? [best.x, o] : [o, best.y];
+      const at = (o) => (axis === "width" ? [best.x, o] : [o, best.y]);
+      const length = (o) => {
+        const q = span(at(o), d, poly);
+        return q ? q[1] - q[0] : null;
+      };
+      let pick = null;
+      for (let f = 0.1; f <= 0.9001; f += 0.02) {
+        const o = lo + size * f, p = at(o);
         const sp = span(p, d, poly);
         if (!sp) continue;
+        const L = sp[1] - sp[0];
+        if ([-2, 2].some((e) => length(o + e) === null || abs(length(o + e) - L) > 1e-6)) continue;
         const a = [p[0] + d[0] * sp[0], p[1] + d[1] * sp[0]], b = [p[0] + d[0] * sp[1], p[1] + d[1] * sp[1]];
-        const value = round(abs(sp[1] - sp[0]) / s);
+        const value = round(L / s);
         const label = String(value);
+        if (textWidth(label, DIM.text) + 6 > L) continue;
         const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
         const deg = axis === "width" ? 0 : -90;
         const tx = mx - (deg ? 1.0 : 0), ty = my - (deg ? 0 : 1.0);
         const tb = textBox(tx, ty, DIM.text, label, deg);
-        const line = rect(a[0], a[1], b[0], b[1]);
-        const lineBox = grow(line, 0.8);
-        if (textWidth(label, DIM.text) + 6 > abs(sp[1] - sp[0])) break;
+        const lineBox = grow(rect(a[0], a[1], b[0], b[1]), 0.8);
         if (!boxInPoly(grow(tb, 0.8), poly)) continue;
         if (occupied.some((q) => hits(q, lineBox) || hits(q, grow(tb, 0.6))) || dimLines.some((q) => hits(q, grow(tb, 0.6)))) continue;
-        occupied.push(grow(tb, 0.6));
-        dimLines.push(lineBox);
-        inner.push(`<g class="dimension inside" data-dimension="${axis}" data-room="${xml(name)}" data-value="${value}">${dimLine(a, b, across, W)}${text(tx, ty, DIM.text, label, `text-anchor="middle" ${INK}${deg ? ` transform="rotate(-90 ${c2(tx)} ${c2(ty)})"` : ""}`)}</g>\n`);
-        facts.dimensions.push({ room: name, axis, value });
-        done = true;
-        break;
+        const score = [-round(value / 10), abs(f - 0.2)];
+        if (!pick || score[0] < pick.score[0] || (score[0] === pick.score[0] && score[1] < pick.score[1])) pick = { score, a, b, value, label, tx, ty, tb, lineBox, deg };
       }
-      if (!done) facts.dimensions.push({ room: name, axis, value: null });
+      if (!pick) {
+        facts.dimensions.push({ room: name, axis, value: null });
+        continue;
+      }
+      const { a, b, value, label, tx, ty, tb, lineBox, deg } = pick;
+      occupied.push(grow(tb, 0.6));
+      dimLines.push(lineBox);
+      inner.push(`<g class="dimension inside" data-dimension="${axis}" data-room="${xml(name)}" data-value="${value}">${dimLine(a, b, across, W)}${text(tx, ty, DIM.text, label, `text-anchor="middle" ${INK}${deg ? ` transform="rotate(-90 ${c2(tx)} ${c2(ty)})"` : ""}`)}</g>\n`);
+      facts.dimensions.push({ room: name, axis, value });
     }
   }
   out.push(`<g id="rooms" data-layer="text">\n${labels.join("")}</g>\n`);
@@ -330,7 +340,9 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
     const a = w.from, b = w.to, L = w.length, dir = [(b[0] - a[0]) / L, (b[1] - a[1]) / L];
     const on = (t) => [a[0] + dir[0] * t, a[1] + dir[1] * t];
     const outP = pdir(w.out);
-    const base = (B.roof ? B.roof.overhang * s : 0) + DIM.first - 3;
+    // Clear of the roof's edge, and of doors that open outwards.
+    const swingOut = max(0, ...B.openings.filter((o) => o.wall === w.name && o.kind === "door" && o.opens < 0).map((o) => o.leaf.width * s + 1));
+    const base = max((B.roof ? B.roof.overhang * s : 0), swingOut) + DIM.first - 3;
     const rows = [];
     const ops = B.openings.filter((o) => o.wall === w.name).sort((p, q) => p.at - q.at);
     if (ops.length) rows.push([0, ...ops.flatMap((o) => [o.at - o.width / 2, o.at + o.width / 2]), L]);

@@ -238,7 +238,8 @@ export function makeBuilding({ part, fail, num }) {
     // Counter-clockwise, so each side runs left to right seen from outside.
     if (area < 0) {
       P = P.reverse();
-      if (names) names = [names[0], ...names.slice(1).reverse()].reverse();
+      // Side j now runs from old point n-1-j to n-2-j: old side n-2-j, turned round.
+      if (names) names = names.map((_, j) => names[(2 * names.length - 2 - j) % names.length]);
     }
     for (let i = 0; i < P.length; i++)
       for (let j = i + 2; j < P.length; j++) if ((j + 1) % P.length !== i && segmentsCross(P[i], P[(i + 1) % P.length], P[j], P[(j + 1) % P.length])) fail("outerWalls: the outline crosses itself");
