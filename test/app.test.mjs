@@ -61,7 +61,7 @@ try {
   const app = await call("append_to_model", { code: 'part("Arm", capsule([0, 0, 12], [0, 0, H], 8));\npart("Elbow", sphere(14).at(0, 0, H));' });
   check(!app.error && app.result.parts.length === 3, "append_to_model adds parts that use earlier constants");
   const bad = await call("append_to_model", { code: "nope();" });
-  check(/not changed/.test(bad.error ?? "") && (await w("window.__3dmaker.state().parts.length")) === 3, "a broken append is refused and the model is kept");
+  check(/not changed/.test(bad.error ?? "") && (await w("window.__draftsman.state().parts.length")) === 3, "a broken append is refused and the model is kept");
   // A part that exists but has no surface does not pass.
   await call("edit_model", { old_text: "sphere(14).at(0, 0, H)", new_text: "sphere(14).at(0, 0, H).cut(sphere(20).at(0, 0, H))" });
   check(/empty \(no surface\): Elbow/.test((await call("finish_step", { step: "Arm" })).error ?? ""), "a step with an empty part is refused");
@@ -91,7 +91,7 @@ try {
 
   // A whole new model with none of the plan's parts drops the stale plan.
   await call("set_model", { script: 'part("Cube", box(20, 20, 20));' });
-  check((await w("window.__3dmaker.plan()")) === null && (await w('document.getElementById("progress").hidden')), "a new, unrelated model clears the old plan");
+  check((await w("window.__draftsman.plan()")) === null && (await w('document.getElementById("progress").hidden')), "a new, unrelated model clears the old plan");
 
   // Export gives a closed STL.
   const stl = await h.stlIsClosed(w);
@@ -104,7 +104,7 @@ try {
   const shells = await call("export_stl");
   const solid = await call("export_stl", { solid: true });
   const stlClosed = (r) => {
-    const path = join(tmpdir(), `3d-maker-${process.pid}-${Date.now()}.stl`);
+    const path = join(tmpdir(), `draftsman-${process.pid}-${Date.now()}.stl`);
     writeFileSync(path, Buffer.from(r.base64, "base64"));
     try {
       return execFileSync(process.execPath, [new URL("./check-stl.mjs", import.meta.url).pathname, path], { encoding: "utf8" });
@@ -205,7 +205,7 @@ try {
   const kept = await readSheet(again);
   check(kept.fields["created-by"] === "Ana Ruiz" && kept.fields.owner === "Example Works Ltd" && kept.fields.number === "BRK-0042", "the next drawing has them too");
   check(!JSON.stringify(again.result?.sheet).includes("Ana Ruiz") && !again.result?.line.includes("Ana Ruiz") && again.result?.sheet.created_by === "(filled in, as remembered)" && /Created by, legal owner, revision and general tolerances as remembered\./.test(again.result?.line), `a remembered name is on the sheet but not sent back to Claude (${again.result?.line})`);
-  const stored = await w('({ user: localStorage.getItem("3d-maker:drawing"), doc: localStorage.getItem("3d-maker:autosave") })');
+  const stored = await w('({ user: localStorage.getItem("draftsman:drawing"), doc: localStorage.getItem("draftsman:autosave") })');
   check(/Ana Ruiz/.test(stored.user) && /BRK-0042/.test(stored.doc) && !/Ana Ruiz|Example Works/.test(stored.doc), "names are kept for the user, not in the model, which keeps its number");
 
   // Limits (ISO 7200's lengths): a value at the limit fits whole, one over is refused.
@@ -227,7 +227,7 @@ try {
   const approved = await readSheet(approvedCall);
   const next = await call("export_drawing");
   const nextSheet = await readSheet(next);
-  const savedDoc = await w('new Promise((r) => setTimeout(r, 500)).then(() => localStorage.getItem("3d-maker:autosave"))');
+  const savedDoc = await w('new Promise((r) => setTimeout(r, 500)).then(() => localStorage.getItem("draftsman:autosave"))');
   check(approved.fields["approved-by"] === "J. Smith" && /Approved by as given\./.test(approvedCall.result?.line ?? ""), `an approval goes on the sheet it is given with (${approvedCall.result?.line})`);
   check(!nextSheet.fields["approved-by"] && /Approved by left blank\./.test(next.result?.line ?? "") && nextSheet.fields.revision === "A", `and the next sheet has an empty line to sign (${next.result?.line})`);
   check(!/J\. Smith|Ana Ruiz|Example Works/.test(savedDoc) && /BRK-0042/.test(savedDoc), "no one's name is saved in the model");
@@ -285,13 +285,13 @@ try {
   // Making a number does not upset a build or a fine pass under way.
   await w('document.querySelector(\'[data-action="new"]\').click(); new Promise((r) => setTimeout(r, 1000))');
   const racePlate = 'part("Plate", box(400, 400, 10));\nfor (let i = 0; i < 31; i++) part("Bolt " + i, cylinder(3, 8).at(-150 + i * 10, 0, 9));';
-  const raceDetail = async () => (await w("window.__3dmaker.summary()")).parts.find((p) => p.name === "Plate")?.detail_mm;
+  const raceDetail = async () => (await w("window.__draftsman.summary()")).parts.find((p) => p.name === "Plate")?.detail_mm;
   await call("set_model", { script: racePlate });
   const raceCoarse = await raceDetail();
   await call("export_drawing");
   await call("screenshot", { view: "top", width: 300, height: 300 });
   const raceFine = await raceDetail();
-  const inFlight = await w(`Promise.all([window.__3dmaker.call("set_model", { script: ${JSON.stringify(racePlate.replace("400, 400", "410, 400"))} }), window.__3dmaker.call("export_drawing", {})]).then(([, d]) => d.sheet.identification_number)`);
+  const inFlight = await w(`Promise.all([window.__draftsman.call("set_model", { script: ${JSON.stringify(racePlate.replace("400, 400", "410, 400"))} }), window.__draftsman.call("export_drawing", {})]).then(([, d]) => d.sheet.identification_number)`);
   const settled = await numberNow();
   check(raceFine < raceCoarse, `the fine pass still lands after an export makes a number (${raceCoarse} mm, then ${raceFine} mm)`);
   check(inFlight === settled, `a change on its way does not lose the number made meanwhile (${inFlight}, then ${settled})`);
@@ -309,7 +309,7 @@ try {
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.
   const plate = 'part("Plate", box(400, 400, 10));\nfor (let i = 0; i < 31; i++) part("Bolt " + i, cylinder(3, 8).at(-150 + i * 10, 0, 9));';
-  const detail = async () => (await w("window.__3dmaker.summary()")).parts.find((p) => p.name === "Plate")?.detail_mm;
+  const detail = async () => (await w("window.__draftsman.summary()")).parts.find((p) => p.name === "Plate")?.detail_mm;
   await call("set_model", { script: plate });
   const coarse = await detail();
   await call("screenshot", { view: "top", width: 300, height: 300 });
@@ -319,7 +319,7 @@ try {
   await call("set_model", { script: plate.replace("400, 400", "300, 300") });
   await call("set_model", { script: 'part("Cube", box(20, 20, 20));' });
   await call("screenshot", { width: 300, height: 300 });
-  check(JSON.stringify(await w("window.__3dmaker.state().parts")) === '["Cube"]', "a fine pass that finishes late does not bring back an old model");
+  check(JSON.stringify(await w("window.__draftsman.state().parts")) === '["Cube"]', "a fine pass that finishes late does not bring back an old model");
 
   // Linked motion: the crank from the docs plays, and screenshots at
   // different moments show different poses.
@@ -367,7 +367,7 @@ joint("Rod", "Piston", top);` });
   check(/^3 parts, 200 × \d+ × \d+ mm$/.test(await w('document.getElementById("facts").textContent')), `the heading gives the parts and size (${await w('document.getElementById("facts").textContent')})`);
   check(!(await w('document.getElementById("views").hidden')) && (await w('document.getElementById("start").hidden')), "the view bar shows with a model, and the invitation is gone");
   const picture = async () => {
-    const p = await w("window.__3dmaker.picture({ width: 320 })");
+    const p = await w("window.__draftsman.picture({ width: 320 })");
     return { ...p, bytes: Buffer.from(p.png, "base64") };
   };
   const first = await picture();
@@ -376,13 +376,13 @@ joint("Rod", "Piston", top);` });
   // heads for the wheel, so the wheel stays under the pointer and grows.
   const moved = await w(`(async () => {
     const canvas = document.querySelector("#viewport canvas");
-    const at = window.__3dmaker.screenPosition("Wheel");
+    const at = window.__draftsman.screenPosition("Wheel");
     const before = { ...at };
     for (let i = 0; i < 6; i++) {
       canvas.dispatchEvent(new WheelEvent("wheel", { clientX: at.x, clientY: at.y, deltaY: -120, bubbles: true, cancelable: true }));
       await new Promise((r) => setTimeout(r, 30));
     }
-    const after = window.__3dmaker.screenPosition("Wheel");
+    const after = window.__draftsman.screenPosition("Wheel");
     return { before, after };
   })()`);
   check(Math.hypot(moved.after.x - moved.before.x, moved.after.y - moved.before.y) < 12, `scrolling zooms to the pointer: the wheel stays under it (${JSON.stringify(moved)})`);
@@ -390,7 +390,7 @@ joint("Rod", "Piston", top);` });
   const turned = await w(`(async () => {
     const canvas = document.querySelector("#viewport canvas");
     const ev = (type, x, y, button = 0) => canvas.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button, pointerId: 7, bubbles: true }));
-    const body = () => window.__3dmaker.screenPosition("Body");
+    const body = () => window.__draftsman.screenPosition("Body");
     const a = body();
     ev("pointerdown", 300, 300, 2); ev("pointermove", 340, 300, 2); ev("pointermove", 380, 300, 2); ev("pointerup", 380, 300, 2);
     const b = body();
@@ -399,8 +399,8 @@ joint("Rod", "Piston", top);` });
   })()`);
   check(turned.slid > 40, `a right-drag slides the view with the pointer (${Math.round(turned.slid)} px for 80)`);
   check(Math.hypot(turned.c.x - turned.b.x, turned.c.y - turned.b.y) > 5, "a drag turns the view");
-  await w('window.__3dmaker.fit("top")');
-  const fromTop = await w('window.__3dmaker.screenPosition("Body")');
+  await w('window.__draftsman.fit("top")');
+  const fromTop = await w('window.__draftsman.screenPosition("Body")');
   check(Math.abs(fromTop.x - 640) < 40, `Top brings the model back to the middle of the view (${JSON.stringify(fromTop)})`);
 
   // The view turns around its centre, the middle of the window, wherever
@@ -409,17 +409,17 @@ joint("Rod", "Piston", top);` });
     const canvas = document.querySelector("#viewport canvas");
     const ev = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button: 0, pointerId: 8, bubbles: true }));
     const mid = canvas.getBoundingClientRect();
-    window.__3dmaker.fit("iso");
-    const idle = window.__3dmaker.turningPoint();
-    const grab = window.__3dmaker.screenPosition("Wheel");
+    window.__draftsman.fit("iso");
+    const idle = window.__draftsman.turningPoint();
+    const grab = window.__draftsman.screenPosition("Wheel");
     ev("pointerdown", grab.x, grab.y); ev("pointermove", grab.x + 30, grab.y + 6);
-    const started = window.__3dmaker.turningPoint();
+    const started = window.__draftsman.turningPoint();
     ev("pointermove", grab.x + 90, grab.y + 30);
-    const later = window.__3dmaker.turningPoint();
+    const later = window.__draftsman.turningPoint();
     ev("pointerup", grab.x + 90, grab.y + 30);
-    const after = window.__3dmaker.turningPoint();
+    const after = window.__draftsman.turningPoint();
     ev("pointerdown", 40, 120); ev("pointermove", 60, 124);
-    const empty = window.__3dmaker.turningPoint();
+    const empty = window.__draftsman.turningPoint();
     ev("pointerup", 60, 124);
     return { idle, started, later, after, empty, middle: { x: mid.left + mid.width / 2, y: mid.top + mid.height / 2 } };
   })()`);
@@ -435,12 +435,12 @@ joint("Rod", "Piston", top);` });
     const canvas = document.querySelector("#viewport canvas");
     const ev = (type, x, y, id, first = false) => canvas.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, button: 0, pointerId: id, isPrimary: first, bubbles: true }));
     ev("pointerdown", 200, 200, 31); ev("pointermove", 230, 210, 31);
-    const before = window.__3dmaker.screenPosition("Wheel");
+    const before = window.__draftsman.screenPosition("Wheel");
     ev("pointerdown", 300, 220, 32, true); ev("pointermove", 340, 230, 32, true); ev("pointermove", 420, 250, 32, true);
-    const during = window.__3dmaker.turningPoint();
+    const during = window.__draftsman.turningPoint();
     ev("pointerup", 420, 250, 32, true);
-    const after = window.__3dmaker.screenPosition("Wheel");
-    return { moved: Math.hypot(after.x - before.x, after.y - before.y), during, still: window.__3dmaker.turningPoint() };
+    const after = window.__draftsman.screenPosition("Wheel");
+    return { moved: Math.hypot(after.x - before.x, after.y - before.y), during, still: window.__draftsman.turningPoint() };
   })()`);
   check(lost.moved > 5 && lost.during !== null && lost.still === null, `a press that was never released does not block the next drag (${JSON.stringify(lost)})`);
 
@@ -455,7 +455,7 @@ joint("Rod", "Piston", top);` });
     // The view turns over a few frames, and frames are slow without a GPU.
     const until = async (done) => { for (let i = 0; i < 150 && !done(); i++) await new Promise((r) => setTimeout(r, 100)); return done(); };
     const visible = !document.getElementById("viewcube").hidden;
-    window.__3dmaker.fit("iso");
+    window.__draftsman.fit("iso");
     await until(() => shown() === "Front,Right,Top");
     const first = shown();
     face("Top").children[4].click();
@@ -468,13 +468,13 @@ joint("Rod", "Piston", top);` });
     const root = document.getElementById("viewcube");
     const r = root.getBoundingClientRect();
     const ev = (type, x, y) => root.dispatchEvent(new PointerEvent(type, { clientX: r.left + x, clientY: r.top + y, button: 0, buttons: 1, pointerId: 41, bubbles: true }));
-    const before = window.__3dmaker.screenPosition("Wheel");
+    const before = window.__draftsman.screenPosition("Wheel");
     ev("pointerdown", 50, 50); ev("pointermove", 60, 52); ev("pointermove", 90, 64);
-    const during = window.__3dmaker.turningPoint();
+    const during = window.__draftsman.turningPoint();
     ev("pointerup", 90, 64);
-    const after = window.__3dmaker.screenPosition("Wheel");
+    const after = window.__draftsman.screenPosition("Wheel");
     await until(() => shown() !== "Front");
-    return { visible, sides: faces.length, places: root.querySelectorAll("button").length, first, top, corner, cornerTitle, front, dragged: Math.hypot(after.x - before.x, after.y - before.y), during, still: window.__3dmaker.turningPoint(), turned: shown() };
+    return { visible, sides: faces.length, places: root.querySelectorAll("button").length, first, top, corner, cornerTitle, front, dragged: Math.hypot(after.x - before.x, after.y - before.y), during, still: window.__draftsman.turningPoint(), turned: shown() };
   })()`);
   check(cube.visible && cube.sides === 6 && cube.places === 54, `the view cube shows with a model (${JSON.stringify(cube)})`);
   check(cube.first === "Front,Right,Top", `from a corner it shows its front, right and top (${cube.first})`);
@@ -487,18 +487,18 @@ joint("Rod", "Piston", top);` });
   // wheel used after that still zooms.
   const swiped = await w(`(async () => {
     const canvas = document.querySelector("#viewport canvas");
-    window.__3dmaker.fit("iso");
-    const before = window.__3dmaker.screenPosition("Body");
+    window.__draftsman.fit("iso");
+    const before = window.__draftsman.screenPosition("Body");
     for (let i = 0; i < 4; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: before.x, clientY: before.y, deltaX: 20, deltaY: 10, bubbles: true, cancelable: true }));
-    const after = window.__3dmaker.screenPosition("Body");
+    const after = window.__draftsman.screenPosition("Body");
     for (let i = 0; i < 3; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: after.x, clientY: after.y, deltaY: -120, bubbles: true, cancelable: true }));
-    const wheeled = window.__3dmaker.screenPosition("Body");
-    const pinchAt = window.__3dmaker.screenPosition("Wheel");
+    const wheeled = window.__draftsman.screenPosition("Body");
+    const pinchAt = window.__draftsman.screenPosition("Wheel");
     for (let i = 0; i < 3; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: after.x, clientY: after.y, deltaY: -6, ctrlKey: true, bubbles: true, cancelable: true }));
-    const pinched = window.__3dmaker.screenPosition("Wheel");
-    const downAt = window.__3dmaker.screenPosition("Body");
+    const pinched = window.__draftsman.screenPosition("Wheel");
+    const downAt = window.__draftsman.screenPosition("Body");
     for (let i = 0; i < 4; i++) canvas.dispatchEvent(new WheelEvent("wheel", { clientX: downAt.x, clientY: downAt.y, deltaY: 10, bubbles: true, cancelable: true }));
-    const down = window.__3dmaker.screenPosition("Body");
+    const down = window.__draftsman.screenPosition("Body");
     return { dx: after.x - before.x, dy: after.y - before.y, wheel: Math.hypot(wheeled.x - after.x, wheeled.y - after.y), pinch: Math.hypot(pinched.x - pinchAt.x, pinched.y - pinchAt.y), straight: { dx: down.x - downAt.x, dy: down.y - downAt.y } };
   })()`);
   // The surface under the pointer moves with the fingers (80 px, 40 px); the
@@ -531,14 +531,14 @@ joint("Rod", "Piston", top);` });
   const cost = (js) => g(`(async () => { window.__gl.take(); { ${js}; } const c = window.__gl.take(); const px = document.querySelector("#viewport canvas"); return { ...c, canvas: px.width * px.height }; })()`);
   const perFrame = (c, k) => c[k] / Math.max(c.frames, 1);
   await g(`document.getElementById("play").click(); window.__frames.step(2)`);
-  const idle = await cost(`for (let i = 0; i < 5; i++) window.__3dmaker.select(null); const c = document.querySelector("#viewport canvas"); for (let i = 0; i < 20; i++) c.dispatchEvent(new PointerEvent("pointermove", { clientX: 300 + i, clientY: 300, bubbles: true })); window.__frames.step(120); await new Promise((r) => setTimeout(r, 2000))`);
+  const idle = await cost(`for (let i = 0; i < 5; i++) window.__draftsman.select(null); const c = document.querySelector("#viewport canvas"); for (let i = 0; i < 20; i++) c.dispatchEvent(new PointerEvent("pointermove", { clientX: 300 + i, clientY: 300, bubbles: true })); window.__frames.step(120); await new Promise((r) => setTimeout(r, 2000))`);
   check(idle.draws === 0, `a still view draws nothing in 120 frames, nor in 2 s of timers, hovered and with the app's state re-rendered (${JSON.stringify(idle)})`);
   const shadowDrawn = (c) => c.frames > 0 && c.passes === 3 * c.frames;
-  const slid = await cost(`await window.__3dmaker.setValue("Collective (mm)", 25); window.__frames.step(2)`);
+  const slid = await cost(`await window.__draftsman.setValue("Collective (mm)", 25); window.__frames.step(2)`);
   await h.command(g, "screenshot", { width: 200, height: 150 });
   await g("window.__frames.step(2)");
-  const shotAt = await cost(`await window.__3dmaker.call("screenshot", { width: 200, height: 150, at: 0.5 }); window.__gl.take(); window.__frames.step(2)`);
-  const pic = await cost(`window.__3dmaker.picture({ width: 320 }); window.__gl.take(); window.__frames.step(2)`);
+  const shotAt = await cost(`await window.__draftsman.call("screenshot", { width: 200, height: 150, at: 0.5 }); window.__gl.take(); window.__frames.step(2)`);
+  const pic = await cost(`window.__draftsman.picture({ width: 320 }); window.__gl.take(); window.__frames.step(2)`);
   check(shadowDrawn(slid) && shadowDrawn(shotAt) && shadowDrawn(pic), `while paused, the shadow map is drawn again after a slider change, a screenshot and a picture (${[slid, shotAt, pic].map((c) => `${c.passes} passes in ${c.frames} frames`).join("; ")})`);
   const orbit = await cost(`const c = document.querySelector("#viewport canvas"); const ev = (t, x) => c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: 300, button: 0, buttons: 1, pointerId: 9, bubbles: true })); ev("pointerdown", 300); for (let i = 1; i <= 6; i++) { ev("pointermove", 300 + i * 10); window.__frames.step(1); } ev("pointerup", 360); window.__frames.step(1)`);
   check(orbit.frames === 7 && orbit.passes === 2 * orbit.frames, `turning the view draws each frame without the shadow map (${orbit.frames} frames, ${orbit.passes} passes)`);
@@ -550,13 +550,13 @@ joint("Rod", "Piston", top);` });
   // The shadow and the mirror are drawn from the parts' lighter copies, so a
   // moving frame draws far fewer triangles than a picture, which draws the
   // full meshes three times over.
-  const whole = await cost(`window.__3dmaker.picture({ width: 320 })`);
+  const whole = await cost(`window.__draftsman.picture({ width: 320 })`);
   await g("window.__frames.step(2)");
   check(perFrame(at60, "triangles") < whole.triangles * 0.45, `a moving frame draws ${Math.round(perFrame(at60, "triangles") / 1000)} thousand triangles; a picture, from the full meshes, ${Math.round(whole.triangles / 1000)} thousand`);
   // The lighter copies are never what a click picks.
-  const hit = await g(`(() => { window.__3dmaker.fit(); const c = document.querySelector("#viewport canvas"), name = window.__3dmaker.state().parts[0], p = window.__3dmaker.screenPosition(name); const at = { clientX: p.x, clientY: p.y, button: 0, pointerId: 3, bubbles: true }; c.dispatchEvent(new PointerEvent("pointerdown", at)); c.dispatchEvent(new PointerEvent("pointerup", at)); return window.__3dmaker.state().selected; })()`);
+  const hit = await g(`(() => { window.__draftsman.fit(); const c = document.querySelector("#viewport canvas"), name = window.__draftsman.state().parts[0], p = window.__draftsman.screenPosition(name); const at = { clientX: p.x, clientY: p.y, button: 0, pointerId: 3, bubbles: true }; c.dispatchEvent(new PointerEvent("pointerdown", at)); c.dispatchEvent(new PointerEvent("pointerup", at)); return window.__draftsman.state().selected; })()`);
   check(typeof hit === "string" && hit.length > 0, `a click on a part still picks a part ("${hit}")`);
-  await g(`window.__3dmaker.select(null); window.__frames.step(2)`);
+  await g(`window.__draftsman.select(null); window.__frames.step(2)`);
   const blurred = await cost(`window.page(false, false); window.__frames.step(30); window.__frames.step(60, 120)`);
   check(blurred.frames >= 28 && blurred.frames <= 32, `with another window in focus they draw 30 a second (${blurred.frames} in 30 frames at 60 Hz and 60 at 120 Hz)`);
   const hidden = await cost(`window.page(true, false); window.__frames.step(30)`);

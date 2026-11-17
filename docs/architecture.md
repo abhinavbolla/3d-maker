@@ -1,6 +1,6 @@
 # Architecture
 
-3D Maker has three parts: the app (a web page, wrapped in a Tauri window for the desktop), an MCP
+Draftsman has three parts: the app (a web page, wrapped in a Tauri window for the desktop), an MCP
 server that Claude Code talks to, and a geometry kernel that runs in web workers inside the app.
 
 ```

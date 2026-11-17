@@ -1091,7 +1091,7 @@ test("drawing: the title block has every field ISO 7200 asks for, and fills only
   assert.match(tb, /<rect x="230" y="260" width="180" height="27" stroke-width="0.7"\/>/);
   // The credit is outside the frame, and in the metadata only as a comment.
   const credit = sheetText(d, "credit");
-  assert.ok(credit && credit.x < 20 && !tb.includes("3D Maker"), "the credit is in the title block");
+  assert.ok(credit && credit.x < 20 && !tb.includes("Draftsman"), "the credit is in the title block");
   assert.match(d, /<dc:identifier>3DM-4K7Q2X<\/dc:identifier>/);
   assert.ok(!/<dc:creator>/.test(d));
   // The projection symbol at its ISO 5456-2 size for 3.5 mm lettering:

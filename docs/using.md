@@ -1,4 +1,4 @@
-# Using 3D Maker
+# Using Draftsman
 
 The [README](../README.md) gets you to a first model. This page is the full guide.
 
@@ -85,7 +85,7 @@ Parts are drawn where the script puts them, not as their motion poses them, the 
 The prompt box is the usual way in. You can also drive the app from Claude Code or Claude Desktop directly by adding the MCP server:
 
 ```bash
-claude mcp add --scope user 3d-maker -- node /path/to/3d-maker/mcp/server.mjs
+claude mcp add --scope user draftsman -- node /path/to/draftsman/mcp/server.mjs
 ```
 
 ## Limitations
