@@ -1,0 +1,37 @@
+{
+  "name": "draftsman",
+  "displayName": "Draftsman",
+  "version": "0.2.0",
+  "description": "Model parts and machines in the Draftsman app from Claude Code: its MCP server, and a skill with the way to work in it.",
+  "author": {
+    "name": "Abhinav Bolla"
+  },
+  "homepage": "https://github.com/abhinavbolla/draftsman",
+  "repository": "https://github.com/abhinavbolla/draftsman",
+  "license": "MIT",
+  "keywords": [
+    "cad",
+    "3d",
+    "modelling",
+    "mcp"
+  ],
+  "userConfig": {
+    "server_path": {
+      "type": "string",
+      "title": "Draftsman server",
+      "description": "Leave empty to use the installed Draftsman app. Or the full path to mcp/server.mjs in a Draftsman checkout where npm install has been run.",
+      "default": ""
+    }
+  },
+  "mcpServers": {
+    "draftsman": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/start-server.mjs"
+      ],
+      "env": {
+        "DRAFTSMAN_SERVER": "${user_config.server_path}"
+      }
+    }
+  }
+}

@@ -4,7 +4,7 @@ The desktop app is built for macOS (Apple silicon and Intel), Windows and Linux 
 
 ## Making a release
 
-1. Set the version in `package.json` (the installers take it from there) and move the `[Unreleased]` notes in `CHANGELOG.md` under that version.
+1. Set the version in `package.json` (the installers take it from there) and in `plugins/draftsman/.claude-plugin/plugin.json` (Claude Code updates the plugin when it changes) and move the `[Unreleased]` notes in `CHANGELOG.md` under that version.
 2. Commit, then tag and push the tag: `git tag v0.3.0 && git push origin v0.3.0`. The workflow also runs from the Actions tab (Release, Run workflow) with the name of a tag that already exists and **Dry run** unticked.
 3. The workflow checks that the tag matches `package.json`, makes the draft release, and builds on four machines at once. Each attaches what it made:
 

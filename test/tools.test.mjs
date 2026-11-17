@@ -9,6 +9,7 @@
 // applies fails the test until it is removed.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { readFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 // Another server file can be given, to see that the checks catch what they should.
@@ -77,6 +78,7 @@ const client = new Client({ name: "tools-test", version: "1" });
 await client.connect(transport);
 const { tools } = await client.listTools();
 const instructions = client.getInstructions() ?? "";
+const serverName = client.getServerVersion()?.name;
 // The reference tool answers from the server alone, without the app.
 const reference = (await client.callTool({ name: "reference", arguments: {} })).content[0].text;
 await client.close();
@@ -136,6 +138,21 @@ for (const t of tools) {
 const TOOLISH = /\b(?:get|set|edit|append|finish|check|export|hide|section|explode|clear|save|preview|record|show|list|add|remove|delete|load|open)_[a-z0-9_]+\b/g;
 for (const [key, text] of [["instructions", instructions], ["reference", reference], ...tools.map((t) => [t.name, t.description])]) {
   for (const w of new Set(text.match(TOOLISH) ?? [])) if (!names.has(w) && !/_(mm|cm3|g_cm3|seconds|parts|out|edges|view|step|from)$/.test(w)) report("names-real-things", `${key}:${w}`, `names ${w}, which is not a tool`);
+}
+// The plugin's skill: every tool, argument, result field and script function it
+// names in `code` must be one the server or the reference really has.
+{
+  const skill = readFileSync(new URL("../plugins/draftsman/skills/draftsman/SKILL.md", import.meta.url), "utf8");
+  const argNames = new Set(tools.flatMap((t) => argumentsOf(t).map(([k]) => k.split(".").at(-1))));
+  const seen = [instructions, reference, ...tools.map((t) => t.description)].join("\n");
+  for (const [, code] of skill.matchAll(/`([^`]+)`/g)) {
+    const fn = code.match(/^([a-z][A-Za-z0-9]*)\(\)$/);
+    if (fn && !seen.includes(`${fn[1]}(`)) report("skill", code, "is not a function the reference lists");
+    if (!/^[a-z][a-z0-9_]*$/.test(code)) continue;
+    if (code === serverName || names.has(code) || argNames.has(code) || new RegExp(`\\b${code}\\b`).test(seen)) continue;
+    report("skill", code, "is not a tool, an argument, or a word the tools or reference use");
+  }
+  for (const w of new Set(skill.match(TOOLISH) ?? [])) if (!names.has(w)) report("skill", w, `names ${w}, which is not a tool`);
 }
 if (!/\breference\b/.test(instructions)) report("instructions", "reference", "the instructions do not send the model to the reference tool");
 if (instructions.length > 4096) report("instructions", "length", `${instructions.length} characters; Claude Code cuts instructions off at 4096`);
