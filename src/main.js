@@ -429,6 +429,8 @@ document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("cl
 const exportMenu = $("export-menu");
 const showExportMenu = (open) => {
   exportMenu.hidden = !open;
+  // Floor plans only for a model with a building in it.
+  exportMenu.querySelectorAll('[data-export^="plan"]').forEach((b) => (b.hidden = !store.state.result?.building));
   $("export-button").setAttribute("aria-expanded", String(open));
   if (open) exportMenu.querySelector("button").focus();
 };
@@ -443,7 +445,7 @@ document.addEventListener("pointerdown", (e) => {
   if (!exportMenu.hidden && !e.target.closest(".menu")) showExportMenu(false);
 });
 exportMenu.addEventListener("keydown", (e) => {
-  const items = [...exportMenu.querySelectorAll("button")];
+  const items = [...exportMenu.querySelectorAll("button:not([hidden])")];
   const at = items.indexOf(document.activeElement);
   if (e.key === "Escape") e.stopPropagation(), showExportMenu(false), $("export-button").focus();
   else if (e.key === "ArrowDown" || e.key === "ArrowUp") e.preventDefault(), items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();

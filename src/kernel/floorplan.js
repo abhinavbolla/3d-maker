@@ -12,7 +12,7 @@
 // Same frame and title block as the mechanical sheet (drawing.js), and the
 // same structure: groups with ids, data-layer naming what each holds.
 import { compile } from "./sdf.js";
-import { contour, loopsArea, SCALES, scaleText, textWidth, titleLines, sheetFrame, sheetTitleBlock, SHEET, TITLE } from "./drawing.js";
+import { contour, loopsArea, SCALES, scaleText, textWidth, titleLines, sheetFrame, sheetTitleBlock, useSheet, TITLE } from "./drawing.js";
 import { squareLoop, polygonArea } from "./building.js";
 
 const { abs, min, max, hypot, floor, ceil, round, cos, sin, atan2, PI } = Math;
@@ -91,6 +91,8 @@ function cutPart(node, z, cell) {
 // visible part as { name, node }; info: the title block's fields (see
 // sheetSVG in drawing.js). Returns { svg, scale, facts }.
 export function floorPlanSVG({ building: B, parts, info = {} }) {
+  // Always A3: the worker may have drawn another sheet size last.
+  const SHEET = useSheet("A3");
   if (!B) throw new Error("This model has no building to draw a plan of. Floor plans are made from outerWalls(), wall(), door(), window() and room() in the script.");
   const zc = B.cut_z;
   const pieces = new Set(["Floor slab", "Outer walls", "Inner walls", ...B.openings.flatMap((o) => o.parts), ...B.stairs.map((s) => s.name)]);
@@ -170,7 +172,7 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
   const dimLines = []; // inside dimension lines: they may cross each other, not text
 
   // ---- walls ----
-  out.push(`<g id="walls" data-layer="walls">\n`);
+  out.push(`<g id="walls" data-layer="WALLS">\n`);
   out.push(`<path class="cut-walls" fill="#4d4d4d" fill-rule="evenodd" stroke-width="${W.cut}" d="${cut.loops.map((L) => loopPath(L.map(pp))).join("")}"/>\n`);
   for (const o of others) out.push(`<path class="cut" data-part="${xml(o.name)}" fill="#bdbdbd" fill-rule="evenodd" stroke-width="${W.mid}" d="${o.loops.map((L) => loopPath(L.map(pp))).join("")}"/>\n`);
   out.push("</g>\n");
@@ -216,11 +218,17 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
       const hx = hs * (cw / 2), face = side * (t / 2);
       const leaf = [at(hx, face), at(hx - hs * 40, face), at(hx - hs * 40, face + side * lw), at(hx, face + side * lw)];
       const tip = at(hx, face + side * lw), shut = at(hx - hs * lw, face);
-      const r = lw * s;
-      // Sweep direction on paper: from the open tip round to the shut position.
+      // The swing: a quarter circle from the open tip round to the shut
+      // position, as fine straight pieces (every 2 degrees) so the PDF and
+      // DXF writers, which read lines only, draw it too.
       const c = at(hx, face);
-      const cr = (tip[0] - c[0]) * (shut[1] - c[1]) - (tip[1] - c[1]) * (shut[0] - c[0]);
-      const arc = `M${c2(tip[0])} ${c2(tip[1])}A${c2(r)} ${c2(r)} 0 0 ${cr > 0 ? 1 : 0} ${c2(shut[0])} ${c2(shut[1])}`;
+      const a0 = atan2(tip[1] - c[1], tip[0] - c[0]), a1 = atan2(shut[1] - c[1], shut[0] - c[0]);
+      let sw = a1 - a0;
+      while (sw > PI) sw -= 2 * PI;
+      while (sw < -PI) sw += 2 * PI;
+      const r = lw * s, arcPts = [];
+      for (let k = 0; k <= 45; k++) arcPts.push([c[0] + r * cos(a0 + (sw * k) / 45), c[1] + r * sin(a0 + (sw * k) / 45)]);
+      const arc = `M${arcPts.map((p) => `${c2(p[0])} ${c2(p[1])}`).join("L")}`;
       const thr = o.wall_kind === "outer" ? seg(at(-hw + 50, -t / 2), at(hw - 50, -t / 2)) : "";
       doors.push(`<g class="door" data-part="${xml(o.name)}"><path stroke-width="${W.thin}" d="${jam(-1)}${jam(1)}${thr}"/><path stroke-width="${W.mid}" d="${loopPath(leaf)}"/><path class="swing" stroke-width="${W.fine}" d="${arc}"/></g>\n`);
       const swingBox = rect(...c, ...tip);
@@ -228,12 +236,12 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
       occupied.push(grow([min(b[0], tip[0], shut[0]), min(b[1], tip[1], shut[1]), max(b[2], tip[0], shut[0]), max(b[3], tip[1], shut[1])], 0.8));
     }
   }
-  out.push(`<g id="windows" data-layer="windows">\n${windows.join("")}</g>\n`);
-  out.push(`<g id="doors" data-layer="doors">\n${doors.join("")}</g>\n`);
+  out.push(`<g id="windows" data-layer="OPENINGS">\n${windows.join("")}</g>\n`);
+  out.push(`<g id="doors" data-layer="OPENINGS">\n${doors.join("")}</g>\n`);
 
   // ---- stairs: treads up to the cut, a break line, the rest dashed, and the way up ----
   if (B.stairs.length) {
-    out.push(`<g id="stairs" data-layer="stairs">\n`);
+    out.push(`<g id="stairs" data-layer="STAIRS">\n`);
     for (const st of B.stairs) {
       const d = st.dir, n = [-d[1], d[0]], hw = st.width / 2;
       const at = (along, acr) => pp([st.at[0] + d[0] * along + n[0] * acr, st.at[1] + d[1] * along + n[1] * acr]);
@@ -254,7 +262,7 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
   }
 
   // ---- the roof above, dashed ----
-  if (eaves) out.push(`<g id="roof-outline" data-layer="above"><path stroke-width="${W.thin}" stroke-dasharray="3 1.2" d="${loopPath(eaves.map(pp))}"/></g>\n`);
+  if (eaves) out.push(`<g id="roof-outline" data-layer="ROOF"><path stroke="#8c8c8c" stroke-width="0.09" stroke-dasharray="2.4 1.2" d="${loopPath(eaves.map(pp))}"/></g>\n`);
 
   // ---- rooms: name and area in the middle, the inside sizes where they fit ----
   const labels = [], inner = [];
@@ -300,7 +308,10 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
         const q = span(at(o), d, poly);
         return q ? q[1] - q[0] : null;
       };
+      // Clear of labels and door swings by a good margin where the room
+      // allows, else by less.
       let pick = null;
+      for (const clear of [6, 3, 0.8]) {
       for (let f = 0.1; f <= 0.9001; f += 0.02) {
         const o = lo + size * f, p = at(o);
         const sp = span(p, d, poly);
@@ -316,10 +327,14 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
         const tx = mx - (deg ? 1.0 : 0), ty = my - (deg ? 0 : 1.0);
         const tb = textBox(tx, ty, DIM.text, label, deg);
         const lineBox = grow(rect(a[0], a[1], b[0], b[1]), 0.8);
+        // Clear of wall faces at its ends (the line runs to them), not along them.
+        const along = grow(rect(a[0] + d[0] * clear, a[1] + d[1] * clear, b[0] - d[0] * clear, b[1] - d[1] * clear), clear);
         if (!boxInPoly(grow(tb, 0.8), poly)) continue;
-        if (occupied.some((q) => hits(q, lineBox) || hits(q, grow(tb, 0.6))) || dimLines.some((q) => hits(q, grow(tb, 0.6)))) continue;
+        if (occupied.some((q) => hits(q, along) || hits(q, lineBox) || hits(q, grow(tb, max(0.6, clear / 2)))) || dimLines.some((q) => hits(q, grow(tb, 0.6)))) continue;
         const score = [-round(value / 10), abs(f - 0.2)];
         if (!pick || score[0] < pick.score[0] || (score[0] === pick.score[0] && score[1] < pick.score[1])) pick = { score, a, b, value, label, tx, ty, tb, lineBox, deg };
+      }
+      if (pick) break;
       }
       if (!pick) {
         facts.dimensions.push({ room: name, axis, value: null });
@@ -332,7 +347,7 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
       facts.dimensions.push({ room: name, axis, value });
     }
   }
-  out.push(`<g id="rooms" data-layer="text">\n${labels.join("")}</g>\n`);
+  out.push(`<g id="rooms" data-layer="TEXT">\n${labels.join("")}</g>\n`);
 
   // ---- outside dimension chains ----
   const chainOut = [];
@@ -402,7 +417,7 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
       chainOut.push(`<g class="dimension chain" data-wall="${xml(w.name)}" data-row="${k === rows.length - 1 ? "overall" : "openings"}">${parts2.join("")}</g>\n`);
     });
   }
-  out.push(`<g id="dimensions" data-layer="dimensions">\n${chainOut.join("")}${inner.join("")}</g>\n`);
+  out.push(`<g id="dimensions" data-layer="DIMENSIONS">\n${chainOut.join("")}${inner.join("")}</g>\n`);
 
   // ---- legend: the plan's name and scale, a scale bar and the north arrow ----
   {
@@ -428,7 +443,7 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
     g.push(`<path stroke-width="${W.thin}" fill="#000" d="M${c2(tipN[0])} ${c2(tipN[1])}L${c2(tail[0] + nl[0] * 2.6)} ${c2(tail[1] + nl[1] * 2.6)}L${c2(nx)} ${c2(ny)}Z"/>`);
     g.push(`<path stroke-width="${W.thin}" fill="#fff" d="M${c2(tipN[0])} ${c2(tipN[1])}L${c2(tail[0] - nl[0] * 2.6)} ${c2(tail[1] - nl[1] * 2.6)}L${c2(nx)} ${c2(ny)}Z"/>`);
     g.push(text(nx + nd[0] * (R + 3.2), ny + nd[1] * (R + 3.2) + 1.6, 4, "N", `text-anchor="middle" ${INK}`), "</g>");
-    out.push(`<g id="legend" data-layer="text">\n${g.join("")}\n</g>\n`);
+    out.push(`<g id="legend" data-layer="TEXT">\n${g.join("")}\n</g>\n`);
   }
 
   // ---- the sheet ----
@@ -443,9 +458,9 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
   head.push(`<title>${xml(f.title)} – floor plan</title>\n`);
   head.push(`<rect width="${SHEET.w}" height="${SHEET.h}" fill="#fff"/>\n`);
   head.push(`<g fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" ${FONT}>\n`);
-  head.push(`<g data-layer="frame">\n${sheetFrame()}</g>\n`);
+  head.push(`<g data-layer="FRAME">\n${sheetFrame()}</g>\n`);
   head.push(`<g id="plan" class="view" data-view="plan" data-cut-z="${B.cut_z}">\n`);
-  const tail = ["</g>\n", `<g data-layer="title-block">\n${block}</g>\n`, text(10, SHEET.bottom, 1.8, "Made with Draftsman", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n</g>\n</svg>\n"];
+  const tail = ["</g>\n", block, text(10, SHEET.bottom, 1.8, "Made with Draftsman", `id="credit" fill="#777" stroke="none" transform="rotate(-90 10 ${SHEET.bottom})"`), "\n</g>\n</svg>\n"];
   return { svg: [...head, ...out, ...tail].join(""), scale: scaleText(s), facts, titles };
 }
 

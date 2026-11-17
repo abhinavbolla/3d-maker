@@ -1920,7 +1920,7 @@ test("building: plan cut, dimension chains and inside sizes match the script", a
   assert.ok(facts.rooms.every((q) => q.labelled));
   // Every room's name and area are on the sheet, and no two texts on the plan overlap.
   for (const [n, a] of [["Bathroom", "2.24"], ["Kitchen", "11.03"], ["Living room", "12.59"]]) assert.match(svg, new RegExp(`data-room="${n}" data-area="${a}"`));
-  const plan = svg.slice(svg.indexOf('<g id="plan"'), svg.indexOf('<g data-layer="title-block">'));
+  const plan = svg.slice(svg.indexOf('<g id="plan"'), svg.indexOf('<g id="title-block"'));
   const boxes = [...plan.matchAll(/<text x="([-\d.]+)" y="([-\d.]+)" font-size="([\d.]+)" ([^>]*)>([^<]*)</g)].map(([, x, y, size, attrs, s]) => {
     const w = textWidth(s.replace(/&[a-z]+;/g, "x"), +size), h = +size, mid = /middle/.test(attrs);
     const x0 = mid ? +x - w / 2 : +x;
@@ -1935,6 +1935,16 @@ test("building: plan cut, dimension chains and inside sizes match the script", a
   // Nine windows and six doors, each drawn once.
   assert.equal((svg.match(/class="window"/g) ?? []).length, 9);
   assert.equal((svg.match(/class="door"/g) ?? []).length, 6);
+  // The same sheet as DXF and PDF, through the drawing's writers: layers
+  // for walls, openings, dimensions and text, every wall outline closed.
+  const d = readDXF(sheetDXF(svg));
+  assert.deepEqual(d.problems, []);
+  for (const l of ["WALLS", "OPENINGS", "DIMENSIONS", "TEXT", "FRAME", "TITLE"]) assert.ok(d.byLayer[l] > 0, `no ${l} layer`);
+  const walls = d.entities.filter((e) => e.layer === "WALLS");
+  assert.ok(walls.length >= 9 && walls.every((e) => e.type === "POLYLINE" && e.closed), `wall outlines: ${walls.length}`);
+  assert.ok(d.entities.some((e) => e.type === "TEXT" && e.text === "Bathroom"));
+  const pdf = new TextDecoder().decode((await sheetPDF(svg, { title: r.title, date: "2026-01-31" })).subarray(0, 8));
+  assert.match(pdf, /^%PDF-/);
 });
 test("building: awkward input is joined or refused with a plain message", () => {
   // Clockwise outline with its own names; the names stay on their sides.

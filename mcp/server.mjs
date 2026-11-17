@@ -303,7 +303,7 @@ tool(
 
 tool(
   "export_floor_plan",
-  "Export the floor plan of a building (a model made with outerWalls, wall, door, window and room) as an SVG: an A3 sheet at 1:50 or 1:100 with the walls cut 1200 mm above the floor, doors drawn open with their swing, windows in their openings, each room's name and area in m2 and its inside sizes, dimension chains outside every wall (openings and overall), the roof's edge dashed, a north arrow, a scale bar and the same ISO 7200 title block as export_drawing, filled in and remembered the same way. Pass only title block fields the user gave. path defaults to ~/Downloads/<title>.svg. Only do this when the user asks. Returns the path, the scale, the rooms with their areas, and line: one sentence on what went on the sheet. Reply with the path and that line.",
+  "Export the floor plan of a building (a model made with outerWalls, wall, door, window and room) as an SVG, PDF or DXF: an A3 sheet at 1:50 or 1:100 with the walls cut 1200 mm above the floor, doors drawn open with their swing, windows in their openings, each room's name and area in m2 and its inside sizes, dimension chains outside every wall (openings and overall), the roof's edge dashed, a north arrow, a scale bar and the same ISO 7200 title block as export_drawing, filled in and remembered the same way. Pass only title block fields the user gave. path defaults to ~/Downloads/<title>.svg (or .pdf, .dxf). Only do this when the user asks. Returns the path, the scale, the rooms with their areas, and line: one sentence on what went on the sheet. Reply with the path and that line.",
   {
     path: z.string().optional().describe("Absolute path, or relative to the home folder."),
     drawn_by: z.string().optional().describe("Created by, at most 20 characters, as the user wrote it."),
@@ -312,8 +312,12 @@ tool(
     number: z.string().optional().describe("Drawing number, at most 16 characters."),
     revision: z.string().optional().describe("Revision index, at most 2 characters."),
     subtitle: z.string().optional().describe("Supplementary title, at most 50 characters."),
+    format: z.enum(["svg", "pdf", "dxf"]).optional().describe("svg (default), pdf (to print or send; same sheet) or dxf (for 2D CAD: layers for walls, openings, dimensions, text, frame and title)."),
   },
-  async ({ path, ...args }) => save(await call("export_floor_plan", args), path, "svg"),
+  async ({ path, ...args }) => {
+    const r = await call("export_floor_plan", args);
+    return save(r, path, r.format ?? "svg");
+  },
 );
 
 tool(
