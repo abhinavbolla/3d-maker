@@ -105,17 +105,23 @@ app itself, checked by WebSocket origin. [SECURITY.md](../SECURITY.md) has the d
 When no window is connected, the MCP server keeps a model of its own
 ([mcp/headless.mjs](../mcp/headless.mjs)): the app's own store, commands and kernel pool
 ([store.js](../src/app/store.js), [commands.js](../src/app/commands.js),
-[kernel.js](../src/app/kernel.js)), with no view, no autosave and no fine pass, and the kernel's
-workers as Node worker threads. A thread runs the server's own file, which then runs
-[src/kernel/worker.js](../src/kernel/worker.js) instead of the server, so the one-file bundle the
-desktop app carries works the same. Before the worker loads, the thread takes away what Node has
-and a web worker does not (`process`, `Buffer`, `fetch`), and a script that calls `import()` is
-refused. So `set_model`, `measure`, `check_fit` and every export give what the app gives for the
-same script; tools that draw answer that they need the app.
+[kernel.js](../src/app/kernel.js)), with no view, no autosave and no fine pass. Each kernel
+worker is a separate Node process: [mcp/kernel-process.mjs](../mcp/kernel-process.mjs) running
+[src/kernel/worker.js](../src/kernel/worker.js) over the process's IPC channel (bundled, the
+server's own file started with `--draftsman-kernel`, so the one file the desktop app carries
+works the same). A model script is code, and here it would otherwise run as the user, so the
+processes run inside a boundary: Node's permission model (reads only of the kernel's code, no
+writes, processes, threads, add-ons or inspector), an empty environment, and on macOS the system
+sandbox, for the network, which Node's model covers only from Node 25. Where there is nothing to
+keep a script off the network, building without a window is refused. [SECURITY.md](../SECURITY.md)
+says exactly what is and is not covered. So `set_model`, `measure`, `check_fit` and every export
+give what the app gives for the same script; tools that draw answer that they need the app.
 
-Threads rather than the main thread, measured on the bracket (test/models/bracket.js): set_model
-706 against 852 ms the first time, 627 against 779 ms after a change; STL export 2.8 against
-3.0 s; drawing 3.1 against 4.6 s. Threads also keep the server answering while a part meshes.
+Measured on the bracket (test/models/bracket.js), main thread / worker threads / sandboxed
+processes (two runs): set_model 852 / 706 / 757–847 ms the first time and 779 / 627 /
+618–640 ms after a change; STL export 3.0 / 2.8 / 2.8–2.9 s; drawing 4.6 / 3.1 / 3.1–3.2 s.
+Starting the processes adds up to about 140 ms to the first call. Separate processes also keep
+the server answering while a part meshes.
 
 Calls wait for a window only in the 8 s after the bridge starts (an open window finds a new server
 within about 5 s) or after a window goes away (it may be reloading); otherwise they go to the

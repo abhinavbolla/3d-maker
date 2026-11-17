@@ -6,7 +6,7 @@
 npm test                                  # kernel, window routing, plan tools (needs Chrome); CI runs this
 npm run licenses                          # every npm package carries an accepted license; CI runs this
 node test/tools.test.mjs [--list]         # the MCP tool list follows its rules and stays within its size budget (in npm test)
-node test/headless.test.mjs [server.mjs]  # the MCP server with no window: builds, measures and exports itself; drawing tools say they need the app (in npm test)
+node test/headless.test.mjs [server.mjs]  # the MCP server with no window: builds, measures and exports itself; drawing tools say they need the app; scripts that try to read, write, run commands or connect get nothing (in npm test)
 node test/check-stl.mjs model.stl         # checks an STL is well formed and closed
 node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, every part closed
 node test/check-step.mjs model.step       # checks a STEP file: entities, assembly, closed solids, geometry, volumes

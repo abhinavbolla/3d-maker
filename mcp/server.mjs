@@ -8,10 +8,12 @@ import { WebSocketServer } from "ws";
 import { z } from "zod";
 import { writeFile, mkdir, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isMainThread, workerData } from "node:worker_threads";
 import { dirname, resolve, extname, basename, join } from "node:path";
 import { REFERENCE } from "./reference.mjs";
 import { DENSITIES } from "../src/app/inspect-tools.js";
+// Started with this flag, this file is a kernel process of the server's own
+// model (kernel-process.mjs runs it), not the server.
+import { KERNEL_FLAG } from "./kernel-process.mjs";
 
 // The materials measure knows a density for, so a name it would refuse cannot be sent.
 const MATERIALS = Object.keys(DENSITIES);
@@ -109,8 +111,9 @@ const needsWindow = (method) =>
 async function withoutWindow(method, params) {
   const { createHeadless, VIEW_ONLY } = await import("./headless.mjs");
   if (VIEW_ONLY.has(method)) throw new Error(needsWindow(method));
-  // Its kernel threads run this file (see the end of it).
-  headless ??= createHeadless(new URL(import.meta.url));
+  // Its kernel processes run this file, bundled (see kernel-process.mjs).
+  headless ??= createHeadless(new URL(import.meta.url), { log });
+  if (headless.refused) throw new Error(`Without the Draftsman app open, models cannot be built here: ${headless.refused} Ask the user to open the app, or to update Node.js.`);
   if (!headless.has(method)) throw new Error(needsWindow(method));
   return headless.run(method, params);
 }
@@ -547,12 +550,8 @@ tool(
   },
 );
 
-if (isMainThread) {
+if (!process.argv.includes(KERNEL_FLAG)) {
   await listen();
   await server.connect(new StdioServerTransport());
   log("ready");
-} else {
-  // A kernel thread of the server's own model (mcp/headless.mjs).
-  const headlessModule = await import("./headless.mjs");
-  if (workerData === headlessModule.KERNEL_THREAD) await headlessModule.kernelThread();
 }

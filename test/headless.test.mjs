@@ -9,7 +9,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import WebSocket from "ws";
-import { readFileSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createServer, connect } from "node:net";
+import { createSocket } from "node:dgram";
 import { execFileSync } from "node:child_process";
 import { runScript } from "../src/kernel/script.js";
 import { measureJob } from "../src/kernel/measure.js";
@@ -27,9 +29,11 @@ const { check, done } = checks();
 // its distance function (good to about 0.1%).
 const exact = Object.fromEntries(runScript(bracket).parts.map((p) => [p.name, measureJob({ what: "solid", node: p.node }).volume / 1000]));
 const exactTotal = Object.values(exact).reduce((a, b) => a + b, 0);
+// Where the server has a boundary for model scripts (see mcp/headless.mjs).
+const bounded = process.platform === "darwin" || process.allowedNodeEnvironmentFlags.has("--allow-net");
 const near = (a, b, share) => Math.abs(a - b) <= share * Math.abs(b);
 
-const transport = new StdioClientTransport({ command: process.execPath, args: [process.argv[2] ?? `${root}mcp/server.mjs`], env: { ...process.env, DRAFTSMAN_BRIDGE_PORT: "0" }, stderr: "pipe" });
+const transport = new StdioClientTransport({ command: process.execPath, args: [process.argv[2] ?? `${root}mcp/server.mjs`], env: { ...process.env, DRAFTSMAN_BRIDGE_PORT: "0", DRAFTSMAN_TEST_SECRET: "1" }, stderr: "pipe" });
 let stderr = "";
 const port = new Promise((resolve) => {
   transport.stderr.on("data", (d) => {
@@ -50,7 +54,74 @@ const timed = async (name, args = {}) => {
   return { r, ms: Math.round(performance.now() - t), data: r.isError ? null : (() => { try { return JSON.parse(r.content[0].text); } catch { return null; } })() };
 };
 
+// Model scripts that try to get out of the kernel's boundary, for real, and
+// what each would leave behind if it got out: a file read (its text printed
+// or copied), a command run, a connection to a port this test listens on, a
+// file written. Everything stays inside runs/headless-test and 127.0.0.1.
+async function escapes() {
+  const secret = `${out}/secret.txt`;
+  writeFileSync(secret, "SECRET-7f3a");
+  writeFileSync(`${out}/secret.json`, '{"s":"SECRET-7f3a"}');
+  writeFileSync(`${out}/secret.env`, "S=SECRET-7f3a\n");
+  const heard = [];
+  const tcp = createServer((s) => (heard.push("tcp"), s.on("data", (d) => heard.push(String(d))), s.on("error", () => {})));
+  await new Promise((r) => tcp.listen(0, "127.0.0.1", r));
+  const udp = createSocket("udp4", (m) => heard.push(`udp ${m}`));
+  await new Promise((r) => udp.bind(0, "127.0.0.1", r));
+  const [tp, up] = [tcp.address().port, udp.address().port];
+  // The ports hear a connection from outside the boundary.
+  await new Promise((r) => connect(tp, "127.0.0.1").end("control", r));
+  const control = createSocket("udp4");
+  control.send("control", up, "127.0.0.1", () => control.close());
+  await new Promise((r) => setTimeout(r, 300));
+  check(heard.includes("tcp") && heard.includes("udp control"), `the test's own ports hear a connection from outside (${heard.join(", ")})`);
+  heard.length = 0;
+  const q = JSON.stringify;
+  const mod = (name) => `process.getBuiltinModule(${q(name)})`;
+  // A call that would act at once says GOT OUT if it does not throw; one that
+  // only starts something (a connection) says started, and the ports tell.
+  const tryIt = (code, done = "GOT OUT") => `try { ${code}; print(${q(done)}) } catch (e) { print("refused", e.code || e.message) }`;
+  const attempts = {
+    "the constructor route to import(), reading a file and writing it out": `const F = (() => {}).constructor;\nF("return imp" + "ort('node:fs')")().then((fs) => fs.writeFileSync(${q(`${out}/copied.txt`)}, fs.readFileSync(${q(secret)})));\nF("return imp" + "ort('node:net')")().then((net) => net.connect(${tp}, "127.0.0.1").on("error", () => {}).end("import"), () => {});\nprint("scheduled")`,
+    "node:fs reading a file": tryIt(`print(${mod("node:fs")}.readFileSync(${q(secret)}, "utf8"))`),
+    "require() of a JSON file": tryIt(`print(JSON.stringify(${mod("node:module")}.createRequire(${q(`${out}/`)})(${q(`${out}/secret.json`)})))`),
+    "process.loadEnvFile reading a file": tryIt(`process.loadEnvFile(${q(`${out}/secret.env`)}); print(process.env.S)`),
+    "node:sqlite opening a file": tryIt(`const { DatabaseSync } = ${mod("node:sqlite")}; new DatabaseSync(${q(`${out}/made.sqlite`)}).exec("create table t(x)")`),
+    "a diagnostic report written to a file": tryIt(`process.report.writeReport(${q(`${out}/report.json`)})`),
+    "node:fs writing a file":tryIt(`${mod("node:fs")}.writeFileSync(${q(`${out}/written.txt`)}, "x")`),
+    "node:child_process running a command": tryIt(`print(String(${mod("node:child_process")}.execSync(${q(`touch ${out}/ran.txt; echo ran`)})))`),
+    "a worker thread": tryIt(`new (${mod("node:worker_threads")}.Worker)("1", { eval: true })`),
+    "node:net connecting": tryIt(`${mod("node:net")}.connect(${tp}, "127.0.0.1").on("error", () => {}).end("net")`, "started"),
+    "node:http requesting": tryIt(`${mod("node:http")}.get("http://127.0.0.1:${tp}/http").on("error", () => {})`, "started"),
+    "node:dgram sending": tryIt(`const s = ${mod("node:dgram")}.createSocket("udp4"); s.on("error", () => {}); s.send("udp", ${up}, "127.0.0.1")`, "started"),
+    "the inspector": tryIt(`${mod("node:inspector")}.open(0)`),
+    "a signal to the server": tryIt(`process.kill(process.ppid, 0)`),
+    "the environment": `print(JSON.stringify(process.env))`,
+  };
+  for (const [what, code] of Object.entries(attempts)) {
+    const r = await timed("set_model", { script: `${code}\npart("A", box(10, 10, 10));` });
+    const said = String(r.data?.printed ?? text(r.r));
+    const ok = what === "the environment" ? !said.includes("DRAFTSMAN_TEST_SECRET") && !/"(PATH|HOME)"/.test(said) : !/GOT OUT|SECRET-7f3a/.test(said);
+    check(ok, `a script trying ${what} gets nothing: ${said.slice(0, 120)}`);
+  }
+  // Anything scheduled to run later has had its chance.
+  await new Promise((r) => setTimeout(r, 1500));
+  const left = ["copied.txt", "written.txt", "ran.txt", "made.sqlite", "report.json"].filter((f) => existsSync(`${out}/${f}`));
+  check(!left.length, `nothing was written or run (${left.join(", ") || "no files"})`);
+  check(!heard.length, `nothing connected to the test's TCP and UDP ports (${heard.join(", ") || "none"})`);
+  tcp.close();
+  udp.close();
+}
+
 try {
+  if (!bounded) {
+    // No boundary for scripts on this platform and Node: building is refused.
+    await timed("get_model");
+    const r = await timed("set_model", { script: bracket });
+    check(r.r.isError && /cannot be built here/.test(text(r.r)), `with no boundary here, building without a window is refused: ${text(r.r).slice(0, 160)}`);
+    await client.close();
+    process.exit(done());
+  }
   // The first call waits for a window for 8 s after the server started; later ones do not.
   const first = await timed("get_model");
   check(!first.r.isError && first.data?.script === "" && first.data.parts.length === 0, `get_model with no window: an empty model (${first.ms} ms, waiting for a window once)`);
@@ -107,11 +178,7 @@ try {
     check(v.r.isError && text(v.r).startsWith(`${name} needs the Draftsman app open`) && v.ms < 500, `${name} answers that it needs the app, in ${v.ms} ms`);
   }
 
-  // A script reaches no more of Node than of a web worker.
-  const reach = await timed("set_model", { script: 'print(typeof process, typeof Buffer, typeof global, typeof fetch);\npart("A", box(10, 10, 10));' });
-  check(String(reach.data?.printed) === "undefined undefined undefined undefined", `a script cannot reach process, Buffer, global or fetch: ${reach.data?.printed}`);
-  const imp = await timed("set_model", { script: 'import("node:fs");\npart("A", box(10, 10, 10));' });
-  check(imp.r.isError && /cannot import/.test(text(imp.r)), "nor import modules");
+  await escapes();
 
   // A window that connects gets the calls, and keeps its own model.
   const seen = [];
