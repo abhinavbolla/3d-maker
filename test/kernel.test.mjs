@@ -1869,7 +1869,7 @@ const houseRun = () => {
   assert.equal(r.error, undefined, r.error);
   return r;
 };
-test("building: walls, slab and roof have the volumes worked by hand", () => {
+test("building: walls, slab and roof have the volumes worked by hand", async () => {
   const r = houseRun();
   const vol = (name) => meshPart(r.parts.find((p) => p.name === name).node, { budget: 40000, maxCell: 40 }).volume / 1e9;
   // Openings through the outer walls: widths x heights, x 300 thick.
@@ -1887,6 +1887,13 @@ test("building: walls, slab and roof have the volumes worked by hand", () => {
   for (const [name, v] of Object.entries(want)) {
     const got = vol(name), w = v / 1e9;
     assert.ok(Math.abs(got - w) / w < 0.002, `${name}: ${got.toFixed(4)} m3, by hand ${w.toFixed(4)} m3`);
+  }
+  // measure (from the distance function) agrees too: a flat 9000 x 7000 x 200 slab once read 1.8% low.
+  const { solidMoments } = await import("../src/kernel/measure.js");
+  for (const name of ["Floor slab", "Outer walls"]) {
+    const { f, box } = compile(r.parts.find((p) => p.name === name).node);
+    const got = solidMoments(f, box).volume / 1e9, w = want[name] / 1e9;
+    assert.ok(Math.abs(got - w) / w < 0.003, `measure ${name}: ${got.toFixed(4)} m3, by hand ${w.toFixed(4)} m3`);
   }
   // Every opening has its pieces, and the glass survives at the view's coarsest detail.
   assert.equal(r.parts.length, 34);

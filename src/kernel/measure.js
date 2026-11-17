@@ -59,7 +59,12 @@ export function solidMoments(f, box, { cells = 128, maxEvals = 1500000 } = {}) {
         split(b, next, hx, hy, hz, big);
         continue;
       }
-      const edge = (hx + hy + hz) / 3; // an eighth's edge, on average
+      // An eighth's width across the surface: along the surface's normal,
+      // since boxes of a flat part are flat too (a 9000 x 7000 x 200 slab
+      // read 1.8% low with their average edge).
+      const n = gradient(f, [cx, cy, cz], Math.min(hx, hy, hz) / 2);
+      const edge = n ? hx * Math.abs(n[0]) + hy * Math.abs(n[1]) + hz * Math.abs(n[2]) : (hx + hy + hz) / 3;
+      evals += 6;
       for (let i = 0; i < 8; i++) {
         const x = cx + (i & 1 ? hx : -hx) / 2, y = cy + (i & 2 ? hy : -hy) / 2, z = cz + (i & 4 ? hz : -hz) / 2;
         const share = (v / 8) * clamp01(0.5 - f(x, y, z) / edge);
