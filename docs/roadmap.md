@@ -13,7 +13,7 @@ This page says where it stands against that goal and what comes next. The order 
 | Looking at the model | Studio view with shadows, a reflecting floor and materials. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
 | Pictures | PNG studio shots of any view. |
 | 2D drawings | One A3 sheet as SVG: front, top, side and isometric views with hidden edges left out, a hatched section, the overall sizes and an ISO title block. |
-| Files for other apps | Meshes only: STL and 3MF. |
+| Files for other apps | Meshes only: STL, 3MF, OBJ and PLY, and glTF with materials and motion. |
 | Exact surfaces | None. Surfaces are fine meshes of distance fields. |
 | Direct editing | Sliders and prompts. Hiding and isolating parts, sections, exploded views and measuring, by prompt. No dragging. |
 | Video | Motion plays in the view. Nothing is recorded. |
@@ -46,9 +46,11 @@ What is left:
 
 ## Files for other apps
 
-1. **glTF.** Parts, colours, materials and motion in one file, for Blender, game engines and the web.
-2. **OBJ and PLY.** The simple mesh formats that everything reads.
-3. **SVG and DXF** of single outlines and sections at 1:1, for laser cutters and 2D CAD. (The drawing sheet is already an SVG.)
+Done so far: STL, 3MF, glTF (a named node per part, its colour and material, and the motion as an animation that loops), OBJ with an MTL of each part's colour and material, and PLY coloured per vertex.
+
+What is left:
+
+1. **SVG and DXF** of single outlines and sections at 1:1, for laser cutters and 2D CAD. (The drawing sheet is already an SVG.)
 4. **STEP.** This is the hard one, and the main thing that separates Draftsman from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. The plan is to write exact surfaces straight from the script where the shape allows it, because the script already says "this is an extrusion of that outline" or "this is a cylinder with a hole". Prisms, turned parts, plates with holes and their cuts and joins come first. Shapes with no exact form (smooth blends, lattices, twisted bodies) would go out as fitted surfaces or fine meshes inside the STEP file. This will take a long time, and it is the largest open question on this page.
 5. **Import.** Open an STL or a STEP file as a reference to build around.
 

@@ -7,7 +7,8 @@ import { createCommands } from "./app/commands.js";
 import { startBridge } from "./app/bridge.js";
 import { createClaude } from "./app/claude.js";
 import { loadAutosave } from "./app/autosave.js";
-import { saveBytes, openText } from "./app/files.js";
+import { saveBytes, openText, saveOBJ } from "./app/files.js";
+import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
 import { mountInspectLine } from "./app/inspect-tools.js";
 
@@ -331,13 +332,33 @@ const actions = {
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
   // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
-  // "svg" (a drawing sheet) or "png" (a studio picture of the view).
+  // "svg" (a drawing sheet), "png" (a studio picture of the view), "glb",
+  // "obj" or "ply".
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
     if (kind === "png") {
       const { png } = viewport.picture();
       const where = await saveBytes(Uint8Array.from(atob(png), (c) => c.charCodeAt(0)), `${fileName()}.png`, "png");
       return say(where ? `Saved ${where.split("/").pop()}` : "");
+    }
+    // glTF with its motion, OBJ with its MTL beside it, or PLY.
+    if (kind === "glb" || kind === "obj" || kind === "ply") {
+      say("Exporting", 0);
+      try {
+        const { parts, title } = store.state.result;
+        let where;
+        if (kind === "obj") {
+          const r = await kernel.exportOBJ(parts, title);
+          const enc = new TextEncoder();
+          where = await saveOBJ((mtl) => enc.encode(objWithMtl(r.obj, mtl)), enc.encode(r.mtl), `${fileName()}.obj`);
+        } else {
+          const r = kind === "glb" ? await kernel.exportGLB(store.state.result) : await kernel.exportPLY(parts, title);
+          where = await saveBytes(r.bytes, `${fileName()}.${kind}`, kind);
+        }
+        return say(where ? `Exported ${where.split("/").pop()}` : "");
+      } catch (err) {
+        return say(err.message, 8000);
+      }
     }
     say(kind === "solid" ? "Joining the parts into one solid" : kind === "svg" ? "Making the drawing" : "Exporting", 0);
     try {

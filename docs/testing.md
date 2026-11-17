@@ -8,6 +8,8 @@ npm run licenses                          # every npm package carries an accepte
 node test/check-stl.mjs model.stl         # checks an STL is well formed and closed
 node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, every part closed
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
+node test/check-meshfile.mjs model.glb    # checks a GLB, OBJ (with its MTL) or PLY: names, sizes, every part closed
+node test/meshfile-run.mjs model.js [dir]  # exports a script as GLB, OBJ and PLY, times and checks them, and loads the GLB with three.js
 node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
 node test/kernel.test.mjs drawing         # only the kernel tests with "drawing" in their name
 cd src-tauri && cargo test                # the desktop app's Rust side

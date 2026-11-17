@@ -12,6 +12,13 @@ import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
 import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, titleLines, textWidth, LIMITS } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
+import { toGLB, lookOf } from "../src/kernel/gltf.js";
+import { toOBJ, objWithMtl, mtlFileName } from "../src/kernel/obj.js";
+import { toPLY } from "../src/kernel/ply.js";
+import { apply } from "../src/kernel/motion.js";
+import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const mesh = (node, budget = 40000) => {
   const { f, box } = compile(node);
@@ -1203,6 +1210,99 @@ test("drawing: Claude's rotor head draws, with its mast, hub and gearbox cut by 
   // the hub does not fill in; the block above is drawn in the 0.5 group.
   assert.match(d.svg, /<g id="view-top"[^>]*stroke-width="0.25"/);
   assert.equal(d.svg.match(/<text [^>]*id="document-type"[^>]*>([^<]*)</)[1], "Assembly drawing");
+});
+
+// ---- glTF, OBJ and PLY ----
+
+// A crank, a rod linked to it and a sliding piston: spin, follow, link and
+// slide, with a glass and a plastic part.
+const CRANK = `title("Crank & piston");
+loop(1);
+part("Base", box(120, 60, 8).at(0, 0, -60), { color: "#4f7cac" });
+part("Crank", cylinder(30, 10).rotateX(90).at(0, -10, 0), { color: "#8d939a", spin: { axis: "y", rpm: 60 } });
+part("Crank pin", sphere(5).at(0, -2, 25), { color: "#d9a441", material: "plastic", follow: "Crank" });
+const pin = [0, 0, 25], top = [0, 0, 125];
+part("Piston", cylinder(20, 30).at(0, 0, 135), { color: "#222222", motion: t => { const p = where("Crank", pin, t); return slide(0, 0, p[2] + Math.sqrt(100 ** 2 - p[0] ** 2) - top[2]); } });
+part("Rod", capsule(pin, top, 5), { color: "#9aa3ad", motion: t => link(pin, top, where("Crank", pin, t), where("Piston", top, t)) });
+part("Cover", box(40, 2, 40).at(60, 30, 100), { color: "#aaccee", material: "glass" });
+joint("Rod", "Crank", pin);
+joint("Rod", "Piston", top);`;
+const crankParts = () => {
+  const r = runScript(CRANK);
+  assert.equal(r.error, undefined);
+  return { r, parts: r.parts.map((p) => ({ name: p.name, color: p.color, material: p.material, frames: p.frames, ...displayMesh(meshPart(p.node, { budget: 3000, normals: true })) })) };
+};
+
+test("glTF: named parts in metres with Y up, materials, and the motion as an animation three.js plays", async () => {
+  const { r, parts } = crankParts();
+  const glb = toGLB(parts, { title: r.title, motion: r.motion });
+  const c = checkGLB(Buffer.from(glb));
+  assert.deepEqual(c.problems, []);
+  assert.deepEqual(c.parts.map((p) => [p.name, p.triangles]), parts.map((p) => [p.name, p.indices.length / 3]));
+  // Bounds back in our millimetres, Z up, as meshed.
+  for (const [i, p] of c.parts.entries()) {
+    const b = meshBounds(parts[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3, `${p.name} bound ${k}: ${v} vs ${b[k]}`));
+  }
+  const look = Object.fromEntries(c.parts.map((p) => [p.name, [p.material.metallic, p.material.roughness, p.material.alphaMode]]));
+  assert.deepEqual(look, { Base: [0, 0.46, "OPAQUE"], Crank: [0.92, 0.36, "OPAQUE"], "Crank pin": [0, 0.52, "OPAQUE"], Piston: [0, 0.93, "OPAQUE"], Rod: [0.92, 0.36, "OPAQUE"], Cover: [0, 0.05, "BLEND"] });
+  // The look without a material is picked as the view picks it.
+  for (const color of ["#4f7cac", "#8d939a", "#222222", "#2f3338", "#b8483e", "#9aa3ad", "#c8c8c0", "#3a3f2a"]) {
+    const hsl = new THREE.Color(color).getHSL({});
+    assert.equal(lookOf({ color }), hsl.s >= 0.16 ? "paint" : hsl.l < 0.16 ? "rubber" : "metal", color);
+  }
+  assert.equal(c.animations.length, 1);
+  assert.ok(Math.abs(c.animations[0].duration - 1) < 1e-6);
+  assert.equal(c.animations[0].parts, 4, "crank, pin, piston and rod move");
+
+  // three.js's own loader: the same parts, and poses at the keys where the
+  // kernel puts them.
+  const g = await new Promise((ok, fail) => new GLTFLoader().parse(glb.buffer, "", ok, fail));
+  const byName = (n) => g.scene.getObjectByName(THREE.PropertyBinding.sanitizeNodeName(n));
+  assert.ok(parts.every((p) => byName(p.name)?.isMesh));
+  const mixer = new THREE.AnimationMixer(g.scene);
+  mixer.clipAction(g.animations[0]).play();
+  const count = r.motion.frames;
+  let worst = 0;
+  for (const k of [7, 15, 30, 44, 59]) {
+    mixer.setTime((k / count) * r.motion.loop);
+    g.scene.updateMatrixWorld(true);
+    for (const p of r.parts.filter((x) => x.frames)) {
+      for (const at of [[0, 0, 25], [0, 0, 125], [30, -10, 0]]) {
+        const want = apply(Array.from(p.frames.subarray(k * 12, k * 12 + 12)), at);
+        const v = new THREE.Vector3(at[0] / 1000, at[2] / 1000, -at[1] / 1000).applyMatrix4(byName(p.name).matrixWorld);
+        worst = Math.max(worst, Math.hypot(v.x * 1000 - want[0], -v.z * 1000 - want[1], v.y * 1000 - want[2]));
+      }
+    }
+  }
+  assert.ok(worst < 0.01, `poses are off by up to ${worst} mm`);
+  // Without motion, no animation.
+  assert.equal(checkGLB(Buffer.from(toGLB(parts.map((p) => ({ ...p, frames: null }))))).animations.length, 0);
+});
+
+test("OBJ and MTL: one object per part with normals, in mm with Y up; PLY: one coloured mesh", () => {
+  const { r, parts } = crankParts();
+  const { obj, mtl } = toOBJ(parts, { title: r.title });
+  const o = checkOBJ(objWithMtl(obj, mtlFileName("Crank & piston.obj")), mtl);
+  assert.deepEqual(o.problems, []);
+  assert.equal(o.mtllib, "Crank-piston.mtl");
+  assert.deepEqual(o.parts.map((p) => [p.name, p.triangles]), parts.map((p) => [p.name, p.indices.length / 3]));
+  for (const [i, p] of o.parts.entries()) {
+    const b = meshBounds(parts[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3, `${p.name} bound ${k}: ${v} vs ${b[k]}`));
+  }
+  assert.deepEqual(o.parts[0].material.Kd, [0x4f / 255, 0x7c / 255, 0xac / 255].map((v) => +v.toFixed(4)));
+  assert.deepEqual(o.parts.map((p) => [p.material.Pm, p.material.Pr, p.material.d]).slice(-2), [[0.92, 0.36, 1], [0, 0.05, 0.36]]);
+
+  // PLY gets the closed meshes with shared vertices, as STL and 3MF do.
+  const plain = r.parts.map((p) => ({ name: p.name, color: p.color, ...meshPart(p.node, { budget: 3000 }) }));
+  const ply = checkPLY(Buffer.from(toPLY(plain, { title: r.title })));
+  assert.deepEqual(ply.problems, []);
+  assert.deepEqual(ply.parts.map((p) => [p.name, p.triangles, p.colors]), plain.map((p) => [p.name, p.indices.length / 3, [p.color]]));
+  for (const [i, p] of ply.parts.entries()) {
+    const b = meshBounds(plain[i]);
+    p.bounds.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-3));
+  }
 });
 
 test("measure: volume, centre of mass and nearest points from the distance functions", async () => {
