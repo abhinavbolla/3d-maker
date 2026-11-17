@@ -19,26 +19,141 @@ const key3x2 = (i, j, k) => ((i + OFF2) * K2 + (j + OFF2)) * K2 + (k + OFF2);
 
 const HALF_DIAG = Math.sqrt(3) / 2;
 const THIN_CAP = 6;
+// Walls thinner than a cell hidden in more than this share of the cells:
+// refine. A few (a thin lip in one spot) stay as they were.
+const WALLS = 0.01;
+// Hidden in more than this share, a wall would go missing over much of the
+// part: refine on if cells fine enough for it fit in WALL_CAP times the
+// budget (and in maxCells), or else draw it thicker (see meshGrid).
+const LOST = 0.05;
+const WALL_CAP = 16;
 
-// Fraction of cells whose centre is on the other side of the surface from
-// all eight corners: detail thinner than the cell that the mesh would miss.
-function missedDetail(f, O, c, kept, centres) {
-  const vals = new Map();
+// Fraction of cells with detail thinner than the cell that the mesh would
+// miss: the centre is on the other side of the surface from all eight
+// corners, or a wall passes between the two ends of a cell edge without
+// changing its sign. The second is found from the distances themselves: an
+// edge is clear when the empty balls around its ends (radius |f|) cover it;
+// where they do not, it is split and its middle tested, a few times over.
+// A plate thinner than a cell and lying between grid planes is found this
+// way even when every corner and centre is outside it. An edge that only
+// grazes a curved surface also dips inside it; that is not a wall, and the
+// two are told apart by which way the surface faces at the two ends: away
+// from each other across a wall, the same way (or at most square, at a
+// corner) across a graze.
+const GAP_DEPTH = 4;
+const WALL_COS = -0.8;
+const HIT = new Float64Array(4); // the point inside a hidden wall, and f there
+function hiddenCrossing(f, x0, y0, z0, x1, y1, z1, f0, f1, depth) {
+  const len = Math.hypot(x1 - x0, y1 - y0, z1 - z0);
+  if (Math.abs(f0) + Math.abs(f1) >= len) return false;
+  const xm = (x0 + x1) / 2, ym = (y0 + y1) / 2, zm = (z0 + z1) / 2;
+  const fm = f(xm, ym, zm);
+  if (fm < 0 !== f0 < 0) {
+    (HIT[0] = xm), (HIT[1] = ym), (HIT[2] = zm), (HIT[3] = fm);
+    return true;
+  }
+  if (!depth) return false;
+  return hiddenCrossing(f, x0, y0, z0, xm, ym, zm, f0, fm, depth - 1) || hiddenCrossing(f, xm, ym, zm, x1, y1, z1, fm, f1, depth - 1);
+}
+function gradientAt(f, x, y, z, e, out) {
+  const a = f(x + e, y - e, z - e), b = f(x - e, y - e, z + e), d = f(x - e, y + e, z - e), g = f(x + e, y + e, z + e);
+  const nx = a - b - d + g, ny = -a - b + d + g, nz = -a + b - d + g;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  out[0] = nx / l;
+  out[1] = ny / l;
+  out[2] = nz / l;
+}
+const G0 = new Float64Array(3), G1 = new Float64Array(3);
+function wallInEdge(f, x0, y0, z0, x1, y1, z1, f0, f1, c) {
+  if (!hiddenCrossing(f, x0, y0, z0, x1, y1, z1, f0, f1, GAP_DEPTH)) return false;
+  gradientAt(f, x0, y0, z0, c * 0.01, G0);
+  gradientAt(f, x1, y1, z1, c * 0.01, G1);
+  return G0[0] * G1[0] + G0[1] * G1[1] + G0[2] * G1[2] < WALL_COS;
+}
+// How thick the wall is through the point HIT inside it: its depth there,
+// plus how far it is to the other side, found by stepping against the
+// surface normal by the distance each time.
+function wallThickness(f, c) {
+  const [x, y, z, d] = HIT;
+  gradientAt(f, x, y, z, c * 0.001, G0);
+  let s = 0;
+  for (let it = 0; it < 16; it++) {
+    const v = f(x - G0[0] * s, y - G0[1] * s, z - G0[2] * s);
+    if (v >= -c * 0.01) break;
+    s += -v;
+  }
+  return -d + s;
+}
+function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Map()) {
   const at = (i, j, k) => {
     const key = key3(i, j, k);
     let v = vals.get(key);
     if (v === undefined) vals.set(key, (v = f(O[0] + i * c, O[1] + j * c, O[2] + k * c)));
     return v;
   };
-  let missed = 0;
+  const gaps = new Map(); // edge key -> a wall hides inside it
+  const cv = new Float64Array(8);
+  const thick = []; // a sample of the hidden walls' thicknesses
+  let slivers = 0, walls = 0;
   for (let n = 0, m = 0; n < kept.length; n += 3, m++) {
     const i = kept[n], j = kept[n + 1], k = kept[n + 2];
     const inside = centres[m] < 0;
     let all = true;
-    for (let q = 0; q < 8 && all; q++) all = at(i + (q & 1), j + ((q >> 1) & 1), k + ((q >> 2) & 1)) < 0 !== inside;
-    if (all) missed++;
+    for (let q = 0; q < 8; q++) {
+      cv[q] = at(i + (q & 1), j + ((q >> 1) & 1), k + ((q >> 2) & 1));
+      if (cv[q] < 0 === inside) all = false;
+    }
+    if (all) {
+      slivers++;
+      // Solid at the centre, outside at every corner: a wall too.
+      if (inside && withWalls) {
+        walls++;
+        if (thick.length < 64) {
+          const [i0, j0, k0] = [i + 0.5, j + 0.5, k + 0.5];
+          (HIT[0] = O[0] + i0 * c), (HIT[1] = O[1] + j0 * c), (HIT[2] = O[2] + k0 * c), (HIT[3] = centres[m]);
+          thick.push(wallThickness(f, c));
+        }
+      }
+      continue;
+    }
+    if (!withWalls) continue;
+    // Only solid walls between two outside corners: a slot thinner than a
+    // cell fills in, which loses no material.
+    for (let e = 0; e < 12; e++) {
+      const [c0, c1] = EDGE_CORNERS[e];
+      const f0 = cv[c0], f1 = cv[c1];
+      if (f0 < 0 || f1 < 0 || f0 + f1 >= c) continue;
+      const a = e >> 2;
+      const ci = i + (c0 & 1), cj = j + ((c0 >> 1) & 1), ck = k + ((c0 >> 2) & 1);
+      const ekey = key3(ci, cj, ck) * 3 + a;
+      let g = gaps.get(ekey);
+      if (g === undefined) {
+        const x0 = O[0] + ci * c, y0 = O[1] + cj * c, z0 = O[2] + ck * c;
+        const dx = a === 0 ? c : 0, dy = a === 1 ? c : 0, dz = a === 2 ? c : 0;
+        // First, cheaply: a wall between the ends has the distance falling
+        // from both ends into the edge, so rising away from it on both sides
+        // (told by the grid corners beyond, which are mostly known already).
+        // Most edges near a surface run along it, where it does not.
+        const s = 0.02;
+        const ai = a === 0 ? 1 : 0, aj = a === 1 ? 1 : 0, ak = a === 2 ? 1 : 0;
+        g =
+          at(ci - ai, cj - aj, ck - ak) > f0 + 0.3 * c &&
+          at(ci + 2 * ai, cj + 2 * aj, ck + 2 * ak) > f1 + 0.3 * c &&
+          f(x0 + dx * s, y0 + dy * s, z0 + dz * s) < f0 - 0.3 * s * c &&
+          f(x0 + dx * (1 - s), y0 + dy * (1 - s), z0 + dz * (1 - s)) < f1 - 0.3 * s * c &&
+          wallInEdge(f, x0, y0, z0, x0 + dx, y0 + dy, z0 + dz, f0, f1, c);
+        gaps.set(ekey, g);
+        if (g && thick.length < 64) thick.push(wallThickness(f, c));
+      }
+      if (g) {
+        walls++;
+        break;
+      }
+    }
   }
-  return missed / centres.length;
+  thick.sort((a, b) => a - b);
+  // The thinner walls count: a quarter of the way up the sample.
+  return { slivers: slivers / centres.length, walls: walls / centres.length, thickness: thick.length ? thick[thick.length >> 2] : 0 };
 }
 
 // Local cell edges: e = axis * 4 + ub + 2 * vb, with u = (axis + 1) % 3, v = (axis + 2) % 3.
@@ -91,15 +206,16 @@ export function stretchFor(box) {
 }
 
 // Only parts whose plain mesh misses thin slivers (blades and wings, which
-// taper to an edge) are meshed again stretched; a plate's square edges come
-// out sharp either way, and stretched it would spend cells on its sides.
+// taper to an edge) or whole walls (a plate thinner than the cells) are
+// meshed again stretched; a thicker plate's square edges come out sharp
+// either way, and stretched it would spend cells on its sides.
 const SLIVERS = 0.001;
 export function meshSDF(f, box, opts = {}) {
   const s = stretchFor(box);
   if (!s) return meshGrid(f, box, opts);
   // The search alone (no surface yet) says the cell size and what it misses.
   const probe = meshGrid(f, box, opts, null, true);
-  if (!(probe.missed > SLIVERS)) return meshGrid(f, box, opts);
+  if (!(probe.slivers > SLIVERS || probe.walls > LOST)) return meshGrid(f, box, opts);
   // Never coarser along the broad faces than the plain mesh would be.
   const stretched = meshGrid(f, box, { ...opts, maxCell: Math.min(opts.maxCell ?? Infinity, probe.cellSize) }, s);
   return stretched.incomplete || stretched.cellSize > probe.cellSize * 1.01 ? meshGrid(f, box, opts) : stretched;
@@ -110,7 +226,7 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   // Distances are measured before the stretch, so they never exceed the
   // stretched ones: still a safe underestimate for the search.
   const S = stretch ?? [1, 1, 1];
-  const f = stretch ? (x, y, z) => fw(x / S[0], y / S[1], z / S[2]) : fw;
+  let f = stretch ? (x, y, z) => fw(x / S[0], y / S[1], z / S[2]) : fw;
   const box = stretch ? [boxw[0] * S[0], boxw[1] * S[1], boxw[2] * S[2], boxw[3] * S[0], boxw[4] * S[1], boxw[5] * S[2]] : boxw;
   const ext = [box[3] - box[0], box[4] - box[1], box[5] - box[2]];
   const L = Math.max(...ext);
@@ -127,7 +243,13 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   // Lipschitz margin: smooth blends and scaled shapes are slight underestimates, never over.
   const LIP = 1.5;
   let kept, centres;
+  let capped = false; // stopped by the cell cap
+  let lost = null; // what was missed where cells stopped too coarse for walls
+  // f at this level's grid corners: looking for missed detail fills it, and
+  // dual contouring goes on from it at the last level.
+  let levelVals = new Map();
   for (let level = 0; ; level++) {
+    levelVals = new Map();
     kept = [];
     centres = [];
     const lim = LIP * c * HALF_DIAG;
@@ -141,11 +263,30 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
     if (c / 2 < minCell || level >= 14) break;
     // A finer level has about 4x the cells, and closing the surface visits
     // some neighbours too; stop while that still fits in maxCells.
-    if (count * 4 * 1.5 > maxCells) break;
+    if (count * 4 * 1.5 > maxCells) {
+      capped = true;
+      break;
+    }
     if (count * 4 > budget && c <= maxCell * Math.SQRT2) {
       // Over budget, but keep going (up to a cap) while thin walls or blades
       // still slip between the grid corners.
-      if (count * 4 > budget * THIN_CAP || missedDetail(f, O, c, kept, centres) <= 0.002) break;
+      const over = count * 4 > budget * THIN_CAP;
+      if (over && probe) break;
+      // Walls are only looked for when slivers alone would not refine (the
+      // probe looks for slivers only: walls are what stretching is for).
+      let md = missedDetail(f, O, c, kept, centres, over, levelVals);
+      if (!over) {
+        if (md.slivers <= 0.002 && (probe || (md = missedDetail(f, O, c, kept, centres, true, levelVals)).walls <= WALLS)) break;
+      } else {
+        // Past the cap, only for walls going missing over much of the part,
+        // and only if cells fine enough for them fit under WALL_CAP.
+        if (md.walls <= LOST) break;
+        const need = count * (c / (0.9 * md.thickness)) ** 2;
+        if (!(md.thickness > 0) || need > budget * WALL_CAP || need * 1.5 > maxCells) {
+          lost = md;
+          break;
+        }
+      }
     }
     cells = [];
     for (let n = 0; n < kept.length; n += 3) {
@@ -155,10 +296,29 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
     c /= 2;
   }
 
-  if (probe) return { missed: missedDetail(f, O, c, kept, centres), cellSize: c };
+  if (probe) {
+    const md = missedDetail(f, O, c, kept, centres, true, levelVals);
+    return { slivers: md.slivers, walls: md.walls, cellSize: c };
+  }
+
+  // Cells too coarse for a wall thinner than them (a thin tube, a tilted
+  // sheet, a shell, at a small budget) would leave it in shreds or leave it
+  // out. Then the surface is moved out just enough for the wall to be a bit
+  // more than a cell thick, so it comes out whole: thicker than it is, but
+  // there.
+  if (capped) {
+    const md = missedDetail(f, O, c, kept, centres, true, levelVals);
+    if (md.walls > LOST) lost = md;
+  }
+  let thickened = 0;
+  if (lost) {
+    const fs = f;
+    thickened = Math.max(0.05 * c, (1.1 * c - (lost.thickness || 0)) / 2);
+    f = (x, y, z) => fs(x, y, z) - thickened;
+  }
 
   // ---- 2. dual contouring at cell size c ----
-  const cornerVals = new Map();
+  const cornerVals = lost ? new Map() : levelVals;
   const corner = (i, j, k) => {
     const key = key3(i, j, k);
     let v = cornerVals.get(key);
@@ -384,6 +544,7 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   splitPinches(pos, idx);
   const positions = Float32Array.from(pos);
   const out = { positions, indices: Uint32Array.from(idx), cellSize: c, incomplete: incomplete || missing > 0 };
+  if (thickened) out.thickened = thickened / Math.max(...S);
   if (normals) {
     const nrm = new Float32Array(positions.length);
     for (let n = 0; n < pos.length; n += 3) worldNormal(pos[n], pos[n + 1], pos[n + 2], nrm, n);
@@ -393,18 +554,29 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   return out;
 }
 
+// Over a fold steeper than the crease angle, the surface counts as smooth
+// when no one of three steps turns its normal by more than this share of the
+// whole turn (half of it, on an evenly curved surface).
+const SMOOTH_STEP = 0.75;
 // A copy of a mesh for drawing, with normals that keep sharp edges sharp.
 // Around each vertex, neighbouring triangles that meet at less than the
 // crease angle are one smooth patch; each patch gets its own copy of the
-// vertex and its own normal. On a smooth patch the true surface normal
-// (passed in, from the distance function) is used where it agrees with the
-// triangles; at an edge or corner the patch's average is used instead, so the
-// shading of one face no longer bleeds across the edge into the next.
-export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg = 40) {
+// vertex and its own normal.
+// With the distance function f, a steeper fold between two triangles is
+// tested on the surface itself: a small fillet turns its normal smoothly
+// from one triangle to the next, a sharp edge all at once. So a fillet only
+// a cell or two across is shaded round instead of in facets, and a sharp
+// edge stays crisp. The normals come from f too: on a smooth patch the
+// surface normal at the vertex; on a patch that ends at an edge, the normal
+// a little way into that patch, which is its face's own normal.
+// Without f, the true normals passed in are used where they agree with the
+// triangles, and the patch's average elsewhere.
+export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg = 40, f = null) {
   const nv = P.length / 3;
   const nt = I.length / 3;
   const fn = new Float64Array(nt * 3); // area-weighted face normals
   const un = new Float64Array(nt * 3); // unit face normals
+  let size = 0; // mean edge length, for sampling f
   for (let t = 0; t < nt; t++) {
     const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
     const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
@@ -413,7 +585,9 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
     const l = Math.hypot(x, y, z) || 1;
     fn[t * 3] = x; fn[t * 3 + 1] = y; fn[t * 3 + 2] = z;
     un[t * 3] = x / l; un[t * 3 + 1] = y / l; un[t * 3 + 2] = z / l;
+    if (t < 256) size += Math.hypot(ux, uy, uz);
   }
+  size /= Math.min(nt, 256) || 1;
   // Triangles around each vertex (CSR).
   const start = new Uint32Array(nv + 1);
   for (let n = 0; n < I.length; n++) start[I[n] + 1]++;
@@ -422,8 +596,77 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
   const around = new Uint32Array(I.length);
   for (let n = 0; n < I.length; n++) around[fill[I[n]]++] = n; // corner index (t * 3 + r)
 
+  // The surface normal near a point, from f: one step onto the surface, then
+  // the gradient there.
+  const e = size * 1e-3;
+  const g4 = new Float64Array(4);
+  const grad = (x, y, z, out) => {
+    const a = f(x + e, y - e, z - e), b = f(x - e, y - e, z + e), d = f(x - e, y + e, z - e), g = f(x + e, y + e, z + e);
+    let nx = a - b - d + g, ny = -a - b + d + g, nz = -a + b - d + g;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    out[0] = nx / l; out[1] = ny / l; out[2] = nz / l; out[3] = (a + b + d + g) / 4;
+  };
+  const surfaceNormal = (x, y, z, out) => {
+    grad(x, y, z, g4);
+    const s = g4[3];
+    grad(x - g4[0] * s, y - g4[1] * s, z - g4[2] * s, out);
+  };
+  const centroid = (t, out) => {
+    const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+    for (let k = 0; k < 3; k++) out[k] = (P[a + k] + P[b + k] + P[c + k]) / 3;
+  };
+  const triNormal = new Map(); // triangle -> normal of f at its centre
+  const cpos = new Float64Array(3);
+  const normalOfTri = (t) => {
+    let n = triNormal.get(t);
+    if (!n) {
+      centroid(t, cpos);
+      n = new Float64Array(4);
+      surfaceNormal(cpos[0], cpos[1], cpos[2], n);
+      triNormal.set(t, n);
+    }
+    return n;
+  };
+  // Is the surface smooth across the edge (v, o) between triangles t and s?
+  // f's normal is followed from t's centre, past the edge's middle, to s's
+  // centre, in three steps: over a fillet it turns in all of them, over a
+  // sharp edge all in the middle one.
+  const smoothCache = new Map();
+  const q = new Float64Array(4), r0 = new Float64Array(3), r1 = new Float64Array(3);
+  const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+  const smoothAcross = (v, o, t, s) => {
+    const key = v < o ? v * nv + o : o * nv + v;
+    let ok = smoothCache.get(key);
+    if (ok !== undefined) return ok;
+    centroid(t, r0);
+    centroid(s, r1);
+    const mx = (P[v * 3] + P[o * 3]) / 2, my = (P[v * 3 + 1] + P[o * 3 + 1]) / 2, mz = (P[v * 3 + 2] + P[o * 3 + 2]) / 2;
+    // Not on the edge itself: on a sharp edge, f's normal there is a blend
+    // of the two faces', which would look like a smooth turn.
+    const pts = [
+      [(r0[0] + mx) / 2, (r0[1] + my) / 2, (r0[2] + mz) / 2],
+      [(r1[0] + mx) / 2, (r1[1] + my) / 2, (r1[2] + mz) / 2],
+    ];
+    let prev = normalOfTri(t), total = 0, most = 0;
+    for (const [x, y, z] of pts) {
+      const n = new Float64Array(4);
+      surfaceNormal(x, y, z, n);
+      const a = angle(prev, n);
+      total += a;
+      most = Math.max(most, a);
+      prev = n;
+    }
+    const a = angle(prev, normalOfTri(s));
+    total += a;
+    most = Math.max(most, a);
+    ok = most < SMOOTH_STEP * total;
+    smoothCache.set(key, ok);
+    return ok;
+  };
+
   const cosCrease = Math.cos((creaseDeg * Math.PI) / 180);
   const cosAgree = Math.cos((20 * Math.PI) / 180);
+  const cosTrust = Math.cos((60 * Math.PI) / 180);
   const pos = [];
   const nrm = [];
   const corner = new Uint32Array(I.length); // new vertex index per corner
@@ -433,6 +676,7 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
     return x;
   };
   const dot = (t, s) => un[t * 3] * un[s * 3] + un[t * 3 + 1] * un[s * 3 + 1] + un[t * 3 + 2] * un[s * 3 + 2];
+  const into = new Float64Array(4);
   for (let v = 0; v < nv; v++) {
     const s0 = start[v], s1 = start[v + 1];
     const k = s1 - s0;
@@ -448,7 +692,10 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
       for (const o of [I[t * 3 + ((r + 1) % 3)], I[t * 3 + ((r + 2) % 3)]]) {
         const j = byOther.get(o);
         if (j === undefined) byOther.set(o, i);
-        else if (dot(t, (around[s0 + j] / 3) | 0) >= cosCrease) parent[find(i)] = find(j);
+        else {
+          const s = (around[s0 + j] / 3) | 0;
+          if (dot(t, s) >= cosCrease || (f && smoothAcross(v, o, t, s))) parent[find(i)] = find(j);
+        }
       }
     }
     const groups = new Map();
@@ -457,6 +704,7 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(i);
     }
+    const whole = groups.size === 1;
     for (const list of groups.values()) {
       let x = 0, y = 0, z = 0;
       for (const i of list) {
@@ -465,7 +713,23 @@ export function displayMesh({ positions: P, indices: I, normals: G }, creaseDeg 
       }
       const l = Math.hypot(x, y, z) || 1;
       (x /= l), (y /= l), (z /= l);
-      if (G && G[v * 3] * x + G[v * 3 + 1] * y + G[v * 3 + 2] * z >= cosAgree) (x = G[v * 3]), (y = G[v * 3 + 1]), (z = G[v * 3 + 2]);
+      if (f && !whole) {
+        // A patch that ends at an edge: f's normal a little way into it.
+        let cx = 0, cy = 0, cz = 0;
+        for (const i of list) {
+          centroid((around[s0 + i] / 3) | 0, cpos);
+          cx += cpos[0]; cy += cpos[1]; cz += cpos[2];
+        }
+        const w = 0.5 / list.length;
+        surfaceNormal(P[v * 3] * 0.5 + cx * w, P[v * 3 + 1] * 0.5 + cy * w, P[v * 3 + 2] * 0.5 + cz * w, into);
+        if (into[0] * x + into[1] * y + into[2] * z >= cosTrust) (x = into[0]), (y = into[1]), (z = into[2]);
+      } else if (G) {
+        const d = G[v * 3] * x + G[v * 3 + 1] * y + G[v * 3 + 2] * z;
+        if (d >= (f ? cosTrust : cosAgree)) (x = G[v * 3]), (y = G[v * 3 + 1]), (z = G[v * 3 + 2]);
+      } else if (f) {
+        surfaceNormal(P[v * 3], P[v * 3 + 1], P[v * 3 + 2], into);
+        if (into[0] * x + into[1] * y + into[2] * z >= cosTrust) (x = into[0]), (y = into[1]), (z = into[2]);
+      }
       const id = pos.length / 3;
       pos.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
       nrm.push(x, y, z);
