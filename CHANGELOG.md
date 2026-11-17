@@ -127,6 +127,9 @@ Notable changes to Draftsman. The format follows
   drawing. The crease shading treats a cut face as the flat face it is, and with edges on it gets
   an outline where it ends. Edge lines are cut by the section, hidden with their parts and move
   with the exploded view, and lines on the back of a part are no longer drawn.
+- A CI workflow opens the glTF, OBJ, PLY and STL exports in Blender and the DXF exports in
+  FreeCAD and compares what they read with the kernel's numbers; FreeCAD showed it dropped the
+  DXF sheet's arrowheads (SOLID entities), so each arrowhead now also has a closed outline.
 
 ### Changed
 
@@ -151,6 +154,11 @@ Notable changes to Draftsman. The format follows
 - Smoother metal. Small fillets and tight curves are shaded round instead of in facets, and sharp
   edges stay crisp: the view asks the distance function whether each fold in the mesh is a sharp
   edge or a curve, and takes its normals from it.
+- Meshing is two to three times as fast and uses a third to a half less memory, and the meshes
+  are the same, vertex for vertex. The mesher now keeps what it knows about the grid in typed
+  tables in place of JavaScript maps. In the app the helicopter example's first view arrives in
+  1.6 s (was 2.2 s) and its fine pass in 6.4 s (was 10.3 s). `node test/build-time.mjs` times
+  the meshing of a build and fingerprints its meshes ([docs/testing.md](docs/testing.md)).
 
 ### Fixed
 

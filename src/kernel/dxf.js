@@ -169,7 +169,9 @@ export function sheetDXF(svg) {
       else entities.push(polyEntity(layer, pts, m.closed, ltype));
     } else if (m.kind === "fill") {
       const pts = m.pts.map((v, i) => (i % 2 ? Y(v) : v));
-      if (pts.length <= 8) entities.push(solidEntity(layer, pts));
+      // A small fill (an arrowhead) is a SOLID, and its outline too: some
+      // readers (FreeCAD's) skip SOLIDs, and would lose every arrowhead.
+      if (pts.length <= 8) entities.push(solidEntity(layer, pts), polyEntity(layer, pts, true));
       else entities.push(polyEntity(layer, pts, true));
     } else if (m.kind === "circle" || m.kind === "disc") {
       const lt = m.kind === "circle" ? ltypeOf(m) : undefined;
