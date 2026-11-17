@@ -35,8 +35,8 @@ try {
     if (shot.error) throw new Error(shot.error);
     writeFileSync(join(out, `${name}.png`), Buffer.from(shot.result.png, "base64"));
   }
-  await w(`window.__3dmaker.fit("low", ${JSON.stringify(close?.length ? close : null)} ?? undefined)`);
-  const studio = await w("window.__3dmaker.picture({ width: 2400 })");
+  await w(`window.__draftsman.fit("low", ${JSON.stringify(close?.length ? close : null)} ?? undefined)`);
+  const studio = await w("window.__draftsman.picture({ width: 2400 })");
   writeFileSync(join(out, "studio.png"), Buffer.from(studio.png, "base64"));
   const fit = (await h.command(w, "check_fit")).result ?? null;
   const parts = set.result.parts?.length ?? "?";

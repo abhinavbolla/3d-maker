@@ -962,7 +962,7 @@ export function toSTL(meshes) {
   const tris = meshes.reduce((s, m) => s + m.indices.length / 3, 0);
   const buf = new ArrayBuffer(84 + tris * 50);
   const dv = new DataView(buf);
-  const header = "3D Maker STL, millimetres";
+  const header = "Draftsman STL, millimetres";
   for (let i = 0; i < header.length; i++) dv.setUint8(i, header.charCodeAt(i));
   dv.setUint32(80, tris, true);
   let o = 84;

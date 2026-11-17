@@ -1,4 +1,4 @@
-// Desktop shell for 3D Maker. The app itself is the web UI in ../src;
+// Desktop shell for Draftsman. The app itself is the web UI in ../src;
 // Rust adds native file dialogs, file reads/writes, and runs the user's own
 // Claude Code for the prompt box.
 use std::collections::HashMap;
@@ -37,10 +37,19 @@ fn autosave_read(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let path = autosave_path(&app)?;
     match std::fs::read_to_string(&path) {
         Ok(text) => Ok(Some(text)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(autosave_before_rename(&path)),
         Err(e) => Err(e.to_string()),
     }
 }
+
+// The app's data folder was named after its first identifier. Until something
+// is saved under the new one, read the model that was autosaved there.
+fn autosave_before_rename(path: &std::path::Path) -> Option<String> {
+    let old = path.parent()?.parent()?.join(OLD_IDENTIFIER).join(path.file_name()?);
+    std::fs::read_to_string(old).ok()
+}
+
+const OLD_IDENTIFIER: &str = concat!("se.abhinavbolla.", "threed", "maker");
 
 // ---- Claude Code ----
 // Apps opened from Finder get a bare PATH, so ask the user's login shell where
@@ -168,7 +177,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![write_file, read_file, autosave_write, autosave_read, claude_start, claude_stop])
         .run(tauri::generate_context!())
-        .expect("error while running 3D Maker");
+        .expect("error while running Draftsman");
 }
 
 #[cfg(test)]
@@ -180,7 +189,7 @@ mod tests {
     #[test]
     #[ignore]
     fn runs_claude_and_streams_json() {
-        let cwd = std::env::temp_dir().join("3d-maker-claude-test");
+        let cwd = std::env::temp_dir().join("draftsman-claude-test");
         let args: Vec<String> = ["-p", "Reply with just the word ok.", "--output-format", "stream-json", "--verbose", "--max-turns", "1"].iter().map(|s| s.to_string()).collect();
         let mut child = spawn_claude(&args, &cwd).expect("spawn");
         let lines: Vec<String> = BufReader::new(child.stdout.take().unwrap()).lines().map_while(Result::ok).collect();

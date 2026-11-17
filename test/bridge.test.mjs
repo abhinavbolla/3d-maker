@@ -1,5 +1,5 @@
 // Checks that a Claude run started from one window only drives that window,
-// even when other 3D Maker windows are open and connected later.
+// even when other Draftsman windows are open and connected later.
 // Usage: node test/bridge.test.mjs (needs neither the app nor Claude)
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -28,7 +28,7 @@ function fakeWindow(port, window, seen) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`, { origin: "http://localhost:5173" });
     ws.on("open", () => {
-      ws.send(JSON.stringify({ type: "hello", app: "3d-maker", version: 3, window }));
+      ws.send(JSON.stringify({ type: "hello", app: "draftsman", version: 3, window }));
       setTimeout(() => resolve(ws), 150);
     });
     ws.on("message", (raw) => {
