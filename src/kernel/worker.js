@@ -6,6 +6,7 @@ import { meshSDF, meshBounds, meshArea, displayMesh, lightMesh } from "./mesh.js
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
 import { viewOutline, sectionView } from "./drawing.js";
+import { measureJob } from "./measure.js";
 
 // A part with at least this many triangles gets a lighter copy, its vertices
 // merged over this many of its cells: about a ninth of the triangles.
@@ -58,6 +59,8 @@ self.onmessage = ({ data: job }) => {
       }
       const { positions, indices } = m;
       self.postMessage({ id: job.id, ok: true, result: { positions, indices, cellSize: m.cellSize } }, [positions.buffer, indices.buffer]);
+    } else if (job.type === "measure") {
+      self.postMessage({ id: job.id, ok: true, result: measureJob(job) });
     } else if (job.type === "drawing") {
       // One view of a drawing, or its section: the parts' export meshes, with
       // their distance functions compiled here.

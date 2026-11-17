@@ -177,8 +177,8 @@ tool(
     height: z.number().int().min(256).max(2048).optional(),
   },
   async (a) => {
-    const { png } = await call("screenshot", a);
-    return { content: [{ type: "image", data: png, mimeType: "image/png" }] };
+    const { png, view } = await call("screenshot", a);
+    return { content: [{ type: "image", data: png, mimeType: "image/png" }, ...(view ? [{ type: "text", text: view }] : [])] };
   },
 );
 
@@ -187,6 +187,63 @@ tool(
   "Change how the view draws the model. edges: true for the \"shaded with edges\" look, where sharp edges and outlines are drawn as thin dark lines, as in engineering views; false for the plain shaded look (the default). The app remembers the choice. Pictures and screenshots use it too. Use it when the user asks to see edges or outlines, or to turn them off.",
   { edges: z.boolean().describe("Draw sharp edges and outlines as thin dark lines.") },
   async (a) => json(await call("set_look", a)),
+);
+
+// ---- looking inside and checking: view state, and measuring ----
+const VIEW_NOTE = "This changes only the view and its pictures, not the model: exports, drawings, check_fit and measure are unaffected, and it is not in undo. The user sees one line by the prompt box saying what is in force, and can clear it with a click or Esc. Returns what the view now shows.";
+
+tool(
+  "hide_parts",
+  `Hide parts in the view, or show them again, so you (and the user) can see what is behind or inside them. Hidden parts are not drawn, cast no shadow, cannot be clicked and are left out of screenshots, except parts a screenshot names in part or parts. hide: parts to hide. show: hidden parts to show again. only: show just these and hide all the others (isolate). all: true shows every part. ${VIEW_NOTE}`,
+  {
+    hide: z.array(z.string()).optional(),
+    show: z.array(z.string()).optional(),
+    only: z.array(z.string()).min(1).optional(),
+    all: z.boolean().optional(),
+  },
+  async (a) => json(await call("hide_parts", a)),
+);
+
+tool(
+  "section_view",
+  `Cut the model open with a plane to look inside it: the part of the model on one side is taken away and the cut faces are filled, so solids look solid and hollows, holes and parts inside show. Use it to check an assembly's insides (a gearbox in its housing, a shaft through its bearings, wall thickness), then take a screenshot. Give axis (x, y or z: the plane stands square across it) and offset (mm along it; default the model's middle), and remove, the side taken away ("+" or "-"; default the side the iso view looks from, so an iso screenshot looks into the cut). Or give point and normal for a plane at any angle; normal points to the side taken away. uncut: parts left whole. off: true removes the section. Returns the parts cut and, for an axis, the view that looks straight into the cut. Moving parts move through the plane. ${VIEW_NOTE}`,
+  {
+    axis: z.enum(["x", "y", "z"]).optional(),
+    offset: z.number().optional().describe("mm along axis"),
+    remove: z.enum(["+", "-"]).optional().describe("The side of the plane taken away, along axis"),
+    point: z.array(z.number()).length(3).optional().describe("A point on the plane, mm"),
+    normal: z.array(z.number()).length(3).optional().describe("Square to the plane, pointing to the side taken away"),
+    uncut: z.array(z.string()).optional().describe("Parts left whole"),
+    off: z.boolean().optional(),
+  },
+  async (a) => json(await call("section_view", a)),
+);
+
+tool(
+  "explode_view",
+  `Move the parts apart in the view (an exploded view), to show how an assembly goes together or to see parts hidden by others. factor: 0 is assembled, 1 fully apart (each group moves away from the model's middle by as far again as it is from there). axis: move only along x, y or z (a stack such as a rotor head along its mast). together: "steps" keeps each plan step's parts together as a sub-assembly (the default when there is a plan), "parts" moves every part on its own. Parts are lifted so none goes below the floor. Works with hide_parts and section_view (each part keeps its cut). ${VIEW_NOTE}`,
+  {
+    factor: z.number().min(0).max(1).optional().describe("0 assembled to 1 fully apart; default 1"),
+    axis: z.enum(["x", "y", "z"]).optional(),
+    together: z.enum(["steps", "parts"]).optional(),
+  },
+  async (a) => json(await call("explode_view", a)),
+);
+
+tool("clear_view", "Show the whole model again: every part shown, no section, assembled. Use it when you have finished looking inside, unless the user asked for the view to stay that way.", {}, async () => json(await call("clear_view")));
+
+tool(
+  "measure",
+  "Measure the model in numbers, from its exact shapes as the script places them (not moved by motion or the exploded view). part or parts: each one's size, bounds, volume, surface area and centre of mass, and with material (aluminium, steel, stainless steel, titanium, brass, copper, PLA, ABS, PETG, nylon, carbon fibre, oak and more) or density_g_cm3 its mass in grams; with several parts also their total and combined centre of mass. between: two part names, for the shortest distance between them and the nearest point on each (0 and overlap_mm if they pass into each other). points: two points [x, y, z] in mm, for the distance between them. Any of these can be asked together. Volume and centre of mass are good to about 0.1%, surface area to about 1%. Use it to answer questions about sizes, clearances and weight instead of judging from a picture.",
+  {
+    part: z.string().optional(),
+    parts: z.array(z.string()).min(1).optional(),
+    material: z.string().optional(),
+    density_g_cm3: z.number().positive().optional(),
+    between: z.array(z.string()).length(2).optional(),
+    points: z.array(z.array(z.number()).length(3)).length(2).optional(),
+  },
+  async (a) => json(await call("measure", a)),
 );
 
 // Writes an exported file; path defaults to ~/Downloads/<title>.<ext>.

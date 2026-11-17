@@ -8,6 +8,7 @@ import * as THREE from "three";
 import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 import { createNavigation } from "./navigate.js";
 import { createLook } from "./look.js";
+import { createInspect } from "./inspect.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -145,6 +146,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.localClippingEnabled = true; // for a section (inspect.js)
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -270,6 +272,14 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   let lastBox = null;
   // Crease shading and edge lines (look.js).
   const look = createLook(container, { renderer, camera, content, parts: () => parts, reach: () => stageSize * 0.02, schedule });
+  // Hidden parts, the section and the exploded view (inspect.js).
+  const inspect = createInspect({
+    onChange({ moved, restage }) {
+      if (moved) shadowsMoved = true;
+      if (restage) setStage(inspect.stageBox() ?? modelBox());
+      render();
+    },
+  });
 
   const colors = () => ({
     bg: backdrop(cssVar("--viewport-glow", "#fbfbfc"), cssVar("--viewport", "#dfe1e5")),
@@ -368,6 +378,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       time += Math.min(dt, 0.1);
       shadowsMoved = true;
     }
+    if (inspect.step()) shadowsMoved = true;
     pose(time);
     if (guides.visible) sizePivot();
     renderer.shadowMap.autoUpdate = false;
@@ -380,6 +391,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       // Pictures and screenshots draw their own shadows.
       renderer.shadowMap.autoUpdate = true;
     }
+    if (inspect.animating()) render();
     if (!seen.equals(camera.quaternion)) onView(camera);
     seen.copy(camera.quaternion);
     if (moving()) schedule();
@@ -449,6 +461,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
         setFrame(mb, f, j * 12).decompose(pb, qb, sc);
         object.matrix.compose(pa.lerp(pb, w), qa.slerp(qb, w), sc.set(1, 1, 1));
       }
+      inspect.place(part.name, object.matrix);
       object.matrixWorldNeedsUpdate = true;
     }
   }
@@ -545,6 +558,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       mesh.material.dispose();
     }
     parts = next;
+    inspect.attach(parts);
     shadowsMoved = true;
     const box = modelBox();
     if (!lastBox || !box || !box.equals(lastBox)) {
@@ -552,6 +566,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       setStage(box);
       makeGrid(box);
     }
+    if (inspect.exploded()) setStage(inspect.stageBox());
     if (!parts.size) {
       // Back to a default framing, so an empty grid is not a speck far away.
       fit();
@@ -561,16 +576,20 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     render();
   }
 
-  function modelBox(names) {
+  // placed: where the exploded view has moved the parts to.
+  function modelBox(names, placed = false) {
     if (typeof names === "string") names = [names];
     const box = new THREE.Box3();
     for (const [n, { part }] of parts) {
       if (names && !names.includes(n)) continue;
       const b = part.mesh.bounds;
-      if (b) box.expandByPoint(new THREE.Vector3(b[0], b[1], b[2])).expandByPoint(new THREE.Vector3(b[3], b[4], b[5]));
+      const o = (placed && inspect.shift(n)) || { x: 0, y: 0, z: 0 };
+      if (b) box.expandByPoint(new THREE.Vector3(b[0] + o.x, b[1] + o.y, b[2] + o.z)).expandByPoint(new THREE.Vector3(b[3] + o.x, b[4] + o.y, b[5] + o.z));
     }
     return box.isEmpty() ? null : box;
   }
+  // What a picture frames: the parts asked for, or all parts that are shown.
+  const frameBox = (names) => modelBox(names ?? inspect.shownNames(), true);
 
   function highlight() {
     for (const [name, { mesh, part }] of parts) {
@@ -596,7 +615,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     const rect = renderer.domElement.getBoundingClientRect();
     content.updateMatrixWorld(true);
     ray.setFromCamera(new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
-    return ray.intersectObjects([...parts.values()].map((p) => p.mesh), false)[0] ?? null;
+    return inspect.pick(ray.intersectObjects([...parts.values()].map((p) => p.mesh), false), ray.ray);
   }
   const nav = createNavigation(camera, renderer.domElement, {
     surfaceAt: (x, y) => surfaceAt(x, y)?.point ?? null,
@@ -686,7 +705,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
 
   // Frames the whole model, or just the named parts, from a standard view.
   function fit(view = "iso", names) {
-    nav.lookAt(placeCamera(camera, view, modelBox(names) ?? modelBox()));
+    nav.lookAt(placeCamera(camera, view, frameBox(names) ?? modelBox()));
     fitted = true;
   }
 
@@ -736,11 +755,13 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   function screenshot({ view, width = 1024, height = 768, parts: only, ghost = false, at = 0 } = {}) {
     const unknown = (only ?? []).filter((n) => !parts.has(n));
     if (unknown.length) throw new Error(`There is no part named ${unknown.map((n) => `"${n}"`).join(", ")}.`);
+    inspect.settle();
+    const restore = inspect.reveal(only);
     let cam = camera.clone();
     cam.aspect = width / height;
     const v = view ?? (only ? "iso" : null);
-    if (v && v !== "iso" && VIEWS[v] && modelBox(only)) cam = flatCamera(v, modelBox(only), width / height);
-    else if (v) placeCamera(cam, v, modelBox(only));
+    if (v && v !== "iso" && VIEWS[v] && frameBox(only)) cam = flatCamera(v, frameBox(only), width / height);
+    else if (v) placeCamera(cam, v, frameBox(only));
     else cam.updateProjectionMatrix();
     const ghosted = [];
     if (only && ghost) {
@@ -771,6 +792,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     target.dispose();
     pose(time);
     for (const [m, transparent, opacity, depthWrite] of ghosted) Object.assign(m, { transparent, opacity, depthWrite, needsUpdate: true });
+    restore();
     selected = was;
     highlight();
     const canvas = document.createElement("canvas");
@@ -791,6 +813,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     const H = Math.round((W * h) / w);
     const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, shadow: key.shadow.mapSize.x, guides: guides.visible };
     shadowsMoved = true;
+    inspect.settle();
     try {
       selected = null;
       highlight();
@@ -907,12 +930,14 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     },
     isPlaying: () => playing,
     screenPosition(name) {
-      const box = modelBox(name);
+      const box = modelBox(name, true);
       return box ? onScreen(box.getCenter(new THREE.Vector3())) : null;
     },
     // Where the turning point is drawn in the window, or null when the view
     // is not being turned.
     turningPoint: () => (guides.visible ? onScreen(pivot.position.clone()) : null),
     resetFit: () => (fitted = false),
+    // Hiding, the section and the exploded view (inspect.js).
+    inspect,
   };
 }

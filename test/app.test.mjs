@@ -555,6 +555,159 @@ joint("Rod", "Piston", top);` });
   })()`);
   check(sizedFrame.size.join() === "640,360" && sizedFrame.parts > 1000 && sizedFrame.after.join() === sizedFrame.before.join(), `frame() draws at a given size and gives the window its size back (${JSON.stringify(sizedFrame)})`);
 
+  // ---- Looking inside and checking, by prompt: hide, section, explode, measure ----
+  // A block, a can and a ball whose sizes, volumes and gaps are known by hand.
+  await call("set_model", { script: 'part("Block", box(40, 20, 10).at(0, 0, 5), { color: "#3060c0" });\npart("Can", cylinder(10, 30).at(50, 0, 15), { color: "#d0a020" });\npart("Ball", sphere(15).at(0, 60, 15), { color: "#c03020" });' });
+  await call("screenshot", { width: 200, height: 150 }); // waits for the fine mesh
+  // Pixels of a PNG, counted in the page: how many are near a colour, and the
+  // box (in pixels) around them.
+  const near = (png, rgb, tol = 40) =>
+    w(`(async () => {
+      const img = new Image();
+      img.src = "data:image/png;base64,${png}";
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.width; c.height = img.height;
+      const g = c.getContext("2d");
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const [r, gr, b] = ${JSON.stringify(rgb)};
+      let n = 0, x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) + Math.abs(d[i + 1] - gr) + Math.abs(d[i + 2] - b) > ${tol}) continue;
+        const x = (i / 4) % c.width, y = Math.floor(i / 4 / c.width);
+        n++; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+      }
+      return { n, x0, y0, x1, y1 };
+    })()`);
+  const pixelAt = (png, x, y) =>
+    w(`(async () => {
+      const img = new Image();
+      img.src = "data:image/png;base64,${png}";
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.width; c.height = img.height;
+      const g = c.getContext("2d");
+      g.drawImage(img, 0, 0);
+      return [...g.getImageData(${x}, ${y}, 1, 1).data].slice(0, 3);
+    })()`);
+  const snap = async (args) => (await call("screenshot", { width: 600, height: 450, ...args })).result.png;
+  const stlBefore = (await call("export_stl")).result;
+  await w('window.__draftsman.fit("iso")');
+  const pictureBefore = (await w("window.__draftsman.picture({ width: 400 })")).png;
+  const isoBefore = await snap({});
+
+  // Measure: numbers from the exact shapes, checked against hand values.
+  const m = (await call("measure", { parts: ["Block", "Can", "Ball"], material: "aluminium", between: ["Block", "Can"], points: [[0, 0, 0], [3, 4, 12]] })).result;
+  const [mb, mc, ms] = m?.parts ?? [];
+  const within = (v, exact, rel) => Math.abs(v / exact - 1) <= rel;
+  check(within(mb?.volume_cm3, 8, 0.001) && within(mc?.volume_cm3, (Math.PI * 100 * 30) / 1000, 0.001) && within(ms?.volume_cm3, ((4 / 3) * Math.PI * 15 ** 3) / 1000, 0.001), `measure gives each volume within 0.1% (${mb?.volume_cm3}, ${mc?.volume_cm3}, ${ms?.volume_cm3} cm3; 8, 9.425, 14.137 by hand)`);
+  check(JSON.stringify([mb?.centre_of_mass_mm, mc?.centre_of_mass_mm, ms?.centre_of_mass_mm]) === "[[0,0,5],[50,0,15],[0,60,15]]", `and each centre of mass to 0.1 mm (${JSON.stringify([mb?.centre_of_mass_mm, mc?.centre_of_mass_mm, ms?.centre_of_mass_mm])})`);
+  check(within(mb?.mass_g, 21.6, 0.001) && within(m?.total.mass_g, 2.7 * (8 + 3 * Math.PI * 100 / 100 + (4 / 3) * Math.PI * 3.375), 0.001), `the block weighs 21.6 g in aluminium, and the three ${m?.total.mass_g} g (${mb?.mass_g} g)`);
+  check(within(mb?.surface_area_cm2, 28, 0.01) && within(mc?.surface_area_cm2, (2 * Math.PI * 10 * 30 + 2 * Math.PI * 100) / 100, 0.01), `surface areas within 1% (${mb?.surface_area_cm2}, ${mc?.surface_area_cm2} cm2)`);
+  check(Math.abs(m?.between.distance_mm - 20) <= 0.02 && m.between.nearest_on_a_mm[0] === 20 && m.between.nearest_on_b_mm[0] === 40, `the block and the can are 20 mm apart, nearest at x 20 and 40 (${JSON.stringify(m?.between)})`);
+  check(m?.points.distance_mm === 13, `two points 13 mm apart (${JSON.stringify(m?.points)})`);
+  check(/No density known for "unobtainium"/.test((await call("measure", { part: "Block", material: "unobtainium" })).error ?? "") && /no part named "Nope"/.test((await call("measure", { part: "Nope" })).error ?? ""), "an unknown material or part is refused, naming what is known");
+
+  // Hide: the part's pixels and its pick go; the export does not change.
+  const ballRed = [192, 48, 32];
+  const topBefore = await snap({ view: "top" });
+  const redShown = await near(topBefore, ballRed, 90);
+  await w('window.__draftsman.fit("iso")');
+  const click = (name) => w(`(() => { const c = document.querySelector("#viewport canvas"), p = window.__draftsman.screenPosition(${JSON.stringify(name)}); const at = { clientX: p.x, clientY: p.y, button: 0, pointerId: 5, bubbles: true }; c.dispatchEvent(new PointerEvent("pointerdown", at)); c.dispatchEvent(new PointerEvent("pointerup", at)); const s = window.__draftsman.state().selected; window.__draftsman.select(null); return s; })()`);
+  const pickedBefore = await click("Ball");
+  const hid = await call("hide_parts", { hide: ["Ball"] });
+  const redHidden = await near(await snap({ view: "top" }), ballRed, 90);
+  const pickedHidden = await click("Ball");
+  check(redShown.n > 2000 && redHidden.n === 0, `a hidden part is gone from the picture (${redShown.n} red pixels, then ${redHidden.n})`);
+  check(pickedBefore === "Ball" && pickedHidden !== "Ball", `and a click where it was does not pick it (${pickedBefore}, then ${pickedHidden})`);
+  check(hid.result?.view.hidden?.join() === "Ball" && (await w('document.getElementById("inspect-line").textContent')).startsWith("1 part hidden"), `the line above the prompt says so (${await w('document.getElementById("inspect-line").textContent')})`);
+  check((await snap({ view: "top", parts: ["Ball"] })) && (await near(await snap({ view: "top", parts: ["Ball"] }), ballRed, 90)).n > 2000, "a screenshot that names a hidden part shows it");
+  check(/no part named "Nope"/.test((await call("hide_parts", { only: ["Nope"] })).error ?? ""), "hiding an unknown part is refused");
+  check(/would hide every part/.test((await call("hide_parts", { hide: ["Block", "Can"] })).error ?? ""), "and so is hiding every part");
+  await call("hide_parts", { all: true });
+
+  // Section: the cut faces are filled and flat, and lie on the plane.
+  // From above, the view frames x -20 to 60 and y -10 to 75 (with 6% to
+  // spare): 225 / 45.05 px per mm, and the block's top face at x 0, y 5 is
+  // at pixel (200, 362).
+  const topWholePng = await snap({ view: "top" });
+  const topColour = await pixelAt(topWholePng, 200, 362);
+  const topWhole = await near(topWholePng, topColour, 24);
+  const frontWhole = await snap({ view: "front" });
+  const sec = await call("section_view", { axis: "y", offset: 0, remove: "-" });
+  check(sec.result?.parts_cut.join() === "Block,Can" && sec.result.look_into_it_from === "front", `a section across y cuts the block and the can, and says where to look from (${JSON.stringify(sec.result ?? sec.error)})`);
+  const topCutPng = await snap({ view: "top" });
+  const topCut = await near(topCutPng, topColour, 24);
+  // Seen from above the block reached from y -10 to 10 (100 px); cut at 0 it
+  // reaches from 0 to 10, and its top face is shaded as before.
+  check(topWhole.n > 1000 && Math.abs((topCut.y1 - topCut.y0 + 1) / (topWhole.y1 - topWhole.y0 + 1) - 0.5) < 0.04 && Math.abs(topCut.y0 - topWhole.y0) <= 1, `from above, the cut block ends at the plane: half as deep (${topCut.y1 - topCut.y0 + 1} px of ${topWhole.y1 - topWhole.y0 + 1}; top face ${topColour}, then ${await pixelAt(topCutPng, 200, 340)})`);
+  const frontCut = await snap({ view: "front" });
+  // The front view looks into the cut. It frames x -20 to 60 and z 0 to 30
+  // (with 6% to spare): 300 / 42.4 px per mm. The block's cut face is 40 x
+  // 10 mm and the can's 20 x 30 mm, each filled in one flat colour.
+  const ppm = 300 / 42.4;
+  const toPx = (x, z) => [Math.round(300 + (x - 20) * ppm), Math.round(225 - (z - 15) * ppm)];
+  const blockColour = await pixelAt(frontCut, ...toPx(0, 5));
+  const canColour = await pixelAt(frontCut, ...toPx(50, 15));
+  const blockFace = await near(frontCut, blockColour, 6);
+  const canFace = await near(frontCut, canColour, 6);
+  const areaMm = (f) => Math.round(f.n / ppm ** 2);
+  check(frontCut !== frontWhole && Math.abs(areaMm(blockFace) / 400 - 1) < 0.04 && Math.abs(areaMm(canFace) / 600 - 1) < 0.04, `the cut faces are filled, each in one flat colour: ${areaMm(blockFace)} and ${areaMm(canFace)} mm2 (400 and 600 exact)`);
+  check(Math.abs((blockFace.x1 - blockFace.x0 + 1) / ppm - 40) < 0.5 && Math.abs((canFace.y1 - canFace.y0 + 1) / ppm - 30) < 0.5, `and the right size: ${((blockFace.x1 - blockFace.x0 + 1) / ppm).toFixed(1)} mm wide, ${((canFace.y1 - canFace.y0 + 1) / ppm).toFixed(1)} mm high`);
+  const lineNow = await w('document.getElementById("inspect-line").textContent');
+  check(/^Section at Y = 0 mm/.test(lineNow), `the line says where the section is (${lineNow})`);
+  await call("section_view", { axis: "y", offset: 0, remove: "-", uncut: ["Can"] });
+  const canWhole = await near(await snap({ view: "front" }), canColour, 6);
+  check(canWhole.n < canFace.n / 4, `a part left uncut keeps its own face (${canWhole.n} px of the cut colour, ${canFace.n} when cut)`);
+  check(/misses the model/.test((await call("section_view", { axis: "z", offset: 500 })).error ?? ""), "a section that misses the model is refused");
+  // A plane at any angle: through the can's axis, facing x and y alike.
+  check((await call("section_view", { point: [50, 0, 0], normal: [1, -1, 0] })).result?.parts_cut.join() === "Can", "a plane at any angle cuts what it passes through");
+
+  // Explode: parts move apart from the middle, all stay above the floor, and
+  // they come back together.
+  await call("section_view", { off: true });
+  const until = (js) => w(`(async () => { for (let i = 0; i < 600 && !(${js}); i++) await new Promise((r) => setTimeout(r, 50)); return ${js}; })()`);
+  const ex = await call("explode_view", { factor: 1 });
+  await until("!window.__draftsman.exploding()");
+  const offs = await w('["Block", "Can", "Ball"].map((n) => window.__draftsman.offset(n).map((v) => Math.round(v * 10) / 10))');
+  // The middle of all three is (20, 32.5, 15); each part goes as far again
+  // from it, and all are lifted 10 mm so the block stays on the floor.
+  check(JSON.stringify(offs) === "[[-20,-32.5,0],[30,-32.5,10],[-20,27.5,10]]", `exploded, each part moves away from the middle (${JSON.stringify(offs)}; ${ex.result?.view.says ?? ex.error})`);
+  const exShot = await snap({ view: "iso" });
+  await call("explode_view", { factor: 0 });
+  await until("!window.__draftsman.exploding()");
+  check(exShot !== isoBefore && JSON.stringify(await w('["Block", "Can", "Ball"].map((n) => window.__draftsman.offset(n))')) === "[[0,0,0],[0,0,0],[0,0,0]]", "and at 0 they are back together");
+  await call("explode_view", { factor: 0.5, axis: "z" });
+  await until("!window.__draftsman.exploding()");
+  const up = await w('window.__draftsman.offset("Can")');
+  check(up[0] === 0 && up[1] === 0 && Math.abs(up[2] - 5) < 1e-6, `along one axis at half: the can rises 5 mm and nothing else (${up})`);
+  check(/no plan/.test((await call("explode_view", { together: "steps" })).error ?? ""), "keeping steps together without a plan is refused");
+
+  // All at once, then cleared: the exports never changed, and clearing gives
+  // back exactly the picture from before.
+  await call("hide_parts", { hide: ["Ball"] });
+  await call("section_view", { axis: "x", offset: 0 });
+  await call("explode_view", { factor: 1 });
+  const stlDuring = (await call("export_stl")).result;
+  const drawingDuring = (await call("export_drawing", { axis: "z", offset: 5 })).result;
+  check(stlDuring?.base64 === stlBefore?.base64 && drawingDuring?.section.parts_cut.join() === "Block,Can,Ball", `exports are unchanged while parts are hidden, cut and exploded (${stlDuring?.triangles} triangles, ${stlBefore?.triangles} before; the drawing cuts ${drawingDuring?.section.parts_cut.join(", ")})`);
+  const allLine = await w('document.getElementById("inspect-line").textContent');
+  check(allLine === "Section at X = 0 mm · 1 part hidden · Exploded×", `one line says it all (${allLine})`);
+  await w('document.getElementById("inspect-line").click()');
+  await until("!window.__draftsman.exploding()");
+  check(await w('document.getElementById("inspect-line").hidden'), "a click on the line clears it");
+  await w('window.__draftsman.fit("iso")');
+  check((await snap({})) === isoBefore, "and the view is exactly as it was before");
+  check((await w("window.__draftsman.picture({ width: 400 })")).png === pictureBefore, "the studio picture too");
+  await call("section_view", { axis: "z", offset: 5 });
+  const esc = () => w('document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); true');
+  await w('window.__draftsman.select("Block")');
+  await esc();
+  const firstEsc = await w('[window.__draftsman.state().selected, document.getElementById("inspect-line").hidden]');
+  await esc();
+  const secondEsc = await w('document.getElementById("inspect-line").hidden');
+  check(firstEsc[0] === null && firstEsc[1] === false && secondEsc === true, `Esc deselects first, then shows the whole model (${JSON.stringify(firstEsc)}, ${secondEsc})`);
 
   // What the view costs the GPU, counted below three.js on a Retina-sized
   // window, with the rotor head (47 parts that turn). A still view draws
@@ -609,6 +762,21 @@ joint("Rod", "Piston", top);` });
   const hidden = await cost(`window.page(true, false); window.__frames.step(30)`);
   const shown = await cost(`window.page(false, true); window.__frames.step(30)`);
   check(hidden.draws === 0 && shown.frames >= 29, `a hidden page draws nothing, and motion goes on when it shows (${hidden.draws} draws hidden, ${shown.frames} of 30 frames back)`);
+
+  // A section through the turning rotor head adds no pass, no draw and no
+  // triangle to a moving frame: the cut faces are the parts' own insides.
+  const uncut = await cost(`window.__frames.step(30)`);
+  await h.command(g, "section_view", { axis: "y", offset: 0 });
+  await g("window.__frames.step(2)");
+  const sectioned = await cost(`window.__frames.step(30)`);
+  const per = (c) => ["passes", "draws", "triangles", "pixels", "samples"].map((k) => Math.round(perFrame(c, k))).join(" / ");
+  check(sectioned.frames >= 29 && perFrame(sectioned, "passes") === perFrame(uncut, "passes") && perFrame(sectioned, "draws") === perFrame(uncut, "draws") && perFrame(sectioned, "triangles") === perFrame(uncut, "triangles"), `a section costs a moving frame no extra pass, draw or triangle (passes / draws / triangles / pixels / samples per frame: ${per(uncut)} uncut, ${per(sectioned)} cut)`);
+  // Hidden parts are not drawn at all.
+  await h.command(g, "hide_parts", { hide: ["Blade 1", "Blade 2", "Blade 3", "Blade 4"] });
+  await g("window.__frames.step(2)");
+  const fewer = await cost(`window.__frames.step(30)`);
+  check(perFrame(fewer, "draws") < perFrame(sectioned, "draws") && perFrame(fewer, "triangles") < perFrame(sectioned, "triangles"), `hiding the blades draws less (${per(fewer)})`);
+  await h.command(g, "clear_view");
 
   // Crease shading costs nothing while things move: it is worked out once,
   // when the view has rested, in one step of three passes, then nothing is

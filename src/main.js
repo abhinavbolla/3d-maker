@@ -11,6 +11,7 @@ import { saveBytes, openText, saveOBJ } from "./app/files.js";
 import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
 import { showExamples, exampleScript, tryText } from "./app/examples.js";
+import { mountInspectLine } from "./app/inspect-tools.js";
 
 const $ = (id) => document.getElementById(id);
 const kernel = createKernel();
@@ -58,6 +59,8 @@ const claude = createClaude({
 });
 
 const commands = createCommands({ store, viewport, kernel });
+// While parts are hidden, cut or exploded, a line above the prompt says so.
+const clearView = mountInspectLine({ viewport, dock: $("dock"), before: $("progress") });
 let bridgeActivity = "";
 const bridge = startBridge(commands, {
   onStatus() {},
@@ -334,6 +337,7 @@ const actions = {
     if (!store.state.doc.script) return;
     claude.stop();
     viewport.resetFit();
+    viewport.inspect.clear();
     $("reply").hidden = true;
     await store.commit(emptyDoc());
     say("New model. Undo brings the previous one back.");
@@ -349,6 +353,7 @@ const actions = {
       return say("That file is not a Draftsman model.", 6000);
     }
     viewport.resetFit();
+    viewport.inspect.clear();
     await store.load({ ...emptyDoc(), ...doc, session: null }, file.name).catch((err) => say(err.message, 8000));
     viewport.fitIfNew();
   },
@@ -436,7 +441,8 @@ addEventListener("keydown", (e) => {
   if (mod && e.key.toLowerCase() === "e") return e.preventDefault(), actions.export();
   if (typing) return;
   if (mod && e.key.toLowerCase() === "z") return e.preventDefault(), e.shiftKey ? store.redo() : store.undo();
-  if (e.key === "Escape") return store.select(null);
+  // Esc deselects, and then shows the whole model again.
+  if (e.key === "Escape") return store.state.selected ? store.select(null) : clearView();
   if (e.key === "f" && !mod) return viewport.fit();
   if (e.key.length === 1 && !mod && !e.altKey) $("input").focus();
 });
@@ -467,6 +473,9 @@ if (import.meta.env.DEV) {
     look: (v) => viewport.setLook(v ?? {}),
     fit: (view, names) => viewport.fit(view, names),
     screenPosition: (name) => viewport.screenPosition(name),
+    // Where the exploded view has moved a part, and whether it is still moving.
+    offset: (name) => viewport.inspect.shift(name)?.toArray() ?? [0, 0, 0],
+    exploding: () => viewport.inspect.animating(),
     turningPoint: () => viewport.turningPoint(),
     call: (name, args = {}) => commands[name](args),
     history: () => ({ undo: store.state.past.length, redo: store.state.future.length }),
