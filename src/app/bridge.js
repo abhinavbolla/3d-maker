@@ -1,4 +1,4 @@
-// Connects the open app to any running 3D Maker MCP servers.
+// Connects the open app to any running Draftsman MCP servers.
 // Each MCP server (one per Claude client) listens on a port in BRIDGE_PORTS;
 // the app keeps a WebSocket to every one it finds and answers their calls.
 export const BRIDGE_PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
@@ -34,7 +34,7 @@ export function startBridge(commands, { onStatus, onActivity }) {
     ws.onopen = () => {
       opened = true;
       sockets.set(port, ws);
-      ws.send(JSON.stringify({ type: "hello", app: "3d-maker", version: 3, window: windowId }));
+      ws.send(JSON.stringify({ type: "hello", app: "draftsman", version: 3, window: windowId }));
       status();
     };
     ws.onclose = (ev) => {

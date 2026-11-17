@@ -8,7 +8,7 @@ async function tauri() {
 }
 
 const FILTERS = {
-  json: { name: "3D Maker model", extensions: ["json"] },
+  json: { name: "Draftsman model", extensions: ["json"] },
   stl: { name: "STL mesh", extensions: ["stl"] },
   "3mf": { name: "3MF model", extensions: ["3mf"] },
   png: { name: "PNG picture", extensions: ["png"] },
