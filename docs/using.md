@@ -133,11 +133,43 @@ Parts are drawn where the script puts them, not as their motion poses them, the 
 
 ## Driving it from Claude Code
 
-The prompt box is the usual way in. You can also drive the app from Claude Code or Claude Desktop directly by adding the MCP server:
+The prompt box is the usual way in, and needs none of this. You can also drive the app from your own AI client (Claude Code, Claude Desktop, Cursor, VS Code or any other that speaks MCP) by adding Draftsman's MCP server to it. What every client needs to know:
+
+- **The app must be open.** The server only forwards tool calls to an open Draftsman window. With none open, a call waits 8 seconds, then answers "The Draftsman app is not open. Ask the user to start it, then try again." Only `reference` works without it.
+- **The server** is one file, started with Node.js 20 or newer and no arguments: `node <server>`. With the installed app on macOS, `<server>` is `/Applications/Draftsman.app/Contents/Resources/mcp/server.mjs`. From a copy of this repository, after `npm install`, it is `<checkout>/mcp/server.mjs`.
+- **It talks MCP over stdio.** Its own messages go to stderr: `[draftsman] bridge listening on 127.0.0.1:7457`, then `[draftsman] ready`, and a line when a window connects. Each client starts its own copy, on the next free port from 7457 to 7466, so several can run at once; only Draftsman's own windows may connect to them. Calls go to the window that connected most recently.
+- A client that cannot find `node` (Claude Desktop often cannot, when Node came from nvm or Homebrew) needs its full path, which `which node` prints, in place of `node`.
+
+**Claude Code, as a plugin.** The plugin adds the server and a skill that teaches Claude how to work in Draftsman: when to read the reference, plans for big models, checking fit, cutting a model open, measuring, exporting and drawings. In a terminal:
 
 ```bash
-claude mcp add --scope user draftsman -- node /path/to/draftsman/mcp/server.mjs
+claude plugin marketplace add abhinavbolla/draftsman
+claude plugin install draftsman@draftsman
 ```
+
+It uses the installed app's server. To use a checkout instead, set the plugin's `server_path` option to its `mcp/server.mjs` (in `/config`, or `echo '{"server_path": "/path/to/draftsman/mcp/server.mjs"}' | claude plugin configure draftsman --values-stdin`).
+
+**Claude Code, the server alone:**
+
+```bash
+claude mcp add --scope user draftsman -- node /Applications/Draftsman.app/Contents/Resources/mcp/server.mjs
+```
+
+**Claude Desktop**: add it to `claude_desktop_config.json` (Settings, Developer, Edit Config; on macOS it is in `~/Library/Application Support/Claude/`, on Windows in `%APPDATA%\Claude\`), then restart Claude Desktop:
+
+```json
+{ "mcpServers": { "draftsman": { "command": "node", "args": ["/Applications/Draftsman.app/Contents/Resources/mcp/server.mjs"] } } }
+```
+
+**Cursor**: the same `mcpServers` entry, in `~/.cursor/mcp.json` for every project or `.cursor/mcp.json` in one.
+
+**VS Code**: in `.vscode/mcp.json` in your project (VS Code calls the list `servers` and wants the type):
+
+```json
+{ "servers": { "draftsman": { "type": "stdio", "command": "node", "args": ["/Applications/Draftsman.app/Contents/Resources/mcp/server.mjs"] } } }
+```
+
+**Any other client**: a stdio server with command `node` and the server's path as its only argument, no environment variables. Ask it to call `reference` first; the server's instructions say so too.
 
 ## Limitations
 
