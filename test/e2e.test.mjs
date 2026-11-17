@@ -21,14 +21,14 @@ const secs = (t) => Math.round((Date.now() - t) / 1000);
 try {
   const a = await h.openWindow();
   const b = await h.openWindow();
-  const bBefore = await b("window.__3dmaker.state().script");
+  const bBefore = await b("window.__draftsman.state().script");
 
   // ---- 1: something with a known size and volume ----
   console.log("prompt 1 (window A)…");
   let t = Date.now();
   const r1 = await h.prompt(a, 'Make one part named "Block": a 30 mm cube sitting on the ground, with a 10 mm diameter hole straight through it from top to bottom. Nothing else.');
   console.log(`  Claude (${secs(t)} s): ${r1.text}\n  receipt: ${JSON.stringify(r1.receipt)}`);
-  let s = await a("window.__3dmaker.summary()");
+  let s = await a("window.__draftsman.summary()");
   let block = s.parts.find((p) => p.name === "Block");
   check(r1.receipt?.changed === true, "the window that asked shows a changed model");
   check(Boolean(block?.size), `part "Block" exists (parts: ${s.parts.map((p) => p.name).join(", ")})`);
@@ -41,14 +41,14 @@ try {
   check(!s.plan, "a one-part model is made without a plan");
 
   // ---- 2: follow-up with the part selected ----
-  check(Boolean(await a("window.__3dmaker.state().session")), "the model remembers its Claude chat, so follow-ups continue it");
+  check(Boolean(await a("window.__draftsman.state().session")), "the model remembers its Claude chat, so follow-ups continue it");
   console.log("prompt 2 (window A, Block selected)…");
-  await a('window.__3dmaker.select("Block")');
+  await a('window.__draftsman.select("Block")');
   t = Date.now();
   const r2 = await h.prompt(a, "Make this 50 mm wide along X. Keep the height, depth and the hole.");
   console.log(`  Claude (${secs(t)} s): ${r2.text}\n  receipt: ${JSON.stringify(r2.receipt)}`);
   check(r2.receipt?.changed === true, "the follow-up changed the model");
-  s = await a("window.__3dmaker.summary()");
+  s = await a("window.__draftsman.summary()");
   block = s.parts.find((p) => p.name === "Block");
   if (block?.size) {
     check(near(block.size[0], 50, 1) && near(block.size[1], 30, 1) && near(block.size[2], 30, 1), `Block is now 50 x 30 x 30 mm (got ${block.size.join(" x ")})`);
@@ -58,14 +58,14 @@ try {
 
   const stl = await h.stlIsClosed(a);
   check(stl.closed, `exported STL is a closed mesh (${stl.triangles} triangles)`);
-  check((await b("window.__3dmaker.state().script")) === bBefore, "window B, open the whole time, was not changed");
+  check((await b("window.__draftsman.state().script")) === bBefore, "window B, open the whole time, was not changed");
 
   // ---- 3: a bigger model is built with a plan ----
   console.log("prompt 3 (window B)…");
   t = Date.now();
   const r3 = await h.prompt(b, "A desk fan: weighted round base, upright stand with a tilt joint, motor housing, five spinning blades on a hub, and a front and rear wire guard.", { timeoutMs: 15 * 60 * 1000 });
   console.log(`  Claude (${secs(t)} s): ${r3.text}\n  receipt: ${JSON.stringify(r3.receipt)}`);
-  s = await b("window.__3dmaker.summary()");
+  s = await b("window.__draftsman.summary()");
   const plan = s.plan;
   check(Boolean(plan) && plan.total >= 3, `it was built with a plan (${plan ? `${plan.total} steps: ${plan.steps.map((x) => x.name).join(", ")}` : "no plan"})`);
   if (plan) {
@@ -85,7 +85,7 @@ try {
   t = Date.now();
   const r4 = await h.prompt(c, "A single-cylinder engine cutaway: crankshaft with a counterweight, connecting rod and piston inside a see-through-sized cylinder. The crank turns and drives the rod and piston.", { timeoutMs: 15 * 60 * 1000 });
   console.log(`  Claude (${secs(t)} s): ${r4.text}\n  receipt: ${JSON.stringify(r4.receipt)}`);
-  s = await c("window.__3dmaker.summary()");
+  s = await c("window.__draftsman.summary()");
   const joints = s.motion?.joints ?? [];
   check(joints.length >= 2, `it declared the joints (${joints.map((j) => `${j.a}-${j.b}`).join(", ") || "none"})`);
   check(joints.length > 0 && joints.every((j) => j.max_gap_mm < 1), `every joint stays together over the loop (max gaps: ${joints.map((j) => j.max_gap_mm).join(", ")} mm)`);

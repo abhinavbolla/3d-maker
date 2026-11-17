@@ -1,7 +1,9 @@
 // Keeps the current model across restarts. The desktop app writes a file in
 // its data folder (WebKit flushes localStorage lazily and can lose the last
 // edits on quit); a plain browser falls back to localStorage.
-const KEY = "3d-maker:autosave";
+const KEY = "draftsman:autosave";
+// The key the app used under its first name, read once so a saved model survives the rename.
+const OLD_KEY = "3d-" + "maker:autosave";
 const isTauri = () => Boolean(window.__TAURI_INTERNALS__);
 const invoke = (cmd, args) => import("@tauri-apps/api/core").then(({ invoke }) => invoke(cmd, args));
 
@@ -9,7 +11,7 @@ const valid = (doc) => doc && doc.version === 2 && typeof doc.script === "string
 
 export async function loadAutosave() {
   try {
-    const raw = isTauri() ? await invoke("autosave_read") : localStorage.getItem(KEY);
+    const raw = isTauri() ? await invoke("autosave_read") : (localStorage.getItem(KEY) ?? localStorage.getItem(OLD_KEY));
     const doc = raw && JSON.parse(raw);
     return valid(doc) ? doc : null;
   } catch {

@@ -20,7 +20,7 @@ export function modelXML(objects, { title = "" } = {}) {
   const out = [];
   out.push('<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n');
   if (title) out.push(` <metadata name="Title">${xml(title)}</metadata>\n`);
-  out.push(' <metadata name="Application">3D Maker</metadata>\n <resources>\n');
+  out.push(' <metadata name="Application">Draftsman</metadata>\n <resources>\n');
   const colors = objects.map((o) => displayColor(o.color));
   const used = colors.some(Boolean);
   if (used) {

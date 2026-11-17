@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 3D Maker MCP server. Claude Code (started by the app, or your own) or Claude
-// Desktop runs this over stdio; it forwards tool calls to the open 3D Maker
+// Draftsman MCP server. Claude Code (started by the app, or your own) or Claude
+// Desktop runs this over stdio; it forwards tool calls to the open Draftsman
 // app over a local WebSocket.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -16,12 +16,12 @@ const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
 const TAURI_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]);
 const isAppOrigin = (o = "") => TAURI_ORIGINS.has(o) || /^http:\/\/(localhost|127\.0\.0\.1):51[78]\d$/.test(o);
 const CALL_TIMEOUT_MS = 120000;
-const log = (...a) => console.error("[3d-maker]", ...a);
+const log = (...a) => console.error("[draftsman]", ...a);
 
 // ---- bridge to the app ----
 // When the app's own prompt box starts Claude, it passes its window id
 // (--app <id>) so tool calls go to that window and no other, even with several
-// 3D Maker windows or tabs open. Without --app (Claude Desktop, your own
+// Draftsman windows or tabs open. Without --app (Claude Desktop, your own
 // Claude Code), calls go to the window that connected most recently.
 const argAt = process.argv.indexOf("--app");
 const APP_ID = argAt > 0 ? process.argv[argAt + 1] : null;
@@ -77,12 +77,12 @@ async function waitForApp(ms) {
 }
 
 async function call(method, params = {}) {
-  if (!(await waitForApp(8000))) throw new Error(APP_ID ? "The 3D Maker window that asked is no longer connected. Ask the user to try again." : "The 3D Maker app is not open. Ask the user to start it, then try again.");
+  if (!(await waitForApp(8000))) throw new Error(APP_ID ? "The Draftsman window that asked is no longer connected. Ask the user to try again." : "The Draftsman app is not open. Ask the user to start it, then try again.");
   const id = ++seq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`3D Maker did not answer "${method}" within ${CALL_TIMEOUT_MS / 1000} s.`));
+      reject(new Error(`Draftsman did not answer "${method}" within ${CALL_TIMEOUT_MS / 1000} s.`));
     }, CALL_TIMEOUT_MS);
     pending.set(id, { resolve, reject, timer });
     app.send(JSON.stringify({ id, method, params }));
@@ -92,13 +92,13 @@ async function call(method, params = {}) {
 // ---- the modelling language, as Claude sees it ----
 // Claude Code cuts server instructions off at 4096 characters, so these are
 // short and point to the reference tool (mcp/reference.mjs) for the rest.
-const INSTRUCTIONS = `3D Maker turns a short JavaScript model script into solid 3D parts the user sees live in the app.
+const INSTRUCTIONS = `Draftsman turns a short JavaScript model script into solid 3D parts the user sees live in the app.
 
 Before you write or change a script, call the reference tool once (unless you already have its text in this conversation): it is the whole modelling language (shapes, profiles, sweep and loft, holes and fasteners, parts, sliders, motion and joints) with examples, and how to work. Use only the functions it lists; do not guess names.
 
 In short: units are millimetres, +Z is up, the ground is z = 0. Write the whole script with set_model, change part of it with edit_model, and look at it with screenshot. Big or mechanical models are planned with set_plan, built step by step with append_to_model, and each step is checked with finish_step. check_fit finds parts passing into each other, at rest and during the motion. When done, answer in one or two short sentences; do not paste the script.`;
 
-const server = new McpServer({ name: "3d-maker", version: "0.6.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "draftsman", version: "0.6.0" }, { instructions: INSTRUCTIONS });
 
 const json = (v) => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (err) => ({ isError: true, content: [{ type: "text", text: String(err?.message ?? err) }] });
@@ -111,7 +111,7 @@ const tool = (name, description, inputSchema, handler) =>
     }
   });
 
-tool("reference", "The full 3D Maker modelling language (every shape, profile, fastener, motion and joint function, with examples) and how to work. Call it once before writing your first script.", {}, async () => ({ content: [{ type: "text", text: REFERENCE }] }));
+tool("reference", "The full Draftsman modelling language (every shape, profile, fastener, motion and joint function, with examples) and how to work. Call it once before writing your first script.", {}, async () => ({ content: [{ type: "text", text: REFERENCE }] }));
 
 tool("get_model", "Return the current model script, slider values, each part's size, bounds, volume and motion, the sliders, and which part the user has selected.", {}, async () => json(await call("get_model")));
 
