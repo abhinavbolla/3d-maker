@@ -52,8 +52,8 @@ export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals =
   const whole = compile(node);
   const pieces = splitPieces(node);
   if (pieces.length > 1) {
-    const compiled = pieces.map((n) => ({ n, ...compile(n) })).filter((p) => !isEmptyBox(p.box));
     const L = extent(whole.box);
+    const compiled = withoutRepeats(pieces.map((n) => ({ n, ...compile(n) })).filter((p) => !isEmptyBox(p.box)), L);
     // Small, or thin and taking up little of the part's box (a thin skin
     // over the whole part is the body, not a detail).
     const room = boxVolume(whole.box) / 8;
@@ -72,9 +72,10 @@ export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals =
       // The small pieces share about twice the body's budget, each at least
       // as finely as the body.
       const each = Math.round(Math.max(1500, Math.min(budget / 4, (2 * budget) / small.length)));
-      for (const p of small) {
+      for (const group of overlapping(small)) {
+        const p = group.length === 1 ? group[0] : compile({ t: "union", c: group.map((q) => q.n) });
         order.push(p);
-        meshes.push(meshSDF(p.f, p.box, { ...opts, budget: each, maxCell }));
+        meshes.push(meshSDF(p.f, p.box, { ...opts, budget: Math.min(budget, each * group.length), maxCell }));
       }
       const out = concat(meshes);
       out.cellSize = big.length ? meshes[0].cellSize : Math.min(...meshes.map((m) => m.cellSize));
@@ -88,6 +89,51 @@ export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals =
   const m = meshSDF(whole.f, whole.box, { budget, maxCell, maxCells, normals });
   m.volume = meshVolume(m);
   return m;
+}
+
+// The same piece twice (a centred bar in radial(6): turned by 180 degrees it
+// is itself again) would be meshed twice on the same grid, into two copies
+// of one surface lying on each other, where every edge has four triangles.
+// A piece with the same box and the same distances as an earlier one at
+// points through its box is left out.
+function withoutRepeats(pieces, L) {
+  const tol = L * 1e-7;
+  const out = [];
+  for (const p of pieces) {
+    const same = out.find((q) => {
+      if (!p.box.every((v, i) => Math.abs(v - q.box[i]) <= tol)) return false;
+      const [x0, y0, z0, x1, y1, z1] = p.box;
+      for (let i = 0; i < 4; i++)
+        for (let j = 0; j < 4; j++)
+          for (let k = 0; k < 4; k++) {
+            const x = x0 + ((i + 0.37) * (x1 - x0)) / 4, y = y0 + ((j + 0.61) * (y1 - y0)) / 4, z = z0 + ((k + 0.23) * (z1 - z0)) / 4;
+            if (Math.abs(p.f(x, y, z) - q.f(x, y, z)) > tol) return false;
+          }
+      return true;
+    });
+    if (!same) out.push(p);
+  }
+  return out;
+}
+
+// Small pieces with the same box are meshed together. Meshed apart, they
+// share a grid, and where their faces lie in one plane (the ends of bars
+// crossing in a star, from radial()) both meshes put the same triangles
+// there: edges with four triangles each, which slicers reject. Pieces with
+// different boxes are meshed on different grids, so that cannot happen.
+function overlapping(pieces) {
+  const L = Math.max(...pieces.map((p) => extent(p.box)));
+  const same = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= L * 1e-7);
+  const parent = pieces.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < pieces.length; i++) for (let j = 0; j < i; j++) if (same(pieces[i].box, pieces[j].box)) parent[find(i)] = find(j);
+  const groups = new Map();
+  pieces.forEach((p, i) => {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(p);
+  });
+  return [...groups.values()];
 }
 
 // Volume (mm3) of piece p inside any of the others, by sampling a grid of
