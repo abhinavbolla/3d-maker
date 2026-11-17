@@ -36,6 +36,7 @@
             <button type="button" role="menuitem" data-export="glb"><span>glTF</span><small>Parts, materials and motion, for Blender and the web</small></button>
             <button type="button" role="menuitem" data-export="obj"><span>OBJ</span><small>One object per part, with an MTL of its colours</small></button>
             <button type="button" role="menuitem" data-export="ply"><span>PLY</span><small>One mesh, coloured by part</small></button>
+            <button type="button" role="menuitem" data-export="video"><span>Video (turntable)</span><small>One turn round the model, with its motion, MP4</small></button>
           </div>
         </div>
       </nav>
@@ -80,6 +81,7 @@
         <button id="send" type="submit">Make</button>
       </form>
       <div id="status" aria-live="polite"></div>
+      <div id="recording" hidden><span id="recording-text"></span><button id="recording-cancel" type="button" title="Stop recording; nothing is saved (Esc)">Cancel</button></div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

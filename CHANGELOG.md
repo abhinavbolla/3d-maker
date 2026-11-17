@@ -76,6 +76,18 @@ Notable changes to Draftsman. The format follows
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
+- Video. Export > Video (turntable) records one turn round the model with its motion playing,
+  and Claude can direct a film from shots (hold, turntable, orbit, a move between two cameras
+  or saved views, following a part) with the new `preview_shots` and `record_video` tools.
+  Each frame's camera and motion come from its number, so the film is smooth however slowly
+  frames draw. The file is H.264 in MP4, or VP9 or VP8 in WebM where the browser has no H.264
+  encoder, written by our own code with the browser's WebCodecs encoder. A line shows the
+  progress, with Cancel. Every frame has the crease shading, worked out for that frame, and a
+  film shows the view as it is: hidden parts stay hidden, a section stays cut with its faces
+  hatched, an exploded view stays exploded.
+- A camera Claude can direct: `set_camera` places the view (a direction, a position and a
+  target, or framed on chosen parts) with a lens in millimetres, and keeps named views with
+  the model; `save_picture` saves a studio picture from any camera at any size.
 - STEP export (AP214). Export > STEP, or the `export_step` tool, saves an assembly of named,
   coloured solids in mm for other CAD programs. Boxes, cylinders, cones, spheres, tori, capsules,
   and extrusions and revolves of outlines made of lines and arcs (holes included) come out with
@@ -125,3 +137,10 @@ Notable changes to Draftsman. The format follows
 - Smoother metal. Small fillets and tight curves are shaded round instead of in facets, and sharp
   edges stay crisp: the view asks the distance function whether each fold in the mesh is a sharp
   edge or a curve, and takes its normals from it.
+
+### Fixed
+
+- Parts that spin fast about an axis away from the origin stay on it in the view. Between the
+  motion's samples a part used to move its position and its turn apart, which put the
+  helicopter's 1200 rpm tail rotor up to 3.2 m off its axis; it now turns about the axis itself.
+  Recorded videos pose every frame from the motion at exactly that frame's time.

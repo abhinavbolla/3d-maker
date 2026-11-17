@@ -16,12 +16,18 @@ const FILTERS = {
   step: { name: "STEP model", extensions: ["step", "stp"] },
   png: { name: "PNG picture", extensions: ["png"] },
   svg: { name: "SVG drawing", extensions: ["svg"] },
+  mp4: { name: "MP4 video", extensions: ["mp4"] },
+  webm: { name: "WebM video", extensions: ["webm"] },
   pdf: { name: "PDF drawing", extensions: ["pdf"] },
   dxf: { name: "DXF drawing", extensions: ["dxf"] },
   glb: { name: "glTF binary", extensions: ["glb"] },
   obj: { name: "OBJ mesh", extensions: ["obj"] },
   ply: { name: "PLY mesh", extensions: ["ply"] },
 };
+// Files this big go to the desktop app as raw bytes, not as a list of
+// numbers in JSON, which for a video of tens of megabytes would be a few
+// hundred megabytes of text.
+const RAW_FROM = 4 * 1024 * 1024;
 
 // Returns the saved path (or file name in a browser), or null if cancelled.
 export async function saveBytes(bytes, defaultName, kind) {
@@ -29,7 +35,8 @@ export async function saveBytes(bytes, defaultName, kind) {
     const { invoke, dialog } = await tauri();
     const path = await dialog.save({ defaultPath: defaultName, filters: [FILTERS[kind]] });
     if (!path) return null;
-    await invoke("write_file", { path, data: Array.from(bytes) });
+    if (bytes.length >= RAW_FROM) await invoke("write_bytes", bytes, { headers: { path: encodeURIComponent(path) } });
+    else await invoke("write_file", { path, data: Array.from(bytes) });
     return path;
   }
   const blob = new Blob([bytes], { type: "application/octet-stream" });
@@ -37,7 +44,8 @@ export async function saveBytes(bytes, defaultName, kind) {
   a.href = URL.createObjectURL(blob);
   a.download = defaultName;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  // A big file can take a while to hand over to the download.
+  setTimeout(() => URL.revokeObjectURL(a.href), bytes.length > RAW_FROM ? 60000 : 1000);
   return defaultName;
 }
 

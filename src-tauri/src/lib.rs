@@ -12,6 +12,36 @@ fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, data).map_err(|e| format!("Could not write {path}: {e}"))
 }
 
+// A big file (a video) comes as the request's raw body, with its path
+// percent-encoded in a header, so its bytes are not sent as JSON numbers.
+#[tauri::command]
+fn write_bytes(request: tauri::ipc::Request) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("write_bytes takes the file's bytes as the request body".into());
+    };
+    let header = request.headers().get("path").ok_or("write_bytes needs a path header")?;
+    let path = percent_decode(header.to_str().map_err(|e| e.to_string())?)?;
+    std::fs::write(&path, data).map_err(|e| format!("Could not write {path}: {e}"))
+}
+
+// Undoes encodeURIComponent.
+fn percent_decode(s: &str) -> Result<String, String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s.get(i + 1..i + 3).ok_or("bad path header")?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "bad path header")?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "bad path header".into())
+}
+
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Could not read {path}: {e}"))
@@ -229,7 +259,7 @@ fn claude_stop(run: u32) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![write_file, read_file, autosave_write, autosave_read, claude_start, claude_stop, mcp_server])
+        .invoke_handler(tauri::generate_handler![write_file, write_bytes, read_file, autosave_write, autosave_read, claude_start, claude_stop, mcp_server])
         .run(tauri::generate_context!())
         .expect("error while running Draftsman");
 }
@@ -251,6 +281,12 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("\"type\":\"system\"") && l.contains("session_id")), "no init line");
         let result = lines.iter().find(|l| l.contains("\"type\":\"result\"")).expect("no result line");
         assert!(result.contains("\"is_error\":false"), "{result}");
+    }
+
+    #[test]
+    fn decodes_percent_encoded_paths() {
+        assert_eq!(percent_decode("%2FUsers%2Fa%20b%2Fv%C3%A5.mp4").unwrap(), "/Users/a b/v\u{e5}.mp4");
+        assert!(percent_decode("%2").is_err());
     }
 
     #[test]

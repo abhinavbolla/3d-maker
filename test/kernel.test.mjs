@@ -29,6 +29,8 @@ import { exactSolids } from "../src/kernel/brep.js";
 import { facetedSolids } from "../src/kernel/facets.js";
 import { writeSTEP, exactParts } from "../src/kernel/step.js";
 import { checkStep } from "./check-step.mjs";
+import { writeMP4, readBoxes, avcConfig, annexBUnits } from "../src/kernel/mp4.js";
+import { writeWebM } from "../src/kernel/webm.js";
 
 const mesh = (node, budget = 40000) => {
   const { f, box } = compile(node);
@@ -1860,6 +1862,48 @@ test("the app's Claude is allowed every tool the server offers", () => {
   assert.ok(instructions.length < 3000, `server instructions are ${instructions.length} characters`);
   assert.match(instructions, /call the reference tool/);
   assert.match(app, /import \{ REFERENCE \} from "..\/..\/mcp\/reference.mjs"/);
+});
+
+test("video files: MP4 boxes index every frame, WebM clusters start at key frames", () => {
+  // Fake H.264 frames: 45 frames at 30 a second, a key frame every 30.
+  const frames = Array.from({ length: 45 }, (_, i) => ({ data: new Uint8Array(10 + i).fill(i), timestamp: Math.round((i * 1e6) / 30), key: i % 30 === 0 }));
+  const config = avcConfig(Uint8Array.from([0x67, 0x64, 0x00, 0x28, 1, 2]), Uint8Array.from([0x68, 9, 9]));
+  const mp4 = writeMP4({ frames, config, width: 320, height: 180, fps: 30 });
+  const top = readBoxes(mp4);
+  assert.deepEqual(top.map((b) => b.type), ["ftyp", "moov", "mdat"]);
+  const find = (list, ...path) => path.reduce((b, t) => b.children.find((c) => c.type === t), { children: list });
+  const dv = new DataView(mp4.buffer);
+  const body = (b) => b.start + b.head + 4; // after version and flags
+  const stbl = find(top, "moov", "trak", "mdia", "minf", "stbl");
+  const stsz = find(stbl.children, "stsz");
+  assert.equal(dv.getUint32(body(stsz) + 4), 45);
+  assert.equal(dv.getUint32(body(stsz) + 8), 10);
+  const stss = find(stbl.children, "stss");
+  assert.deepEqual([dv.getUint32(body(stss)), dv.getUint32(body(stss) + 4), dv.getUint32(body(stss) + 8)], [2, 1, 31]);
+  const mdhd = find(top, "moov", "trak", "mdia", "mdhd");
+  assert.equal(dv.getUint32(body(mdhd) + 8) / dv.getUint32(body(mdhd) + 12), 30 / 45, "duration is 45 frames at 30 a second");
+  // The one chunk's offset points at the first frame's bytes in mdat.
+  const stco = find(stbl.children, "stco");
+  const mdat = top[2];
+  assert.equal(dv.getUint32(body(stco) + 4), mdat.start + 8);
+  assert.equal(mp4[mdat.start + 8 + 10], 1, "the second frame follows the first");
+  assert.ok(!find(stbl.children, "ctts"), "no reordering, no composition offsets");
+
+  // Frames with start codes and no description: parameter sets are found.
+  const annexB = (nal) => Uint8Array.from([0, 0, 0, 1, ...nal]);
+  const raw = [{ data: Uint8Array.from([...annexB([0x67, 0x42, 0xe0, 0x1f, 7]), ...annexB([0x68, 1]), ...annexB([0x65, 5, 5, 5])]), timestamp: 0, key: true }];
+  const fromRaw = writeMP4({ frames: raw, config: null, width: 64, height: 64, fps: 30 });
+  const rawTop = readBoxes(fromRaw);
+  const rawMdat = rawTop[2];
+  assert.deepEqual([...fromRaw.subarray(rawMdat.start + 8)], [0, 0, 0, 4, 0x65, 5, 5, 5], "only the picture, length-prefixed");
+  assert.deepEqual(annexBUnits(Uint8Array.from([0, 0, 1, 9, 0, 0, 0, 1, 7, 7, 0])).map((u) => [...u]), [[9], [7, 7]]);
+
+  const webm = writeWebM({ frames, codec: "vp9", width: 320, height: 180, fps: 30 });
+  assert.deepEqual([...webm.subarray(0, 4)], [0x1a, 0x45, 0xdf, 0xa3]);
+  const clusters = [];
+  for (let i = 0; i + 3 < webm.length; i++) if (webm[i] === 0x1f && webm[i + 1] === 0x43 && webm[i + 2] === 0xb6 && webm[i + 3] === 0x75) clusters.push(i);
+  assert.equal(clusters.length, 2, "a cluster at each key frame");
+  assert.ok(new TextDecoder().decode(webm).includes("V_VP9"));
 });
 
 // ---- buildings and floor plans (src/kernel/building.js, floorplan.js) ----

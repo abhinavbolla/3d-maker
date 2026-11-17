@@ -348,6 +348,23 @@ button {
   color: var(--muted);
   font-size: 13px;
 }
+/* While a video is recorded: how far it is, and a way to stop. */
+#recording {
+  margin-top: 2px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+#recording button {
+  margin-left: 8px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
 
 /* ---- view bar: where to look from, and play or pause ---- */
 #views {

@@ -69,8 +69,9 @@ The Export menu saves:
 - **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
 - **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
 - **PLY**: one mesh, each vertex coloured with its part's colour, in millimetres with Z up, like the STL. The part names are in comment lines in its header.
+- **Video (turntable)**: one turn round the model from where you are looking, with its motion playing, at 1920 x 1080 and 30 frames a second. A model whose motion repeats every few seconds gets a whole number of its loops, so the video plays round without a jump.
 
-Motion goes only into the glTF file; the other files hold the parts where the script puts them.
+Motion goes only into the glTF file and the video; the other files hold the parts where the script puts them.
 
 Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
 
@@ -86,6 +87,16 @@ A STEP file holds exact surfaces; our kernel holds distance fields, so a part co
 Those come out as true planes, cylinders, cones, spheres and tori, bounded by lines and circles. Everything else (any `.cut()` or `union` in 3D where shapes meet, smooth blends, rounded boxes, sweeps, lofts, threads, text, twists) comes out as a closed solid of flat faces made from the part's mesh. Neighbouring flat triangles become one face, so flat parts stay light, but a curved faceted part is a few hundred to a few thousand faces. To keep files a sane size, faceted parts are meshed coarser than for STL: 1000 surface cells plus 400 per faceted part, at most 6000, over all of them, shared out by surface area, at least 150 per part. A part that the coarse cells break up (a thin tube whose volume comes out more than 8% short) is meshed again finer, up to about 4000 triangles. The 47-part rotor head (all faceted) comes to about 20 MB, the 21-part helicopter example (8 parts exact) about 13 MB. A visible part that the view itself could not mesh (a plate thinner than its cells) is left out unless it is exact, and named. After an export, the app says how many parts came out exact, and Claude tells you which.
 
 The files are checked by a STEP reader of our own (`node test/check-step.mjs`): every solid closed, every vertex on its curves and surfaces, volumes and sizes matching the model. They have not yet been opened in a CAD program; if one refuses a file, please open an issue with it.
+
+### Pictures and videos by prompt
+
+Ask Claude for the shot you want: "give me a hero shot of the rotor head", "show me the swashplate from below with a long lens", "save this view as Side". Claude places the camera (the view moves there), picks a lens, and saves a studio picture at the size you ask for. Saved views are kept with the model and saved in its file.
+
+For a video, describe it: "a ten second turntable with the rotor spinning", "start wide, move in on the swashplate, then follow one blade round". Claude plans it as shots (a held camera, a turn, a move from one camera to another, following a moving part, with the motion at any speed), looks at a few frames of each, then records it. Each frame is drawn finished at the video's size, and its camera and motion are worked out from its number alone, so the video is smooth however long a frame takes to draw. The window can be any size meanwhile.
+
+A video or picture shows the model as the view does: what you have hidden stays hidden, a section stays cut with its faces hatched, an exploded view stays exploded, and every frame has the shading in the creases. Ask for the whole model first ("show everything") if that is what you want filmed.
+
+While a video is recorded, a line under the prompt box counts the frames; Cancel (or Esc) stops it and nothing is saved. Videos are H.264 in an MP4 file, which every player opens. Where the browser has no H.264 encoder they are VP9 (or VP8) in a WebM file, and the app says so. Sound, motion blur and titles are not part of it yet.
 
 ### The drawing
 
