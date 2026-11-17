@@ -12,7 +12,7 @@
     "mcp": "node mcp/server.mjs",
     "app": "tauri dev",
     "app:build": "tauri build --config src-tauri/tauri.release.conf.json",
-    "test": "node test/kernel.test.mjs && node test/bridge.test.mjs && node test/tools.test.mjs && node test/app.test.mjs",
+    "test": "node test/kernel.test.mjs && node test/bridge.test.mjs && node test/headless.test.mjs && node test/tools.test.mjs && node test/app.test.mjs",
     "test:e2e": "node test/e2e.test.mjs",
     "licenses": "node test/licenses.mjs",
     "try": "node test/run-prompt.mjs"

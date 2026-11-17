@@ -15,7 +15,9 @@ const HISTORY_LIMIT = 200;
 // A document from outside (a file, the autosave) gets a record of its own.
 const own = (doc) => ({ ...doc, drawing: { ...(doc.drawing ?? {}) } });
 
-export function createStore(kernel, initial) {
+// save: keeps the document between runs; the MCP server's own model (no app
+// window open) passes one that keeps nothing.
+export function createStore(kernel, initial, { save = autosave } = {}) {
   const listeners = new Set();
   const state = {
     doc: own(initial ?? emptyDoc()),
@@ -71,7 +73,7 @@ export function createStore(kernel, initial) {
     state.result = result;
     state.error = null;
     if (state.selected && !result.parts.some((p) => p.name === state.selected)) state.selected = null;
-    autosave(doc);
+    save(doc);
   }
 
   // Applies a new document if its script runs; otherwise keeps the current
@@ -134,13 +136,13 @@ export function createStore(kernel, initial) {
 
   function setSession(session) {
     state.doc = { ...state.doc, session };
-    autosave(state.doc);
+    save(state.doc);
   }
 
   // The plan is progress, not part of the model, so it is not in undo history.
   function setPlan(plan) {
     state.doc = { ...state.doc, plan };
-    autosave(state.doc);
+    save(state.doc);
     emit();
   }
 
@@ -150,7 +152,7 @@ export function createStore(kernel, initial) {
   function setDrawing(record, next) {
     for (const k of Object.keys(record)) delete record[k];
     Object.assign(record, next);
-    autosave(state.doc);
+    save(state.doc);
   }
 
   // Saved camera views (camera.js) belong to the document as its drawing
@@ -165,7 +167,7 @@ export function createStore(kernel, initial) {
     }
     for (const k of Object.keys(views)) delete views[k];
     Object.assign(views, next);
-    autosave(state.doc);
+    save(state.doc);
     emit();
   }
 

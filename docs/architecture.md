@@ -100,6 +100,29 @@ Each window has its own id. A Claude run started from a window drives only that 
 with several windows or browser tabs open. The bridge listens on localhost and only accepts the
 app itself, checked by WebSocket origin. [SECURITY.md](../SECURITY.md) has the details.
 
+## With no window open
+
+When no window is connected, the MCP server keeps a model of its own
+([mcp/headless.mjs](../mcp/headless.mjs)): the app's own store, commands and kernel pool
+([store.js](../src/app/store.js), [commands.js](../src/app/commands.js),
+[kernel.js](../src/app/kernel.js)), with no view, no autosave and no fine pass, and the kernel's
+workers as Node worker threads. A thread runs the server's own file, which then runs
+[src/kernel/worker.js](../src/kernel/worker.js) instead of the server, so the one-file bundle the
+desktop app carries works the same. Before the worker loads, the thread takes away what Node has
+and a web worker does not (`process`, `Buffer`, `fetch`), and a script that calls `import()` is
+refused. So `set_model`, `measure`, `check_fit` and every export give what the app gives for the
+same script; tools that draw answer that they need the app.
+
+Threads rather than the main thread, measured on the bracket (test/models/bracket.js): set_model
+706 against 852 ms the first time, 627 against 779 ms after a change; STL export 2.8 against
+3.0 s; drawing 3.1 against 4.6 s. Threads also keep the server answering while a part meshes.
+
+Calls wait for a window only in the 8 s after the bridge starts (an open window finds a new server
+within about 5 s) or after a window goes away (it may be reloading); otherwise they go to the
+server's model at once, and to a window as soon as one says hello. A run the app started
+(`--app`) never uses the server's model. A window keeps its own model: when one connects, the
+server's model is dropped, not pushed into the window or its autosave.
+
 ## Tests
 
 [testing.md](testing.md) lists every test and what it covers, and [benchmarks.md](benchmarks.md)

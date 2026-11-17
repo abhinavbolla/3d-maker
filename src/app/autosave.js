@@ -42,4 +42,5 @@ export function autosave(doc) {
   timer = setTimeout(flush, 300);
 }
 
-window.addEventListener("pagehide", flush);
+// No window when the MCP server loads the store without the app.
+globalThis.window?.addEventListener("pagehide", flush);

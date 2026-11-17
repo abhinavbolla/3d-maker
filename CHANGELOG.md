@@ -22,6 +22,9 @@ Notable changes to Draftsman. The format follows
   parts with tapering edges are meshed stretched through their thickness.
 - Motion and mechanisms: parts that turn, slide, follow and link, joints checked over the whole
   motion, and fit checks that find parts passing into each other at rest and in motion.
+- Models and their files without the app open: with no window connected, the MCP server builds
+  the model itself in Node, so set_model, measure, check_fit and every export work, and tools
+  that draw say at once that they need the app.
 - A Claude Code plugin (`claude plugin marketplace add abhinavbolla/draftsman`, then
   `claude plugin install draftsman@draftsman`) that adds Draftsman's MCP server and a skill with
   the way to work in it, and how to add the server to Claude Desktop, Cursor, VS Code or any other

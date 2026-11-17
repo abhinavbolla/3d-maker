@@ -33,4 +33,6 @@ that path matter most:
   localhost port from 5170 to 5189.
 - **Model scripts are code.** A model is a JavaScript script, run in a web worker with `fetch`,
   `WebSocket` and other browser globals hidden from it. That is a guard against mistakes, not a
-  sandbox, so treat a model file from someone else like any other code.
+  sandbox, so treat a model file from someone else like any other code. With no app window open,
+  the MCP server runs scripts itself, in Node worker threads with `process`, `Buffer`, `fetch`
+  and `WebSocket` taken away and `import()` refused; that too is a guard, not a sandbox.
