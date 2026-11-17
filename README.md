@@ -30,6 +30,8 @@ The [roadmap](docs/roadmap.md) has the plan.
 
 Download the installer for your system from the [releases page](https://github.com/abhinavbolla/draftsman/releases). You also need [Claude Code](https://claude.com/claude-code), installed and logged in, and [Node.js](https://nodejs.org) 20 or newer. The [guide](docs/using.md#install) says what to do when your system warns about an unsigned app.
 
+To drive it from your own Claude Code as well: `/plugin install draftsman --marketplace abhinavbolla/draftsman` ([other clients](docs/using.md#driving-it-from-claude-code)).
+
 ## Run it
 
 Or run it from a clone. You need Node 20 or newer and [Claude Code](https://claude.com/claude-code), installed and logged in. The desktop app also needs Rust and Xcode's command line tools.
