@@ -2,9 +2,10 @@
 // rotor turns, the collective and cyclic sliders raise and tilt the
 // swashplate, and the pitch links pitch each blade as it goes round.
 // 47 parts and 29 joints, made from a prompt in Draftsman; the same script as
-// test/models/claude-rotor-head.js.
+// test/models/claude-rotor-head.js but for its title, which here names no
+// aircraft maker's product.
 
-title("Black Hawk-style main rotor head");
+title("Main rotor head");
 const D = Math.PI / 180;
 // ---------- sliders ----------
 const RPM  = param("Rotor rpm", 20, { min: 0, max: 60, step: 1, part: "Rotor mast" });
