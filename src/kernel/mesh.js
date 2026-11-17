@@ -131,10 +131,14 @@ function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Map()
         const x0 = O[0] + ci * c, y0 = O[1] + cj * c, z0 = O[2] + ck * c;
         const dx = a === 0 ? c : 0, dy = a === 1 ? c : 0, dz = a === 2 ? c : 0;
         // First, cheaply: a wall between the ends has the distance falling
-        // from both ends into the edge. Most edges near a surface run along
-        // it, where it does not.
+        // from both ends into the edge, so rising away from it on both sides
+        // (told by the grid corners beyond, which are mostly known already).
+        // Most edges near a surface run along it, where it does not.
         const s = 0.02;
+        const ai = a === 0 ? 1 : 0, aj = a === 1 ? 1 : 0, ak = a === 2 ? 1 : 0;
         g =
+          at(ci - ai, cj - aj, ck - ak) > f0 + 0.3 * c &&
+          at(ci + 2 * ai, cj + 2 * aj, ck + 2 * ak) > f1 + 0.3 * c &&
           f(x0 + dx * s, y0 + dy * s, z0 + dz * s) < f0 - 0.3 * s * c &&
           f(x0 + dx * (1 - s), y0 + dy * (1 - s), z0 + dz * (1 - s)) < f1 - 0.3 * s * c &&
           wallInEdge(f, x0, y0, z0, x0 + dx, y0 + dy, z0 + dz, f0, f1, c);
@@ -241,7 +245,11 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   let kept, centres;
   let capped = false; // stopped by the cell cap
   let lost = null; // what was missed where cells stopped too coarse for walls
+  // f at this level's grid corners: looking for missed detail fills it, and
+  // dual contouring goes on from it at the last level.
+  let levelVals = new Map();
   for (let level = 0; ; level++) {
+    levelVals = new Map();
     kept = [];
     centres = [];
     const lim = LIP * c * HALF_DIAG;
@@ -266,10 +274,9 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
       if (over && probe) break;
       // Walls are only looked for when slivers alone would not refine (the
       // probe looks for slivers only: walls are what stretching is for).
-      const vals = new Map();
-      let md = missedDetail(f, O, c, kept, centres, over, vals);
+      let md = missedDetail(f, O, c, kept, centres, over, levelVals);
       if (!over) {
-        if (md.slivers <= 0.002 && (probe || (md = missedDetail(f, O, c, kept, centres, true, vals)).walls <= WALLS)) break;
+        if (md.slivers <= 0.002 && (probe || (md = missedDetail(f, O, c, kept, centres, true, levelVals)).walls <= WALLS)) break;
       } else {
         // Past the cap, only for walls going missing over much of the part,
         // and only if cells fine enough for them fit under WALL_CAP.
@@ -290,7 +297,7 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   }
 
   if (probe) {
-    const md = missedDetail(f, O, c, kept, centres);
+    const md = missedDetail(f, O, c, kept, centres, true, levelVals);
     return { slivers: md.slivers, walls: md.walls, cellSize: c };
   }
 
@@ -300,7 +307,7 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   // more than a cell thick, so it comes out whole: thicker than it is, but
   // there.
   if (capped) {
-    const md = missedDetail(f, O, c, kept, centres);
+    const md = missedDetail(f, O, c, kept, centres, true, levelVals);
     if (md.walls > LOST) lost = md;
   }
   let thickened = 0;
@@ -311,7 +318,7 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   }
 
   // ---- 2. dual contouring at cell size c ----
-  const cornerVals = new Map();
+  const cornerVals = lost ? new Map() : levelVals;
   const corner = (i, j, k) => {
     const key = key3(i, j, k);
     let v = cornerVals.get(key);
