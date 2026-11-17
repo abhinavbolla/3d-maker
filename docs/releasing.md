@@ -5,7 +5,7 @@ The desktop app is built for macOS (Apple silicon and Intel), Windows and Linux 
 ## Making a release
 
 1. Set the version in `package.json` (the installers take it from there) and move the `[Unreleased]` notes in `CHANGELOG.md` under that version.
-2. Commit, then tag and push the tag: `git tag v0.3.0 && git push origin v0.3.0`. The workflow also runs from the Actions tab (Release, Run workflow) with the name of a tag that already exists.
+2. Commit, then tag and push the tag: `git tag v0.3.0 && git push origin v0.3.0`. The workflow also runs from the Actions tab (Release, Run workflow) with the name of a tag that already exists and **Dry run** unticked.
 3. The workflow checks that the tag matches `package.json`, makes the draft release, and builds on four machines at once. Each attaches what it made:
 
    | Build | Files |
@@ -17,6 +17,12 @@ The desktop app is built for macOS (Apple silicon and Intel), Windows and Linux 
 
    Each build's log also prints the SHA-256 of every file.
 4. Open the draft on GitHub, write the notes from the changelog, and publish it.
+
+## A dry run
+
+To see that the installers build, without a tag or a release: in the Actions tab open Release, click **Run workflow**, pick the branch, leave the tag empty and **Dry run** ticked (the default), and run it. From the command line: `gh workflow run release.yml --ref main`.
+
+A dry run builds on the same four machines from that branch, with signing on if its secrets exist, but skips the tag check and makes no release. Each machine's installers are kept as an artifact of the run (`installers-<target>`, downloadable from the run's page for 7 days), and the log prints each file's size and SHA-256. A dry run only reads the repository. With a tag given and Dry run ticked, it builds that tag the same way.
 
 To build the same installers on your own machine: `npm run app:build` (it makes the ones for the system you are on, in `src-tauri/target/release/bundle/`).
 
@@ -66,4 +72,4 @@ Say this in the release notes while builds are unsigned.
 
 ## Not checked yet
 
-The workflow has not run yet: the first tag pushed is its first run. Its YAML and shell steps were checked locally, and `npm run app:build` was run on a Mac, but the Windows and Linux builds, signing and uploading have only been read over, not run.
+The workflow has not run yet. A dry run (above) is the way to prove the builds before the first tag. Its YAML and shell steps were checked locally, and `npm run app:build` was run on a Mac, but the Windows and Linux builds, signing and uploading have only been read over, not run.

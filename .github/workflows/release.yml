@@ -3,7 +3,11 @@ name: Release
 # Builds the desktop app for macOS (Apple silicon and Intel), Windows and
 # Linux and attaches the installers to a draft GitHub release, which a person
 # then reads over and publishes. Runs when a version tag (v0.3.0) is pushed,
-# or by hand from the Actions tab with a tag to build.
+# or by hand from the Actions tab with a tag and "Dry run" unticked.
+#
+# A dry run (by hand, "Dry run" ticked, the default) builds the same
+# installers from the branch or tag it was started on, but makes no release:
+# each machine's installers are kept as workflow artifacts for 7 days.
 #
 # Signing switches on by itself when its secrets exist and is skipped when
 # they do not: docs/releasing.md lists them, and what an unsigned build means
@@ -15,8 +19,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build, such as v0.3.0 (it must exist and match package.json's version)"
-        required: true
+        description: "Tag to release, such as v0.3.0 (it must exist and match package.json's version). Leave empty for a dry run of the branch you start it on."
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run: build the installers and keep them as artifacts, with no tag check and no release"
+        type: boolean
+        default: true
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
@@ -25,20 +34,54 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
-
 jobs:
-  # One draft release per tag, made before the builds so each can add its files.
+  # Decides what this run is: a release of a tag, or a dry run of a ref.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            release=true; tag="$REF_NAME"; ref="$REF_NAME"
+          elif [ "$DRY_RUN" = "false" ]; then
+            if [ -z "$INPUT_TAG" ]; then
+              echo "::error::A release needs a tag. Give one, or tick Dry run."
+              exit 1
+            fi
+            release=true; tag="$INPUT_TAG"; ref="$INPUT_TAG"
+          else
+            release=false; tag=""; ref="${INPUT_TAG:-$GITHUB_SHA}"
+          fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [ "$release" = true ]; then echo "Release of $tag."; else echo "Dry run of $ref: no tag check, no release; the installers are kept as artifacts."; fi
+
+  # One draft release per tag, made before the builds.
   draft:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.plan.outputs.ref }}
           persist-credentials: false
 
       - name: Check the tag matches package.json
@@ -61,8 +104,12 @@ jobs:
               --notes "Installers for macOS, Windows and Linux. See CHANGELOG.md for what changed, and docs/using.md#install for how to install and what you need first."
           fi
 
+  # Builds on four machines and keeps each one's installers as an artifact,
+  # in a dry run and a release alike. It only reads the repository.
   build:
-    needs: draft
+    needs: [plan, draft]
+    # Runs after the draft in a release, and without it (skipped) in a dry run.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,14 +130,14 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.plan.outputs.ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@v4
@@ -175,9 +222,8 @@ jobs:
           if [ -n "${SIGNING_CONFIG:-}" ]; then extra=(--config "$SIGNING_CONFIG"); fi
           npx tauri build --config src-tauri/tauri.release.conf.json --target "${{ matrix.target }}" "${extra[@]}"
 
-      - name: Attach the installers to the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # Gathers the installers in one folder and prints each one's size and SHA-256.
+      - name: Collect the installers
         run: |
           bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
           shopt -s nullglob
@@ -186,8 +232,49 @@ jobs:
             echo "::error::No installers were made in $bundle."
             exit 1
           fi
-          for f in "${files[@]}"; do
+          mkdir -p installers
+          cp "${files[@]}" installers/
+          cd installers
+          for f in *; do
             ls -l "$f"
-            if [ "$RUNNER_OS" = "Windows" ]; then (cd "$(dirname "$f")" && certutil -hashfile "$(basename "$f")" SHA256); else shasum -a 256 "$f"; fi
+            if [ "$RUNNER_OS" = "Windows" ]; then certutil -hashfile "$f" SHA256; else shasum -a 256 "$f"; fi
           done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.target }}
+          path: installers/
+          if-no-files-found: error
+          retention-days: 7
+
+  # A release only: attaches every machine's installers to the draft. Like
+  # before, a machine whose build failed adds nothing and the others still
+  # attach theirs.
+  publish:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.outputs.release == 'true' && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: installers
+          merge-multiple: true
+
+      - name: Attach the installers to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(installers/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No machine made any installers."
+            exit 1
+          fi
+          sha256sum "${files[@]}"
           gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
