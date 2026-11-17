@@ -63,6 +63,16 @@ Notable changes to Draftsman. The format follows
   place at a larger scale.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its
   ground-truth meshes.
+- Shading in the creases: once the view rests, the gaps between parts and inside corners are
+  darkened, worked out once in three passes at one pixel per CSS pixel and faded in. Frames
+  drawn while parts move or the view turns cost exactly what they did. Pictures and screenshots
+  include it.
+- A "shaded with edges" look: sharp edges as thin dark lines (prebuilt line geometry, no extra
+  pass) and outlines once the view is still. Claude turns it on or off with the new `set_look`
+  tool, and the app remembers it.
+- Two more materials a script can name: `brushed` and `anodised` metal.
+- `frame()` on the view draws one finished frame, crease shading included, synchronously, at
+  the window's size or a given one.
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
@@ -87,6 +97,10 @@ Notable changes to Draftsman. The format follows
   measure a part's size, volume, surface area, centre of mass and mass in a named material, the
   shortest distance between two parts, and the distance between two points, from the exact
   shapes. New tools: `hide_parts`, `section_view`, `explode_view`, `clear_view` and `measure`.
+- A section's cut faces are hatched, the hatch turned the other way on the next part, as on a
+  drawing. The crease shading treats a cut face as the flat face it is, and with edges on it gets
+  an outline where it ends. Edge lines are cut by the section, hidden with their parts and move
+  with the exploded view, and lines on the back of a part are no longer drawn.
 
 ### Changed
 

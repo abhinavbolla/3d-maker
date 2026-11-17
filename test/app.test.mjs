@@ -565,6 +565,47 @@ joint("Rod", "Piston", top);` });
   check(swiped.pinch > 3, `and a pinch zooms (${Math.round(swiped.pinch)} px)`);
   check(swiped.straight.dy < -15 && Math.abs(swiped.straight.dx) < 4, `and two fingers moved straight up slide the view, not zoom it (${JSON.stringify(swiped.straight)})`);
 
+  // Crease shading: a block standing on a plate, seen from the top. A
+  // finished frame with the shading is darker in the corner where the block
+  // meets the plate, and the same as without it on the open plate, on the
+  // block's top, on the floor beside the plate and on the background.
+  await call("set_model", { script: 'part("Plate", box(200, 200, 20).at(0, 0, 10), { color: "#9aa3ad", material: "plastic" }); part("Block", box(50, 50, 60).at(50, 50, 50), { color: "#9aa3ad", material: "plastic" });' });
+  await w('window.__draftsman.fit("top")');
+  const shade = await w(`(() => {
+    const read = (creases) => {
+      const c = window.__draftsman.frame({ creases });
+      const x = Object.assign(document.createElement("canvas"), { width: c.width, height: c.height }).getContext("2d");
+      x.drawImage(c, 0, 0);
+      return x.getImageData(0, 0, c.width, c.height);
+    };
+    const plain = read(false), shaded = read(true);
+    const k = plain.width / document.querySelector("#viewport canvas").clientWidth;
+    const P = window.__draftsman.screenPosition("Plate"), B = window.__draftsman.screenPosition("Block");
+    const dark = (x, y) => { const i = (Math.round(y * k) * plain.width + Math.round(x * k)) * 4; return [0, 1, 2].reduce((m, c) => Math.max(m, plain.data[i + c] - shaded.data[i + c]), -255); };
+    const patch = (x, y) => { let m = 0; for (let dx = -6; dx <= 6; dx++) for (let dy = -6; dy <= 6; dy++) m = Math.max(m, Math.abs(dark(x + dx, y + dy))); return m; };
+    // From the block's middle towards the plate's, across the corner.
+    const along = []; for (let t = 0; t <= 1; t += 0.01) along.push(dark(B.x + (P.x - B.x) * t, B.y + (P.y - B.y) * t));
+    const floor = { x: P.x + (P.x - B.x) * 2.3, y: P.y + (P.y - B.y) * 2.3 };
+    return { crease: Math.max(...along), plate: patch(P.x, P.y), block: patch(B.x, B.y), floor: patch(floor.x, floor.y), background: patch(10, 10) };
+  })()`);
+  check(shade.crease >= 15, `the crease shading darkens the corner where two parts meet (by ${shade.crease} of 255)`);
+  check(shade.plate <= 1 && shade.block <= 1, `and leaves open flat faces as they were (${shade.plate} and ${shade.block} of 255 at most)`);
+  check(shade.floor <= 1 && shade.background <= 1, `and the floor and the background (${shade.floor} and ${shade.background} of 255 at most)`);
+  // A finished frame at a given size, for recording: read while it is on the
+  // canvas, shaded, and the window's own size back afterwards.
+  const sizedFrame = await w(`(() => {
+    const c = document.querySelector("#viewport canvas"), before = [c.width, c.height];
+    const got = window.__draftsman.frame({ width: 640, height: 360 }, (k) => {
+      const x = Object.assign(document.createElement("canvas"), { width: k.width, height: k.height }).getContext("2d");
+      x.drawImage(k, 0, 0);
+      const d = x.getImageData(0, 0, k.width, k.height).data;
+      let parts = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - d[i + 2]) < 30 && d[i] > 90 && d[i] < 200) parts++;
+      return { size: [k.width, k.height], parts };
+    });
+    return { ...got, before, after: [c.width, c.height] };
+  })()`);
+  check(sizedFrame.size.join() === "640,360" && sizedFrame.parts > 1000 && sizedFrame.after.join() === sizedFrame.before.join(), `frame() draws at a given size and gives the window its size back (${JSON.stringify(sizedFrame)})`);
+
   // ---- Looking inside and checking, by prompt: hide, section, explode, measure ----
   // A block, a can and a ball whose sizes, volumes and gaps are known by hand.
   await call("set_model", { script: 'part("Block", box(40, 20, 10).at(0, 0, 5), { color: "#3060c0" });\npart("Can", cylinder(10, 30).at(50, 0, 15), { color: "#d0a020" });\npart("Ball", sphere(15).at(0, 60, 15), { color: "#c03020" });' });
@@ -655,15 +696,17 @@ joint("Rod", "Piston", top);` });
   const frontCut = await snap({ view: "front" });
   // The front view looks into the cut. It frames x -20 to 60 and z 0 to 30
   // (with 6% to spare): 300 / 42.4 px per mm. The block's cut face is 40 x
-  // 10 mm and the can's 20 x 30 mm, each filled in one flat colour.
+  // 10 mm and the can's 20 x 30 mm, each filled in its own colour and
+  // hatched over it, so a colour picked on the face (fill or hatch) covers
+  // the whole face: its area is the box around it.
   const ppm = 300 / 42.4;
   const toPx = (x, z) => [Math.round(300 + (x - 20) * ppm), Math.round(225 - (z - 15) * ppm)];
   const blockColour = await pixelAt(frontCut, ...toPx(0, 5));
   const canColour = await pixelAt(frontCut, ...toPx(50, 15));
   const blockFace = await near(frontCut, blockColour, 6);
   const canFace = await near(frontCut, canColour, 6);
-  const areaMm = (f) => Math.round(f.n / ppm ** 2);
-  check(frontCut !== frontWhole && Math.abs(areaMm(blockFace) / 400 - 1) < 0.04 && Math.abs(areaMm(canFace) / 600 - 1) < 0.04, `the cut faces are filled, each in one flat colour: ${areaMm(blockFace)} and ${areaMm(canFace)} mm2 (400 and 600 exact)`);
+  const areaMm = (f) => Math.round(((f.x1 - f.x0 + 1) * (f.y1 - f.y0 + 1)) / ppm ** 2);
+  check(frontCut !== frontWhole && Math.abs(areaMm(blockFace) / 400 - 1) < 0.04 && Math.abs(areaMm(canFace) / 600 - 1) < 0.04 && blockFace.n > 0.1 * areaMm(blockFace) * ppm ** 2, `the cut faces are filled and hatched: ${areaMm(blockFace)} and ${areaMm(canFace)} mm2 (400 and 600 exact)`);
   check(Math.abs((blockFace.x1 - blockFace.x0 + 1) / ppm - 40) < 0.5 && Math.abs((canFace.y1 - canFace.y0 + 1) / ppm - 30) < 0.5, `and the right size: ${((blockFace.x1 - blockFace.x0 + 1) / ppm).toFixed(1)} mm wide, ${((canFace.y1 - canFace.y0 + 1) / ppm).toFixed(1)} mm high`);
   const lineNow = await w('document.getElementById("inspect-line").textContent');
   check(/^Section at Y = 0 mm/.test(lineNow), `the line says where the section is (${lineNow})`);
@@ -718,6 +761,49 @@ joint("Rod", "Piston", top);` });
   await esc();
   const secondEsc = await w('document.getElementById("inspect-line").hidden');
   check(firstEsc[0] === null && firstEsc[1] === false && secondEsc === true, `Esc deselects first, then shows the whole model (${JSON.stringify(firstEsc)}, ${secondEsc})`);
+
+  // A section with the crease shading and the edges: a block with a peg on
+  // it, cut down the middle and seen straight into the cut. The cut faces
+  // are hatched; the shading leaves them as they are; with edges on, the
+  // line where the peg's cut face meets the block's is drawn, and no line
+  // of the half cut away or of the back of the parts shows on a cut face.
+  await call("set_model", { script: 'part("Block", box(80, 40, 40).at(0, 0, 20), { color: "#9aa3ad", material: "brushed" });\npart("Peg", cylinder(10, 40).at(0, 0, 60), { color: "#9aa3ad", material: "anodised" });' });
+  await call("screenshot", { width: 200, height: 150 });
+  const into = (await call("section_view", { axis: "y", offset: 0 })).result?.look_into_it_from;
+  await w(`window.__draftsman.fit(${JSON.stringify(into)})`);
+  // Each against the same frame without shading or edges.
+  const cutLook = await w(`(async () => {
+    const read = async (creases, edges) => {
+      await window.__draftsman.call("set_look", { edges });
+      const c = window.__draftsman.frame({ creases });
+      const x = Object.assign(document.createElement("canvas"), { width: c.width, height: c.height }).getContext("2d");
+      x.drawImage(c, 0, 0);
+      return x.getImageData(0, 0, c.width, c.height);
+    };
+    const plain = await read(false, false), shaded = await read(true, false), edged = await read(true, true);
+    await window.__draftsman.call("set_look", { edges: false });
+    const k = plain.width / document.querySelector("#viewport canvas").clientWidth;
+    const at = (img, x, y) => { const i = (Math.round(y * k) * img.width + Math.round(x * k)) * 4; return [img.data[i], img.data[i + 1], img.data[i + 2]]; };
+    const dark = (img, x, y) => { const a = at(plain, x, y), b = at(img, x, y); return Math.max(a[0] - b[0], a[1] - b[1], a[2] - b[2]); };
+    const B = window.__draftsman.screenPosition("Block"), P = window.__draftsman.screenPosition("Peg");
+    const out = {};
+    for (const [name, img] of [["shaded", shaded], ["edges", edged]]) {
+      // The block's cut face around its middle.
+      let most = 0;
+      for (let dx = -10; dx <= 10; dx++) for (let dy = -4; dy <= 4; dy++) most = Math.max(most, Math.abs(dark(img, B.x + dx, B.y + dy)));
+      // Up from the block's middle to the peg's: where their cut faces meet.
+      let line = 0; for (let t = 0; t <= 1; t += 0.005) line = Math.max(line, dark(img, B.x + (P.x - B.x) * t, B.y + (P.y - B.y) * t));
+      out[name] = { cutFace: most, meet: line };
+    }
+    let lo = 255, hi = 0;
+    for (let dx = -10; dx <= 10; dx++) for (let dy = -4; dy <= 4; dy++) { const v = at(plain, B.x + dx, B.y + dy)[1]; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    out.hatch = hi - lo;
+    return out;
+  })()`);
+  check(into && cutLook.shaded.cutFace <= 1 && cutLook.shaded.meet <= 1, `with a section, the crease shading leaves the flat cut faces as they are (${JSON.stringify(cutLook.shaded)})`);
+  check(cutLook.hatch >= 25, `cut faces are hatched over their fill (${cutLook.hatch} levels between hatch and fill)`);
+  check(cutLook.edges.cutFace <= 1 && cutLook.edges.meet >= 60, `with edges on, the line where two cut faces meet is drawn, and nothing else on the cut face: no line of the half cut away or of the parts' backs (${JSON.stringify(cutLook.edges)})`);
+  await call("clear_view");
 
   // What the view costs the GPU, counted below three.js on a Retina-sized
   // window, with the rotor head (47 parts that turn). A still view draws
@@ -787,6 +873,54 @@ joint("Rod", "Piston", top);` });
   const fewer = await cost(`window.__frames.step(30)`);
   check(perFrame(fewer, "draws") < perFrame(sectioned, "draws") && perFrame(fewer, "triangles") < perFrame(sectioned, "triangles"), `hiding the blades draws less (${per(fewer)})`);
   await h.command(g, "clear_view");
+
+  // Crease shading costs nothing while things move: it is worked out once,
+  // when the view has rested, in one step of three passes, then nothing is
+  // drawn. A change that leaves the view as it was (a selection) keeps it.
+  await g(`document.getElementById("play").click(); window.__frames.step(2)`);
+  const quiet = await cost(`window.__frames.step(10)`);
+  await sleep(600);
+  const rested = await cost(`window.__frames.step(1)`);
+  const overlay = () => g(`(() => { const o = document.querySelectorAll("#viewport canvas")[1]; return Boolean(o && !o.hidden && o.width); })()`);
+  const shownAfter = await overlay();
+  check(quiet.draws === 0 && rested.frames === 1 && rested.passes === 3 && shownAfter, `once the view rests, the crease shading is worked out in one step of 3 passes (${(rested.samples / rested.canvas).toFixed(2)} samples per window pixel, ${Math.round(rested.triangles / 1000)} thousand triangles), not before (${quiet.draws} draws)`);
+  const restAfter = await cost(`window.__frames.step(120); await new Promise((r) => setTimeout(r, 2000))`);
+  check(restAfter.draws === 0, `after that a still view draws nothing (${JSON.stringify(restAfter)})`);
+  const picked2 = await cost(`window.__draftsman.select(window.__draftsman.state().parts[0]); window.__frames.step(2)`);
+  check(picked2.frames >= 1 && picked2.passes === 2 * picked2.frames && (await overlay()), `a selection draws the view once and keeps the shading (${picked2.passes} passes in ${picked2.frames} frames)`);
+  await g(`window.__draftsman.select(null); window.__frames.step(2)`);
+  // Turning the view with the shading on and with it off costs the same.
+  const turnFrom = (js) => cost(`window.__draftsman.fit(); ${js}; window.__frames.step(1); window.__gl.take(); const c = document.querySelector("#viewport canvas"); const ev = (t, x) => c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: 300, button: 0, buttons: 1, pointerId: 9, bubbles: true })); ev("pointerdown", 300); for (let i = 1; i <= 6; i++) { ev("pointermove", 300 + i * 10); window.__frames.step(1); } ev("pointerup", 360); window.__frames.step(1)`);
+  const turnOff = await turnFrom(`window.__draftsman.look({ creases: false })`);
+  const turnOn = await turnFrom(`window.__draftsman.look({ creases: true })`);
+  const sameCost = (a, b) => ["frames", "passes", "draws", "pixels", "samples", "triangles"].every((k) => a[k] === b[k]);
+  check(turnOn.frames === 7 && sameCost(turnOff, turnOn) && !(await overlay()), `turning the view costs the same with the shading as without, and hides it (${JSON.stringify(turnOn)})`);
+  // Edges: lines beside each part, a few draws more, no pass, sample or triangle more.
+  const turnEdges = await turnFrom(`await window.__draftsman.call("set_look", { edges: true })`);
+  const remembered = await g(`localStorage.getItem("draftsman:look")`);
+  const turnPlain = await turnFrom(`await window.__draftsman.call("set_look", { edges: false })`);
+  const partCount = (await g("window.__draftsman.state().parts")).length;
+  check(turnEdges.passes === turnOn.passes && turnEdges.samples === turnOn.samples && turnEdges.triangles === turnOn.triangles && turnEdges.draws > turnOn.draws && turnEdges.draws <= turnOn.draws + turnOn.frames * partCount, `edges on adds lines (${turnEdges.draws - turnOn.draws} draws more in ${turnOn.frames} frames) and no pass, sample or triangle`);
+  check(sameCost(turnPlain, turnOn) && /"edges":false/.test(await g(`localStorage.getItem("draftsman:look")`)) && /"edges":true/.test(remembered), `edges off takes them away again, and the choice is remembered (${remembered})`);
+  // Exploding: while the parts move the shading is gone and each frame is a
+  // plain one; once they rest it is worked out again for where they are.
+  await g("window.__frames.step(2)");
+  await sleep(600);
+  await g("window.__frames.step(1)");
+  const shadeImage = () => g(`(() => { const o = document.querySelectorAll("#viewport canvas")[1]; return o.hidden ? null : o.toDataURL(); })()`);
+  const beforeExplode = await shadeImage();
+  await h.command(g, "explode_view", { factor: 1, axis: "z" });
+  const exploding = await cost(`for (let i = 0; i < 8; i++) { window.__frames.step(1); await new Promise((r) => setTimeout(r, 20)); }`);
+  const hiddenWhileMoving = (await shadeImage()) === null;
+  for (let i = 0; i < 100 && (await g("window.__draftsman.exploding()")); i++) await g("window.__frames.step(1); new Promise((r) => setTimeout(r, 50))");
+  await g("window.__frames.step(2)");
+  await sleep(600);
+  const reshaded = await cost(`window.__frames.step(1)`);
+  const afterExplode = await shadeImage();
+  check(beforeExplode && hiddenWhileMoving && exploding.frames > 0 && exploding.passes <= 3 * exploding.frames && exploding.passes >= 2 * exploding.frames, `while an exploded view moves the shading is hidden and frames are plain (${exploding.passes} passes in ${exploding.frames} frames)`);
+  check(reshaded.passes === 3 && afterExplode && afterExplode !== beforeExplode, `when it stops, the shading is worked out again for the parts where they now are (${reshaded.passes} passes)`);
+  await h.command(g, "clear_view");
+  await g("window.__frames.step(2)");
 
   // An empty window offers the examples; one click opens a ready model
   // without Claude, loaded only then, with a clean undo history and two
