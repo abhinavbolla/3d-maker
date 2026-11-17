@@ -10,6 +10,8 @@ import { loadAutosave } from "./app/autosave.js";
 import { saveBytes, openText, saveOBJ } from "./app/files.js";
 import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
+import { createDirector } from "./app/director.js";
+import { makeFloorPlan } from "./app/floorplan.js";
 import { showExamples, exampleScript, tryText } from "./app/examples.js";
 import { mountInspectLine } from "./app/inspect-tools.js";
 
@@ -58,7 +60,19 @@ const claude = createClaude({
   },
 });
 
-const commands = createCommands({ store, viewport, kernel });
+// The camera and video commands (director.js), with a quiet line while a
+// video is recorded: how far it is, and Cancel.
+const director = createDirector({
+  kernel,
+  store,
+  viewport,
+  onRecording(p) {
+    $("recording").hidden = !p;
+    if (p) $("recording-text").textContent = p.total ? `Recording video · frame ${p.done} of ${p.total}` : "Recording video";
+  },
+});
+$("recording-cancel").addEventListener("click", () => director.cancel());
+const commands = { ...createCommands({ store, viewport, kernel }), ...director.commands };
 // While parts are hidden, cut or exploded, a line above the prompt says so.
 const clearView = mountInspectLine({ viewport, dock: $("dock"), before: $("progress") });
 let bridgeActivity = "";
@@ -367,6 +381,7 @@ const actions = {
   // alone at 1:1, DXF), "png" (a studio picture of the view), "glb", "obj" or "ply".
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
+    if (kind === "video") return exportVideo();
     if (kind === "png") {
       const { png } = viewport.picture();
       const where = await saveBytes(Uint8Array.from(atob(png), (c) => c.charCodeAt(0)), `${fileName()}.png`, "png");
@@ -391,6 +406,19 @@ const actions = {
         return say(err.message, 8000);
       }
     }
+    // A floor plan of a building, saved as SVG, PDF or DXF like the drawing.
+    const planFormat = { plan: "svg", "plan-pdf": "pdf", "plan-dxf": "dxf" }[kind];
+    if (planFormat) {
+      say("Making the floor plan", 0);
+      try {
+        const plan = await makeFloorPlan({ store, kernel }, { format: planFormat });
+        const where = await saveBytes(plan.result.bytes, `${fileName()}-plan.${planFormat}`, planFormat);
+        if (where) plan.keep();
+        return say(where ? `Exported ${where.split("/").pop()}. ${plan.result.line}` : "", 20000);
+      } catch (err) {
+        return say(err.message, 8000);
+      }
+    }
     // Drawings: the sheet as SVG, PDF or DXF, or the section alone at 1:1 for cutting.
     const sheet = { svg: {}, pdf: { format: "pdf" }, dxf: { format: "dxf" }, outline: { format: "dxf", outline: "section" } }[kind];
     say(kind === "solid" ? "Joining the parts into one solid" : sheet ? "Making the drawing" : "Exporting", 0);
@@ -409,12 +437,27 @@ const actions = {
     }
   },
 };
+// Export > Video (turntable): one turn round the model, saved as MP4 (or
+// WebM where the browser cannot encode H.264, which it then says).
+async function exportVideo() {
+  if (director.isRecording()) return;
+  let film;
+  try {
+    film = await director.turntable();
+  } catch (err) {
+    return say(/cancelled/.test(err.message) ? "Recording cancelled. Nothing was saved." : err.message, 8000);
+  }
+  const where = await saveBytes(film.bytes, `${fileName()}.${film.container}`, film.container);
+  if (where) say(`Saved ${where.split("/").pop()}${film.container === "webm" ? `. This browser cannot encode H.264, so the video is ${film.label}.` : ""}`, 8000);
+}
 document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("click", () => actions[b.dataset.action]().catch((err) => say(err.message, 8000))));
 
 // Export menu: a picture, STL, STL as one solid, 3MF, or a drawing.
 const exportMenu = $("export-menu");
 const showExportMenu = (open) => {
   exportMenu.hidden = !open;
+  // Floor plans only for a model with a building in it.
+  exportMenu.querySelectorAll('[data-export^="plan"]').forEach((b) => (b.hidden = !store.state.result?.building));
   $("export-button").setAttribute("aria-expanded", String(open));
   if (open) exportMenu.querySelector("button").focus();
 };
@@ -429,13 +472,14 @@ document.addEventListener("pointerdown", (e) => {
   if (!exportMenu.hidden && !e.target.closest(".menu")) showExportMenu(false);
 });
 exportMenu.addEventListener("keydown", (e) => {
-  const items = [...exportMenu.querySelectorAll("button")];
+  const items = [...exportMenu.querySelectorAll("button:not([hidden])")];
   const at = items.indexOf(document.activeElement);
   if (e.key === "Escape") e.stopPropagation(), showExportMenu(false), $("export-button").focus();
   else if (e.key === "ArrowDown" || e.key === "ArrowUp") e.preventDefault(), items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
 });
 
 addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && director.isRecording()) return e.preventDefault(), director.cancel();
   const typing = e.target.closest?.("textarea, input");
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === "s") return e.preventDefault(), actions.save();
@@ -480,6 +524,11 @@ if (import.meta.env.DEV) {
     exploding: () => viewport.inspect.animating(),
     turningPoint: () => viewport.turningPoint(),
     call: (name, args = {}) => commands[name](args),
+    camera: () => Object.fromEntries(Object.entries(viewport.liveCamera()).map(([k, v]) => [k, v?.toArray ? v.toArray() : v])),
+    cancelRecording: () => director.cancel(),
+    partMatrix: (name, t) => viewport.partsAt(t).get(name)?.matrix.elements,
+    views: () => store.state.doc.views ?? {},
+    exportVideo: () => exportVideo(),
     history: () => ({ undo: store.state.past.length, redo: store.state.future.length }),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
   };

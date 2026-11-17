@@ -8,6 +8,7 @@ import { checkPairs } from "./fit.js";
 import { viewOutline, sectionView, sectionCut } from "./drawing.js";
 import { markedView, partFeatures, sectionMarks, surfaceBounds } from "./holes.js";
 import { measureJob } from "./measure.js";
+import { floorPlanSVG } from "./floorplan.js";
 
 // A part with at least this many triangles gets a lighter copy, its vertices
 // merged over this many of its cells: about a ninth of the triangles.
@@ -17,7 +18,7 @@ const LIGHT_CELLS = 3;
 self.onmessage = ({ data: job }) => {
   try {
     if (job.type === "run") {
-      const r = runScript(job.script, job.values);
+      const r = runScript(job.script, job.values, { times: job.times });
       // Each part's bounding box, so the app can size detail to the whole model.
       for (const p of r.parts ?? []) p.box = compile(p.node).box;
       // Shape trees go back as data so any worker can mesh them.
@@ -75,6 +76,8 @@ self.onmessage = ({ data: job }) => {
         result.marks = sectionMarks(partFeatures(parts), job.section, result.view);
       } else result = job.opts?.marks ? markedView(parts, job.view, job.opts) : viewOutline(parts, job.view, job.opts);
       self.postMessage({ id: job.id, ok: true, result });
+    } else if (job.type === "floorplan") {
+      self.postMessage({ id: job.id, ok: true, result: floorPlanSVG(job) });
     }
   } catch (err) {
     self.postMessage({ id: job.id, ok: false, error: String(err?.message ?? err) });

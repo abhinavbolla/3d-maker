@@ -51,6 +51,7 @@ To run it from the source instead, see the [README](../README.md#run-it).
 - Real hardware at ISO metric sizes: threads, bolts, nuts, washers, and the clearance, tapped, counterbored or countersunk holes that fit them. Moulded parts can have draft.
 - Materials: metal, brushed metal, anodised metal, paint, plastic, rubber and glass.
 - Motion: parts that turn, slide, follow each other or are linked by rods. Claude declares every joint, and the app checks over the whole motion that no joint comes apart and no parts pass into each other.
+- Buildings of one storey: outer walls round a footprint, inner walls joined at corners and T-junctions, doors and windows cut into named walls (each with its frame, leaf or glass), a floor slab, a flat or gable roof and a straight stair. Rooms are named by a point inside them, and their areas come from the walls round them. Ask for "a two-bedroom house, about 9 by 7 metres", then for its floor plan.
 
 ## Getting it out
 
@@ -64,11 +65,13 @@ The Export menu saves:
 - **Drawing, PDF**: the same sheet as a PDF at its real size, to print or send.
 - **Drawing, DXF**: the same sheet as a DXF for 2D CAD programs, on layers: VISIBLE, HIDDEN, CENTRE, SECTION, HATCH, DIMENSIONS, DETAIL, FRAME and TITLE.
 - **Outline, DXF**: one section alone at true size (1:1, in mm, no sheet), for a laser or water-jet cutter.
+- **Floor plan**: for a building, an A3 sheet as an SVG at 1:50 or 1:100: the walls cut 1200 mm above the floor and filled dark, windows in their openings, doors open with their swing, each room's name, area and inside sizes, dimension chains outside every wall (to each opening, and overall), the roof's edge dashed, a north arrow, a scale bar and the same title block as the drawing. **Floor plan, PDF** and **Floor plan, DXF** give the same sheet to print or for 2D CAD, the DXF on layers WALLS, OPENINGS, DIMENSIONS, TEXT, ROOF, FRAME and TITLE. These appear only when the model is a building.
 - **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
 - **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
 - **PLY**: one mesh, each vertex coloured with its part's colour, in millimetres with Z up, like the STL. The part names are in comment lines in its header.
+- **Video (turntable)**: one turn round the model from where you are looking, with its motion playing, at 1920 x 1080 and 30 frames a second. A model whose motion repeats every few seconds gets a whole number of its loops, so the video plays round without a jump.
 
-Motion goes only into the glTF file; the other files hold the parts where the script puts them.
+Motion goes only into the glTF file and the video; the other files hold the parts where the script puts them.
 
 Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
 
@@ -84,6 +87,16 @@ A STEP file holds exact surfaces; our kernel holds distance fields, so a part co
 Those come out as true planes, cylinders, cones, spheres and tori, bounded by lines and circles. Everything else (any `.cut()` or `union` in 3D where shapes meet, smooth blends, rounded boxes, sweeps, lofts, threads, text, twists) comes out as a closed solid of flat faces made from the part's mesh. Neighbouring flat triangles become one face, so flat parts stay light, but a curved faceted part is a few hundred to a few thousand faces. To keep files a sane size, faceted parts are meshed coarser than for STL: 1000 surface cells plus 400 per faceted part, at most 6000, over all of them, shared out by surface area, at least 150 per part. A part that the coarse cells break up (a thin tube whose volume comes out more than 8% short) is meshed again finer, up to about 4000 triangles. The 47-part rotor head (all faceted) comes to about 20 MB, the 21-part helicopter example (8 parts exact) about 13 MB. A visible part that the view itself could not mesh (a plate thinner than its cells) is left out unless it is exact, and named. After an export, the app says how many parts came out exact, and Claude tells you which.
 
 The files are checked by a STEP reader of our own (`node test/check-step.mjs`): every solid closed, every vertex on its curves and surfaces, volumes and sizes matching the model. They have not yet been opened in a CAD program; if one refuses a file, please open an issue with it.
+
+### Pictures and videos by prompt
+
+Ask Claude for the shot you want: "give me a hero shot of the rotor head", "show me the swashplate from below with a long lens", "save this view as Side". Claude places the camera (the view moves there), picks a lens, and saves a studio picture at the size you ask for. Saved views are kept with the model and saved in its file.
+
+For a video, describe it: "a ten second turntable with the rotor spinning", "start wide, move in on the swashplate, then follow one blade round". Claude plans it as shots (a held camera, a turn, a move from one camera to another, following a moving part, with the motion at any speed), looks at a few frames of each, then records it. Each frame is drawn finished at the video's size, and its camera and motion are worked out from its number alone, so the video is smooth however long a frame takes to draw. The window can be any size meanwhile.
+
+A video or picture shows the model as the view does: what you have hidden stays hidden, a section stays cut with its faces hatched, an exploded view stays exploded, and every frame has the shading in the creases. Ask for the whole model first ("show everything") if that is what you want filmed.
+
+While a video is recorded, a line under the prompt box counts the frames; Cancel (or Esc) stops it and nothing is saved. Videos are H.264 in an MP4 file, which every player opens. Where the browser has no H.264 encoder they are VP9 (or VP8) in a WebM file, and the app says so. Sound, motion blur and titles are not part of it yet.
 
 ### The drawing
 

@@ -146,7 +146,7 @@ export function createKernel() {
     );
     // Keep this build's meshes and a few recent ones (slider back-and-forth).
     for (const key of cache.keys()) if (!keep.has(key) && cache.size > keep.size + 60) cache.delete(key);
-    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, motion: r.motion, joints: r.joints, parts, ms: Math.round(performance.now() - t0), quality };
+    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, motion: r.motion, joints: r.joints, building: r.building, parts, ms: Math.round(performance.now() - t0), quality };
   }
 
   function detailFor(parts, quality) {
@@ -324,6 +324,15 @@ export function createKernel() {
     };
   }
 
+  // A floor plan of the building on an A3 sheet (see kernel/floorplan.js),
+  // cut from the walls' distance functions in a worker. result: the build.
+  async function exportFloorPlan(result, { info = {} } = {}) {
+    if (!result?.building) throw new Error("This model has no building to draw a plan of. A floor plan is made from outerWalls(), wall(), door(), window() and room() in the script.");
+    const parts = result.parts.filter((p) => !p.hidden).map((p) => ({ name: p.name, node: p.node }));
+    const r = await job({ type: "floorplan", building: result.building, parts, info: { date: today(), type: "Floor plan", ...info } }, MESH_TIMEOUT_MS, "Making the floor plan took too long.");
+    return { bytes: new TextEncoder().encode(r.svg), scale: r.scale, titles: r.titles, rooms: r.facts.rooms, openings: r.facts.openings.length, cut_height_mm: r.facts.cut_height_mm };
+  }
+
   // One outline at true size, for cutting: a section's cut faces as closed
   // loops, or one view's visible lines. section: { axis, offset }; with no
   // axis the cut is square across the model's thinnest side, at its middle
@@ -387,10 +396,19 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
+  // Every moving part's exact pose at each of these motion times (a
+  // recording's frames), from running the script's motion itself:
+  // { name: Float32Array of times.length x 12 }.
+  async function posesAt(doc, times) {
+    const r = await job({ type: "run", script: doc.script, values: doc.values, times }, RUN_TIMEOUT_MS, "Working out the motion for the recording took too long.");
+    if (r.error) throw new Error(r.error);
+    return r.poses ?? {};
+  }
+
   // Volume and centre of mass of each part, from its distance function
   // (kernel/measure.js), one worker per part; and how close two parts come.
   const measureSolids = (parts) => Promise.all(parts.map((p) => job({ type: "measure", what: "solid", node: p.node }, FIT_TIMEOUT_MS, `Measuring part "${p.name}" took too long.`)));
   const measureGap = (a, b) => job({ type: "measure", what: "gap", a: a.node, b: b.node }, FIT_TIMEOUT_MS, "Measuring the distance took too long.");
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportOutline, checkFit, exportGLB, exportOBJ, exportPLY, measureSolids, measureGap };
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportFloorPlan, exportOutline, checkFit, exportGLB, exportOBJ, exportPLY, measureSolids, measureGap, posesAt };
 }

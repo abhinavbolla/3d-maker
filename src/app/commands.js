@@ -1,5 +1,7 @@
 // What Claude can do in the app, called through the MCP bridge.
 import { makeDrawing } from "./sheet.js";
+import { makeFloorPlan } from "./floorplan.js";
+import { buildingSummary } from "../kernel/building.js";
 import { objWithMtl, mtlFileName } from "../kernel/obj.js";
 import { createInspectCommands } from "./inspect-tools.js";
 
@@ -29,10 +31,12 @@ export function summarize(state) {
   if (all) out.overall = { min: all.slice(0, 3).map(r1), max: all.slice(3).map(r1), size: [0, 1, 2].map((i) => r1(all[i + 3] - all[i])) };
   out.params = res.params.map(({ key, value, min, max }) => ({ key, value, min, max }));
   if (res.motion) out.motion = { loop_seconds: res.motion.loop, joints: res.motion.joints, links: res.motion.links };
+  if (res.building) out.building = buildingSummary(res.building);
   if (res.warnings?.length) out.warnings = res.warnings;
   if (res.prints?.length) out.printed = res.prints;
   if (state.selected) out.selected_by_user = state.selected;
   if (state.doc.plan) out.plan = planProgress(state.doc.plan);
+  if (Object.keys(state.doc.views ?? {}).length) out.saved_views = Object.keys(state.doc.views);
   return out;
 }
 
@@ -181,6 +185,7 @@ export function createCommands({ store, viewport, kernel }) {
       keep();
       return exported(result);
     },
+    export_floor_plan: async (args = {}) => (({ result, keep }) => (keep(), exported(result)))(await makeFloorPlan({ store, kernel }, args)),
     export_glb: async () => exported(await kernel.exportGLB(store.state.result ?? { parts: [] })),
     // mtl: the name of the MTL file the OBJ refers to; the MCP server writes
     // both files.

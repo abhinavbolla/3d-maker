@@ -29,6 +29,8 @@ import { exactSolids } from "../src/kernel/brep.js";
 import { facetedSolids } from "../src/kernel/facets.js";
 import { writeSTEP, exactParts } from "../src/kernel/step.js";
 import { checkStep } from "./check-step.mjs";
+import { writeMP4, readBoxes, avcConfig, annexBUnits } from "../src/kernel/mp4.js";
+import { writeWebM } from "../src/kernel/webm.js";
 
 const mesh = (node, budget = 40000) => {
   const { f, box } = compile(node);
@@ -1860,6 +1862,164 @@ test("the app's Claude is allowed every tool the server offers", () => {
   assert.ok(instructions.length < 3000, `server instructions are ${instructions.length} characters`);
   assert.match(instructions, /call the reference tool/);
   assert.match(app, /import \{ REFERENCE \} from "..\/..\/mcp\/reference.mjs"/);
+});
+
+test("video files: MP4 boxes index every frame, WebM clusters start at key frames", () => {
+  // Fake H.264 frames: 45 frames at 30 a second, a key frame every 30.
+  const frames = Array.from({ length: 45 }, (_, i) => ({ data: new Uint8Array(10 + i).fill(i), timestamp: Math.round((i * 1e6) / 30), key: i % 30 === 0 }));
+  const config = avcConfig(Uint8Array.from([0x67, 0x64, 0x00, 0x28, 1, 2]), Uint8Array.from([0x68, 9, 9]));
+  const mp4 = writeMP4({ frames, config, width: 320, height: 180, fps: 30 });
+  const top = readBoxes(mp4);
+  assert.deepEqual(top.map((b) => b.type), ["ftyp", "moov", "mdat"]);
+  const find = (list, ...path) => path.reduce((b, t) => b.children.find((c) => c.type === t), { children: list });
+  const dv = new DataView(mp4.buffer);
+  const body = (b) => b.start + b.head + 4; // after version and flags
+  const stbl = find(top, "moov", "trak", "mdia", "minf", "stbl");
+  const stsz = find(stbl.children, "stsz");
+  assert.equal(dv.getUint32(body(stsz) + 4), 45);
+  assert.equal(dv.getUint32(body(stsz) + 8), 10);
+  const stss = find(stbl.children, "stss");
+  assert.deepEqual([dv.getUint32(body(stss)), dv.getUint32(body(stss) + 4), dv.getUint32(body(stss) + 8)], [2, 1, 31]);
+  const mdhd = find(top, "moov", "trak", "mdia", "mdhd");
+  assert.equal(dv.getUint32(body(mdhd) + 8) / dv.getUint32(body(mdhd) + 12), 30 / 45, "duration is 45 frames at 30 a second");
+  // The one chunk's offset points at the first frame's bytes in mdat.
+  const stco = find(stbl.children, "stco");
+  const mdat = top[2];
+  assert.equal(dv.getUint32(body(stco) + 4), mdat.start + 8);
+  assert.equal(mp4[mdat.start + 8 + 10], 1, "the second frame follows the first");
+  assert.ok(!find(stbl.children, "ctts"), "no reordering, no composition offsets");
+
+  // Frames with start codes and no description: parameter sets are found.
+  const annexB = (nal) => Uint8Array.from([0, 0, 0, 1, ...nal]);
+  const raw = [{ data: Uint8Array.from([...annexB([0x67, 0x42, 0xe0, 0x1f, 7]), ...annexB([0x68, 1]), ...annexB([0x65, 5, 5, 5])]), timestamp: 0, key: true }];
+  const fromRaw = writeMP4({ frames: raw, config: null, width: 64, height: 64, fps: 30 });
+  const rawTop = readBoxes(fromRaw);
+  const rawMdat = rawTop[2];
+  assert.deepEqual([...fromRaw.subarray(rawMdat.start + 8)], [0, 0, 0, 4, 0x65, 5, 5, 5], "only the picture, length-prefixed");
+  assert.deepEqual(annexBUnits(Uint8Array.from([0, 0, 1, 9, 0, 0, 0, 1, 7, 7, 0])).map((u) => [...u]), [[9], [7, 7]]);
+
+  const webm = writeWebM({ frames, codec: "vp9", width: 320, height: 180, fps: 30 });
+  assert.deepEqual([...webm.subarray(0, 4)], [0x1a, 0x45, 0xdf, 0xa3]);
+  const clusters = [];
+  for (let i = 0; i + 3 < webm.length; i++) if (webm[i] === 0x1f && webm[i + 1] === 0x43 && webm[i + 2] === 0xb6 && webm[i + 3] === 0x75) clusters.push(i);
+  assert.equal(clusters.length, 2, "a cluster at each key frame");
+  assert.ok(new TextDecoder().decode(webm).includes("V_VP9"));
+});
+
+// ---- buildings and floor plans (src/kernel/building.js, floorplan.js) ----
+// test/models/house.js: 9000 x 7000 outside, 300 outer walls, 100 inner
+// walls, 2700 high on a 200 slab; every number below is worked by hand.
+const houseRun = () => {
+  const r = runScript(readFileSync(new URL("./models/house.js", import.meta.url), "utf8"));
+  assert.equal(r.error, undefined, r.error);
+  return r;
+};
+test("building: walls, slab and roof have the volumes worked by hand", async () => {
+  const r = houseRun();
+  const vol = (name) => meshPart(r.parts.find((p) => p.name === name).node, { budget: 40000, maxCell: 40 }).volume / 1e9;
+  // Openings through the outer walls: widths x heights, x 300 thick.
+  const holes = (1000 * 2100 + 1800 * 1200 + 1500 * 1200 * 3 + 1200 * 1200 * 4 + 600 * 600) * 300;
+  // Two gable triangles, 7000 across and 3500 * tan 30 high, 300 thick.
+  const gables = 2 * ((7000 * 3500 * Math.tan(Math.PI / 6)) / 2) * 300;
+  const want = {
+    "Floor slab": 9000 * 7000 * 200,
+    "Outer walls": (9000 * 7000 - 8400 * 6400) * 2700 + gables - holes,
+    // Inner walls: 6400 + 6400 + 3650 + 3150 + 1400 long, less five doors 2100 high.
+    "Inner walls": (6400 * 2 + 3650 + 3150 + 1400) * 100 * 2700 - (900 + 800 + 900 + 800 + 700) * 2100 * 100,
+    // Roof: 7800 wide on plan, 200 thick at 30 degrees, 9800 long.
+    Roof: (7800 * 200) / Math.cos(Math.PI / 6) * 9800,
+  };
+  for (const [name, v] of Object.entries(want)) {
+    const got = vol(name), w = v / 1e9;
+    assert.ok(Math.abs(got - w) / w < 0.002, `${name}: ${got.toFixed(4)} m3, by hand ${w.toFixed(4)} m3`);
+  }
+  // measure (from the distance function) agrees too: a flat 9000 x 7000 x 200 slab once read 1.8% low.
+  const { solidMoments } = await import("../src/kernel/measure.js");
+  for (const name of ["Floor slab", "Outer walls"]) {
+    const { f, box } = compile(r.parts.find((p) => p.name === name).node);
+    const got = solidMoments(f, box).volume / 1e9, w = want[name] / 1e9;
+    assert.ok(Math.abs(got - w) / w < 0.003, `measure ${name}: ${got.toFixed(4)} m3, by hand ${w.toFixed(4)} m3`);
+  }
+  // Every opening has its pieces, and the glass survives at the view's coarsest detail.
+  assert.equal(r.parts.length, 34);
+  const glass = meshPart(r.parts.find((p) => p.name === "Living window glass").node, { budget: 6000 });
+  const pane = (1800 - 120) * (1200 - 120) * 24;
+  assert.ok(Math.abs(glass.volume - pane) / pane < 0.08, `glass ${glass.volume} mm3, by hand ${pane}`);
+});
+test("building: room areas from the walls match hand values to 0.01 m2", () => {
+  const r = houseRun();
+  const want = { "Living room": 3650 * 3450, "Bedroom 2": 3650 * 2850, Hall: 1400 * 4700, Bathroom: 1400 * 1600, Kitchen: 3150 * 3500, "Bedroom 1": 3150 * 2800 };
+  for (const room of r.building.rooms) assert.ok(Math.abs(room.area_mm2 - want[room.name]) < 100, `${room.name}: ${room.area_mm2} mm2, by hand ${want[room.name]}`);
+  assert.deepEqual(r.warnings, []);
+});
+test("building: plan cut, dimension chains and inside sizes match the script", async () => {
+  const { floorPlanSVG, cutWalls } = await import("../src/kernel/floorplan.js");
+  const r = houseRun();
+  // The cut at 1200: the outer ring less the openings it passes through, plus the inner walls less their doors.
+  const cut = cutWalls(r.parts.filter((p) => /walls$/.test(p.name)), r.building.cut_z);
+  const want = 9000 * 7000 - 8400 * 6400 - 12100 * 300 + (6400 * 2 + 3650 + 3150 + 1400) * 100 - 4100 * 100;
+  assert.ok(Math.abs(cut.area - want) < 2000, `cut ${cut.area}, by hand ${want}`);
+  const { svg, scale, facts } = floorPlanSVG({ building: r.building, parts: r.parts.map((p) => ({ name: p.name, node: p.node })), info: { title: r.title, date: "2026-01-31" } });
+  assert.equal(scale, "1:50");
+  const chain = (wall, row) => facts.dimensions.filter((d) => d.wall === wall && d.row === row).map((d) => d.value);
+  assert.deepEqual(chain("South wall", "openings"), [1050, 1800, 1400, 1000, 1100, 1500, 1150]);
+  assert.deepEqual(chain("South wall", "overall"), [9000]);
+  assert.deepEqual(chain("North wall", "openings"), [1150, 1500, 1300, 600, 1600, 1500, 1350]);
+  const inside = Object.fromEntries(facts.dimensions.filter((d) => d.room).map((d) => [`${d.room} ${d.axis}`, d.value]));
+  assert.equal(inside["Living room width"], 3650);
+  assert.equal(inside["Living room length"], 3450);
+  assert.equal(inside["Kitchen length"], 3500);
+  assert.ok(facts.rooms.every((q) => q.labelled));
+  // Every room's name and area are on the sheet, and no two texts on the plan overlap.
+  for (const [n, a] of [["Bathroom", "2.24"], ["Kitchen", "11.03"], ["Living room", "12.59"]]) assert.match(svg, new RegExp(`data-room="${n}" data-area="${a}"`));
+  const plan = svg.slice(svg.indexOf('<g id="plan"'), svg.indexOf('<g id="title-block"'));
+  const boxes = [...plan.matchAll(/<text x="([-\d.]+)" y="([-\d.]+)" font-size="([\d.]+)" ([^>]*)>([^<]*)</g)].map(([, x, y, size, attrs, s]) => {
+    const w = textWidth(s.replace(/&[a-z]+;/g, "x"), +size), h = +size, mid = /middle/.test(attrs);
+    const x0 = mid ? +x - w / 2 : +x;
+    return /rotate\(-90/.test(attrs) ? [+x - h, +y - w / 2, +x, +y + w / 2, s] : [x0, +y - h, x0 + w, +y, s];
+  });
+  assert.ok(boxes.length > 40);
+  for (let i = 0; i < boxes.length; i++)
+    for (let j = i + 1; j < boxes.length; j++) {
+      const [a, b] = [boxes[i], boxes[j]];
+      assert.ok(!(a[0] < b[2] - 0.05 && b[0] < a[2] - 0.05 && a[1] < b[3] - 0.05 && b[1] < a[3] - 0.05), `"${a[4]}" overlaps "${b[4]}"`);
+    }
+  // Nine windows and six doors, each drawn once.
+  assert.equal((svg.match(/class="window"/g) ?? []).length, 9);
+  assert.equal((svg.match(/class="door"/g) ?? []).length, 6);
+  // The same sheet as DXF and PDF, through the drawing's writers: layers
+  // for walls, openings, dimensions and text, every wall outline closed.
+  const d = readDXF(sheetDXF(svg));
+  assert.deepEqual(d.problems, []);
+  for (const l of ["WALLS", "OPENINGS", "DIMENSIONS", "TEXT", "FRAME", "TITLE"]) assert.ok(d.byLayer[l] > 0, `no ${l} layer`);
+  const walls = d.entities.filter((e) => e.layer === "WALLS");
+  assert.ok(walls.length >= 9 && walls.every((e) => e.type === "POLYLINE" && e.closed), `wall outlines: ${walls.length}`);
+  assert.ok(d.entities.some((e) => e.type === "TEXT" && e.text === "Bathroom"));
+  const pdf = new TextDecoder().decode((await sheetPDF(svg, { title: r.title, date: "2026-01-31" })).subarray(0, 8));
+  assert.match(pdf, /^%PDF-/);
+});
+test("building: awkward input is joined or refused with a plain message", () => {
+  // Clockwise outline with its own names; the names stay on their sides.
+  const cw = runScript('outerWalls([[0, 0], [0, 5000], [6000, 5000], [6000, 0]], { names: ["W", "N", "E", "S"] }); window("S", 3000); room("Room", [3000, 2500]);');
+  assert.equal(cw.error, undefined, cw.error);
+  const named = Object.fromEntries(cw.building.walls.map((w) => [w.name, w.facing]));
+  assert.deepEqual(named, { W: "West", N: "North", E: "East", S: "South" });
+  assert.equal(cw.building.rooms[0].area_mm2, 5400 * 4400);
+  // A bent inner wall closes its corner: the room inside it is exactly 2000 x 1500 less half walls.
+  const bent = runScript('outerWalls([[0, 0], [8000, 0], [8000, 6000], [0, 6000]]); wall("Store", [[2000, 0], [2000, 2000], [0, 2000]]); room("Store", [1000, 1000]); room("Rest", [5000, 4000]);');
+  assert.equal(bent.error, undefined, bent.error);
+  assert.ok(Math.abs(bent.building.rooms[0].area_mm2 - 1650 * 1650) < 100, `store ${bent.building.rooms[0].area_mm2}`);
+  const err = (s) => runScript(s).error ?? "";
+  const box = "outerWalls([[0, 0], [6000, 0], [6000, 5000], [0, 5000]]);";
+  assert.match(err(`${box} window("South wall", 200);`), /runs into a corner.*between 900 and 5100/);
+  assert.match(err(`${box} door("Front", 2000);`), /no wall with that name\. Walls: South wall, East wall, North wall, West wall/);
+  assert.match(err(`${box} room("Garden", [9000, 9000]);`), /outside the house/);
+  assert.match(err(`${box} window("South wall", 2000, { width: 1200 }); door("South wall", 2500);`), /overlaps/);
+  assert.match(err('door("South wall", 1000);'), /outerWalls\(\[\.\.\.\]\) comes first/);
+  assert.match(err(`outerWalls([[0, 0], [6000, 0], [6000, 5000], [2000, 5000], [2000, 2000], [0, 2000]]); roof();`), /rectangular footprint/);
+  // Open plan: two names in one space are kept, with a warning.
+  const open = runScript(`${box} room("Kitchen", [1000, 1000]); room("Living", [4000, 4000]);`);
+  assert.match(open.warnings.join(), /same space/);
 });
 
 await queue;

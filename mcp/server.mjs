@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve, extname, basename, join } from "node:path";
 import { REFERENCE } from "./reference.mjs";
@@ -76,14 +76,14 @@ async function waitForApp(ms) {
   return app;
 }
 
-async function call(method, params = {}) {
+async function call(method, params = {}, timeoutMs = CALL_TIMEOUT_MS) {
   if (!(await waitForApp(8000))) throw new Error(APP_ID ? "The Draftsman window that asked is no longer connected. Ask the user to try again." : "The Draftsman app is not open. Ask the user to start it, then try again.");
   const id = ++seq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`Draftsman did not answer "${method}" within ${CALL_TIMEOUT_MS / 1000} s.`));
-    }, CALL_TIMEOUT_MS);
+      reject(new Error(`Draftsman did not answer "${method}" within ${timeoutMs / 1000} s.`));
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     app.send(JSON.stringify({ id, method, params }));
   });
@@ -96,7 +96,7 @@ const INSTRUCTIONS = `Draftsman turns a short JavaScript model script into solid
 
 Before you write or change a script, call the reference tool once (unless you already have its text in this conversation): it is the whole modelling language (shapes, profiles, sweep and loft, holes and fasteners, parts, sliders, motion and joints) with examples, and how to work. Use only the functions it lists; do not guess names.
 
-In short: units are millimetres, +Z is up, the ground is z = 0. Write the whole script with set_model, change part of it with edit_model, and look at it with screenshot. Big or mechanical models are planned with set_plan, built step by step with append_to_model, and each step is checked with finish_step. check_fit finds parts passing into each other, at rest and during the motion. When done, answer in one or two short sentences; do not paste the script.`;
+In short: units are millimetres, +Z is up, the ground is z = 0. Write the whole script with set_model, change part of it with edit_model, and look at it with screenshot. Big or mechanical models are planned with set_plan, built step by step with append_to_model, and each step is checked with finish_step. check_fit finds parts passing into each other, at rest and during the motion. For a picture or a film the user asks for, set_camera places the camera, save_picture saves a studio picture, and record_video records a video of planned shots (try them first with preview_shots). When done, answer in one or two short sentences; do not paste the script.`;
 
 const server = new McpServer({ name: "draftsman", version: "0.6.0" }, { instructions: INSTRUCTIONS });
 
@@ -309,6 +309,25 @@ tool(
 );
 
 tool(
+  "export_floor_plan",
+  "Export the floor plan of a building (a model made with outerWalls, wall, door, window and room) as an SVG, PDF or DXF: an A3 sheet at 1:50 or 1:100 with the walls cut 1200 mm above the floor, doors drawn open with their swing, windows in their openings, each room's name and area in m2 and its inside sizes, dimension chains outside every wall (openings and overall), the roof's edge dashed, a north arrow, a scale bar and the same ISO 7200 title block as export_drawing, filled in and remembered the same way. Pass only title block fields the user gave. path defaults to ~/Downloads/<title>.svg (or .pdf, .dxf). Only do this when the user asks. Returns the path, the scale, the rooms with their areas, and line: one sentence on what went on the sheet. Reply with the path and that line.",
+  {
+    path: z.string().optional().describe("Absolute path, or relative to the home folder."),
+    drawn_by: z.string().optional().describe("Created by, at most 20 characters, as the user wrote it."),
+    owner: z.string().optional().describe("Legal owner, at most 40 characters."),
+    approved_by: z.string().optional().describe("Approved by, at most 20 characters; this sheet only."),
+    number: z.string().optional().describe("Drawing number, at most 16 characters."),
+    revision: z.string().optional().describe("Revision index, at most 2 characters."),
+    subtitle: z.string().optional().describe("Supplementary title, at most 50 characters."),
+    format: z.enum(["svg", "pdf", "dxf"]).optional().describe("svg (default), pdf (to print or send; same sheet) or dxf (for 2D CAD: layers for walls, openings, dimensions, text, frame and title)."),
+  },
+  async ({ path, ...args }) => {
+    const r = await call("export_floor_plan", args);
+    return save(r, path, r.format ?? "svg");
+  },
+);
+
+tool(
   "export_glb",
   "Export all visible parts as a glTF binary file (.glb) for Blender, game engines and web viewers: one named node per part with its colour and material (metal, paint, plastic, rubber, glass), in metres with Y up as glTF requires, and the model's motion as an animation that loops. path defaults to ~/Downloads/<title>.glb. Only do this when the user asks.",
   { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
@@ -334,6 +353,150 @@ tool(
   "Export all visible parts as a binary PLY file: one mesh, each vertex coloured with its part's colour, in millimetres with Z up. Parts are at rest. path defaults to ~/Downloads/<title>.ply. Only do this when the user asks.",
   { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
   async ({ path }) => save(await call("export_ply"), path, "ply"),
+);
+
+// ---- the camera, pictures and video ----
+const xyz = z.array(z.number()).length(3);
+const CAMERA = z
+  .union([
+    z.string(),
+    z.object({
+      view: z.string().optional().describe('Start from this: a saved view\'s name, a standard view (iso, low, top, bottom, front, back, right, left) or "current".'),
+      azimuth: z.number().optional().describe("Degrees round the model to look from: 0 front (from -Y), 90 right (+X), 180 back, 270 left."),
+      elevation: z.number().optional().describe("Degrees above the ground to look from: 0 level, 20-35 a usual product shot, 90 straight down. Negative looks up from below."),
+      from: xyz.optional().describe("The direction to look from, [x, y, z], instead of azimuth and elevation."),
+      parts: z.array(z.string()).optional().describe("Frame these parts (default: the whole model)."),
+      position: xyz.optional().describe("Where the camera stands, mm. With target, places it exactly."),
+      target: xyz.optional().describe("The point it looks at, mm."),
+      lens_mm: z.number().optional().describe("Focal length of a 35 mm camera: 24 wide, 35-50 normal, 85-135 a close, flat-looking hero shot."),
+      distance: z.number().optional().describe("Times as far as the framing gives: 0.6 is closer (parts run off the edges), 1.5 leaves room."),
+      fill: z.number().optional().describe("How much of the picture the framed parts fill, 0.2-1; default 0.9."),
+    }),
+  ])
+  .describe('A camera: a saved view\'s name, a standard view\'s name, "current", or { view, azimuth, elevation, parts, lens_mm, distance, ... }. With azimuth/elevation/from/parts it is framed on the parts (or the whole model) from that direction.');
+
+const images = (list) => list.map((jpeg) => ({ type: "image", data: jpeg, mimeType: "image/jpeg" }));
+
+tool(
+  "set_camera",
+  "Place the user's view: it moves there smoothly. Returns where the camera ended up (position, target, lens, azimuth, elevation) and a picture from it. save_as keeps it as a named view with the model (saved in its file), for save_picture, preview_shots and record_video; forget removes a saved view. width and height: frame for a picture of that shape (default the window's). Use it for \"show me the swashplate from below\" or to set up a view the user wants to keep.",
+  {
+    view: z.string().optional(),
+    azimuth: z.number().optional(),
+    elevation: z.number().optional(),
+    from: xyz.optional(),
+    parts: z.array(z.string()).optional(),
+    position: xyz.optional(),
+    target: xyz.optional(),
+    lens_mm: z.number().optional(),
+    distance: z.number().optional(),
+    fill: z.number().optional(),
+    save_as: z.string().optional().describe("Keep this camera as a named view."),
+    forget: z.string().optional().describe("Remove this saved view."),
+    width: z.number().int().optional(),
+    height: z.number().int().optional(),
+  },
+  async (a) => {
+    const { jpeg, ...rest } = await call("set_camera", a);
+    return { content: [{ type: "text", text: JSON.stringify(rest, null, 1) }, ...(jpeg ? images([jpeg]) : [])] };
+  },
+);
+
+tool(
+  "save_picture",
+  "Save a studio picture (PNG, light backdrop, shadows and the floor's reflection, no grid) from a camera, at a chosen size. For \"give me a hero shot of the rotor head\": a low camera (elevation 10-20), a longer lens (70-100 mm), framed on the parts that matter, a little off the side (azimuth 30-60). Look at the returned preview and try again if the framing is wrong. at: pose moving parts at that many seconds into the motion (default: as the view shows them now). It shows the model as the view does (hidden parts, a section, an exploded view, the crease shading). path defaults to ~/Downloads/<title>.png. Only do this when the user asks for a picture.",
+  {
+    camera: CAMERA.optional(),
+    width: z.number().int().min(64).max(8192).optional().describe("Default 1920."),
+    height: z.number().int().min(64).max(8192).optional().describe("Default 1080."),
+    at: z.number().min(0).optional(),
+    path: z.string().optional().describe("Absolute path, or relative to the home folder."),
+  },
+  async ({ path, ...a }) => {
+    const { jpeg, ...r } = await call("save_picture", a);
+    const saved = await save(r, path, "png");
+    return { content: [...saved.content, ...images([jpeg])] };
+  },
+);
+
+const SHOTS = z
+  .array(
+    z.object({
+      seconds: z.number().positive().describe("How long the shot lasts."),
+      move: z.enum(["hold", "turntable", "orbit", "move", "follow"]).optional().describe("hold: still camera. turntable: one whole turn round the target (degrees 360), steady pace. orbit: turn by degrees (default 90), raising by rise. move: from camera to `to`. follow: keep `part` in frame as it moves. Default: move if `to` is given, follow if `part` is, else hold."),
+      camera: CAMERA.optional().describe("Where the shot starts. Default: where the previous shot ended (the first shot: the user's current view)."),
+      to: CAMERA.optional().describe('For move: where it ends. "current" here means the shot\'s start.'),
+      degrees: z.number().optional().describe("For turntable and orbit: how far round, + anticlockwise seen from above."),
+      rise: z.number().optional().describe("For orbit: degrees to raise (or, negative, lower) the camera over the shot."),
+      part: z.string().optional().describe("For follow: the part to follow."),
+      ride: z.boolean().optional().describe("For follow: also turn with the part about the upright (ride along with a rotor blade), instead of only keeping it in view."),
+      ease: z.enum(["linear", "in", "out", "in-out"]).optional().describe("How the move speeds up and slows down. Default in-out for move and orbit, linear for turntable and follow."),
+      motion: z.boolean().optional().describe("Whether the model's motion plays in this shot; default yes when it has motion."),
+      speed: z.number().optional().describe("Motion speed, 1 = real time, 0.25 slow motion."),
+    }),
+  )
+  .min(1)
+  .max(50);
+
+// Pictures and films show the view as the user sees it.
+const FILMS_SHOW_VIEW = "Pictures and films show the model as the view does: hidden parts stay hidden, a section stays cut with its faces hatched, an exploded view stays exploded, and the crease shading and any edge lines are drawn in every frame. Call clear_view first for the whole model.";
+
+const SHOT_GUIDE =
+  "Plan a film as a few shots, each one idea, 2 to 6 s long: an establishing shot of the whole model (a slow orbit, elevation 15-30), then moves in to the parts that matter (move, to: { parts: [...], lens_mm: 70 }), then a shot that shows the motion (follow a moving part, or hold while it plays). A shot starts where the last one ended unless it names a camera, so moves join up smoothly; ease in-out between holds, linear for turns. Slow motion (speed 0.25-0.5) makes fast rotors readable. Frame on part names from get_model. Motion time runs on from shot to shot (start_at sets where it starts).";
+
+tool(
+  "preview_shots",
+  `Try a planned film without recording it: returns small pictures of the first, middle and last frame of each shot (at most 24), with the time in the film and in the motion. Use it before record_video and fix shots that frame badly. ${SHOT_GUIDE}`,
+  {
+    shots: SHOTS,
+    width: z.number().int().optional().describe("The film's size, for its shape; default 1920."),
+    height: z.number().int().optional().describe("Default 1080."),
+    start_at: z.number().min(0).optional(),
+  },
+  async (a) => {
+    const { frames, ...rest } = await call("preview_shots", a, 10 * 60 * 1000);
+    const content = [{ type: "text", text: JSON.stringify({ ...rest, frames: frames.map(({ jpeg, ...f }) => f) }, null, 1) }];
+    for (const f of frames) content.push({ type: "text", text: `Shot ${f.shot}, ${f.at_seconds} s into the film:` }, ...images([f.jpeg]));
+    return { content };
+  },
+);
+
+tool(
+  "record_video",
+  `Record a video of the model from planned shots, frame by frame, so it plays smoothly however long each frame takes, and save it. MP4 (H.264) where the app can encode it, else WebM (VP9 or VP8): the result says which (format), and so should your reply. The user sees a progress line and can cancel; then nothing is saved. Default 1920 x 1080 at 30 frames a second. Recording takes a while (about a second for each second of film, longer for big models), so keep films short unless asked. path defaults to ~/Downloads/<title>.mp4. Only do this when the user asks for a video. Returns the path, format, frames, seconds and pictures of the first, middle and last frame: check them. ${FILMS_SHOW_VIEW} ${SHOT_GUIDE}`,
+  {
+    shots: SHOTS,
+    width: z.number().int().min(64).max(3840).optional().describe("Even number; default 1920."),
+    height: z.number().int().min(64).max(3840).optional().describe("Even number; default 1080."),
+    fps: z.union([z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).optional().describe("Default 30."),
+    format: z.enum(["mp4", "webm"]).optional().describe("Default mp4; webm only if the user asks."),
+    start_at: z.number().min(0).optional().describe("Seconds into the motion where the film starts; default 0."),
+    path: z.string().optional().describe("Absolute path, or relative to the home folder."),
+  },
+  async ({ path, ...a }) => {
+    const r = await call("record_video", a, 60 * 60 * 1000);
+    const ext = r.container;
+    const base = (r.name || "model").replace(/[^\w.-]+/g, "-");
+    let out = path ? resolve(homedir(), path.replace(/^~(?=\/|$)/, homedir())) : resolve(homedir(), "Downloads", `${base}.${ext}`);
+    // The file is named for what it is, whatever extension was asked for.
+    out = extname(out) ? out.slice(0, -extname(out).length) + `.${ext}` : `${out}.${ext}`;
+    await mkdir(dirname(out), { recursive: true });
+    // Written beside the real name first, so a failed save leaves no half file under it.
+    const part = `${out}.part`;
+    try {
+      const pieces = [];
+      for (let i = 0; i < r.pieces; i++) pieces.push(Buffer.from((await call("video_part", { id: r.id, index: i })).base64, "base64"));
+      await writeFile(part, Buffer.concat(pieces));
+      await rename(part, out);
+    } catch (err) {
+      await rm(part, { force: true });
+      throw err;
+    }
+    const { stills, id, pieces, name, ...facts } = r;
+    const content = [{ type: "text", text: JSON.stringify({ path: out, ...facts }, null, 1) }];
+    for (const s of stills) content.push({ type: "text", text: `Frame ${s.frame} (${s.at_seconds} s):` }, ...images([s.jpeg]));
+    return { content };
+  },
 );
 
 await listen();

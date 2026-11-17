@@ -153,7 +153,24 @@ export function createStore(kernel, initial) {
     autosave(state.doc);
   }
 
+  // Saved camera views (camera.js) belong to the document as its drawing
+  // record does: one object, shared by every version in its history and
+  // changed in place, and saved in its file. The versions of this document
+  // are the ones that share its drawing record.
+  function setViews(next) {
+    let views = state.doc.views;
+    if (!views) {
+      views = {};
+      for (const d of [state.doc, ...state.past, ...state.future]) if (d.drawing === state.doc.drawing && !d.views) d.views = views;
+    }
+    for (const k of Object.keys(views)) delete views[k];
+    Object.assign(views, next);
+    autosave(state.doc);
+    emit();
+  }
+
   return {
+    setViews,
     state,
     subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
     commit,

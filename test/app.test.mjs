@@ -282,6 +282,27 @@ try {
   check(long3.result && long3.result.sheet.supplementary_title.endsWith("…") && /The model's title was too long for the title block and is shortened on the sheet\./.test(long3.result.line), `a title too long even for both is cut at a word, and the line says so (${long3.result?.sheet.supplementary_title ?? long3.error})`);
   await call("edit_model", { old_text: `title(${JSON.stringify(`${longTitle} `.repeat(4).trim())});\n`, new_text: "" });
 
+  // A building's floor plan: refused for a model with no building, and for
+  // the test house a well-formed A3 sheet at 1:50 with its six rooms, their
+  // areas as worked by hand, the cut walls, and the drawing's own number.
+  check(/no building/.test((await call("export_floor_plan")).error ?? ""), "a floor plan of a model with no building is refused");
+  const houseSet = await call("set_model", { script: readFileSync(new URL("./models/house.js", import.meta.url), "utf8") });
+  const fp = await call("export_floor_plan", { drawn_by: "Ana Ruiz" });
+  const planSheet = await w(`(() => {
+    const doc = new DOMParser().parseFromString(new TextDecoder().decode(Uint8Array.from(atob(${JSON.stringify(fp.result?.base64 ?? "")}), (c) => c.charCodeAt(0))), "image/svg+xml");
+    return {
+      error: doc.querySelector("parsererror")?.textContent ?? null,
+      size: doc.documentElement.getAttribute("width") + " x " + doc.documentElement.getAttribute("height"),
+      rooms: [...doc.querySelectorAll("#rooms .room")].map((g) => g.getAttribute("data-room") + " " + g.getAttribute("data-area")).join(", "),
+      walls: (doc.querySelector("#walls .cut-walls")?.getAttribute("d") ?? "").split("M").length - 1,
+      fields: ["created-by", "number", "document-type", "scale"].map((id) => doc.querySelector("#" + id)?.textContent ?? "").join(" | "),
+      menu: document.querySelector('#export-menu [data-export="plan"] span')?.textContent,
+    };
+  })()`);
+  check(houseSet.result?.building?.rooms.length === 6 && fp.result && !planSheet.error && planSheet.size === "420mm x 297mm" && fp.result.scale === "1:50", `the house's floor plan is an A3 sheet at 1:50 (${fp.error ?? planSheet.error ?? `${planSheet.size}, ${fp.result.scale}`})`);
+  check(planSheet.rooms === "Living room 12.59, Bedroom 2 10.40, Hall 6.58, Bathroom 2.24, Kitchen 11.03, Bedroom 1 8.82" && planSheet.walls === 9, `with every room and its area, and the cut walls in nine pieces (the nine openings at 1200 split the outer ring; each inner wall joins one) (${planSheet.rooms}; ${planSheet.walls} wall outlines)`);
+  check(/^Ana Ruiz \| [\w-]+ \| Floor plan \| 1:50$/.test(planSheet.fields) && planSheet.menu === "Floor plan" && !/angle/.test(fp.result?.line ?? "angle"), `the title block is filled in as for a drawing, the line says no projection, and the Export menu offers it (${planSheet.fields}; ${fp.result?.line})`);
+
   // The number belongs to the document: kept through Claude rewriting the
   // script, a new one for New, and each document's own back through undo.
   await call("set_model", { script: 'part("Base", box(40, 40, 10), { color: "#4f7cac" });\npart("Peg", cylinder(6, 20).at(0, 0, 12));' });
@@ -950,6 +971,110 @@ joint("Rod", "Piston", top);` });
     const fit = await h.command(e, "check_fit");
     check(fit.result?.overlaps.length === 0, `the bracket's bolts, washers and nuts fit without overlaps (${fit.result?.checked_pairs} pairs checked)`);
   }
+  // ---- the camera, pictures and video (small: frames are drawn in software here) ----
+  const v = await h.openWindow();
+  const vc = (name, args) => h.command(v, name, args);
+  await vc("set_model", { script: 'title("Spinner");\npart("Base", box(80, 80, 10).at(0, 0, 5), { color: "#5577aa" });\npart("Arm", box(100, 12, 12).at(40, 0, 20), { spin: { axis: "z", center: [0, 0, 0], rpm: 15 } });\nloop(4);' });
+  const r1 = (a) => a.map((x) => Math.round(x));
+  // Placing the camera: from the right, level, framed on the arm, with a 50 mm lens.
+  const side = await vc("set_camera", { azimuth: 90, elevation: 0, parts: ["Arm"], lens_mm: 50, save_as: "side" });
+  const sc = side.result?.camera;
+  check(sc && Math.abs(sc.azimuth - 90) < 0.5 && Math.abs(sc.elevation) < 0.5 && sc.lens_mm === 50 && sc.position[0] > sc.target[0] && side.result.jpeg?.length > 1000, `set_camera looks from the right with a 50 mm lens and returns a picture (${JSON.stringify(sc)})`);
+  await sleep(900);
+  const live = await v("window.__draftsman.camera()");
+  const fov50 = (2 * Math.atan(Math.tan(Math.atan(18 / 50)) / live.aspect) * 180) / Math.PI;
+  check(r1(live.position).join() === r1(sc.position).join() && Math.abs(live.fov - fov50) < 0.01, `the view moves there, and 50 mm is ${live.fov.toFixed(2)} degrees high at this window's shape (${r1(live.position)})`);
+  const savedViews = await v("window.__draftsman.views()");
+  check(JSON.stringify(Object.keys(savedViews)) === '["side"]' && savedViews.side.lens_mm === 50 && (await vc("get_model")).result?.saved_views?.[0] === "side", "the saved view is kept with the model, and get_model names it");
+  check(/no view named "nope"/.test((await vc("set_camera", { view: "nope" })).error ?? ""), "an unknown view is refused, naming the views there are");
+  check(/no setting "zoom"/.test((await vc("set_camera", { zoom: 2 })).error ?? ""), "an unknown camera setting is refused");
+  const sidePicture = await vc("save_picture", { camera: "side", width: 320, height: 200 });
+  check(sidePicture.result?.width === 320 && atob(sidePicture.result.base64).startsWith("\x89PNG"), "save_picture from a saved view gives a PNG at the size asked");
+
+  // A recording: a hold, then a quarter orbit, at 320 x 180, 1 s at 30 frames a second.
+  const shots = [{ seconds: 0.5, camera: { view: "iso" } }, { seconds: 0.5, move: "orbit", degrees: 90 }];
+  const camBefore = await v("window.__draftsman.camera()");
+  const canvasSize = () => v(`(() => { const c = document.querySelector("#viewport canvas"); return [c.width, c.height]; })()`);
+  const sizeBefore = await canvasSize();
+  const fast = await vc("record_video", { shots, width: 320, height: 180, test: { hashes: true } });
+  const slow = await vc("record_video", { shots, width: 320, height: 180, test: { hashes: true, slowMs: 60 } });
+  const hs = fast.result?.hashes ?? [];
+  check(fast.result?.frames === 30 && hs.length === 30 && new Set(hs).size > 15, `30 frames for 1 s at 30 a second, the arm moving between them (${new Set(hs).size} different frames)`);
+  check(JSON.stringify(hs) === JSON.stringify(slow.result?.hashes), "every frame is the same picture when frames are drawn slowly: each frame's pose and camera come from its number alone");
+  check(new Set(hs.slice(0, 15)).size === 15, "the arm turns in every frame of the held shot, so no frame is repeated");
+  const camAfter = await v("window.__draftsman.camera()");
+  check(r1(camAfter.position).join() === r1(camBefore.position).join() && r1(camAfter.target).join() === r1(camBefore.target).join() && camAfter.fov === camBefore.fov && JSON.stringify(await canvasSize()) === JSON.stringify(sizeBefore), "after recording the view is where it was, at the window's size");
+  check(fast.result?.stills?.length === 3 && fast.result.stills.every((s) => s.jpeg.length > 500), "record_video returns pictures of the first, middle and last frames");
+  // The file, read back: an MP4 with 30 frames over 1 s, 320 x 180.
+  const film = async (r) => {
+    const parts = [];
+    for (let i = 0; i < r.pieces; i++) parts.push(Buffer.from((await vc("video_part", { id: r.id, index: i })).result.base64, "base64"));
+    return Buffer.concat(parts);
+  };
+  const mp4 = await film(slow.result);
+  const boxAt = (buf, path) => {
+    let start = 0, end = buf.length;
+    for (const type of path) {
+      let at = start, found = null;
+      while (at + 8 <= end) {
+        const size = buf.readUInt32BE(at);
+        if (buf.toString("latin1", at + 4, at + 8) === type) { found = at; break; }
+        at += size;
+      }
+      if (found === null) return null;
+      [start, end] = [found + 8, found + buf.readUInt32BE(found)];
+    }
+    return start;
+  };
+  const stbl = ["moov", "trak", "mdia", "minf", "stbl"];
+  const mdhd = boxAt(mp4, ["moov", "trak", "mdia", "mdhd"]);
+  const avc1 = boxAt(mp4, [...stbl, "stsd"]) + 8;
+  check(slow.result.container === "mp4" && slow.result.codec === "h264" && mp4.toString("latin1", 4, 8) === "ftyp", `the file is ${slow.result.format}, ${mp4.length} bytes`);
+  check(mp4.readUInt32BE(boxAt(mp4, [...stbl, "stsz"]) + 8) === 30 && mp4.readUInt32BE(mdhd + 16) / mp4.readUInt32BE(mdhd + 12) === 1, "its index has 30 frames lasting 1 s");
+  check(mp4.toString("latin1", avc1 + 4, avc1 + 8) === "avc1" && mp4.readUInt16BE(avc1 + 32) === 320 && mp4.readUInt16BE(avc1 + 34) === 180, "its frames are H.264, 320 x 180");
+  check(/no longer here/.test((await vc("video_part", { id: slow.result.id, index: 0 })).error ?? ""), "the film is let go once fetched");
+  // Saved views, follow with ride, and WebM.
+  const follow = await vc("record_video", { shots: [{ seconds: 1, camera: { azimuth: 90, elevation: 10, parts: ["Arm"] }, move: "follow", part: "Arm", ride: true }], width: 160, height: 90, format: "webm" });
+  const turnedBy = (((follow.result?.end_camera.azimuth - 90) % 360) + 360) % 360;
+  check(follow.result?.codec === "vp9" && Math.abs(turnedBy - 90) < 2, `following the arm, riding with it, turns the camera 90 degrees in 1 s (${turnedBy.toFixed(1)}); format webm gives ${follow.result?.format}`);
+  const webm = await film(follow.result);
+  check(webm.readUInt32BE(0) === 0x1a45dfa3 && webm.includes(Buffer.from("V_VP9")), "the WebM file starts with its EBML header and names VP9");
+  check(/has no setting "zoom"/.test((await vc("record_video", { shots: [{ seconds: 1, zoom: 1 }] })).error ?? ""), "an unknown shot setting is refused before anything is drawn");
+  const preview = await vc("preview_shots", { shots: [{ seconds: 2, move: "turntable", camera: { view: "iso" } }, { seconds: 1, to: { parts: ["Arm"], lens_mm: 85 } }], width: 320, height: 180 });
+  check(preview.result?.frames.length === 6 && preview.result.seconds === 3, `preview_shots gives the first, middle and last frame of each shot (${preview.result?.frames.length})`);
+  // Cancel: the recording stops, the film is gone, the progress line goes and the view comes back.
+  const pending = vc("record_video", { shots: [{ seconds: 20, move: "turntable" }], width: 160, height: 90 });
+  await sleep(1500);
+  const showing = await v('!document.getElementById("recording").hidden && document.getElementById("recording-text").textContent');
+  await v("window.__draftsman.cancelRecording()");
+  const cancelled = await pending;
+  check(/cancelled/.test(cancelled.error ?? "") && /^Recording video/.test(showing || ""), `cancel stops the recording with no film (${cancelled.error}; the line said "${showing}")`);
+  check((await v('document.getElementById("recording").hidden')) && JSON.stringify(await canvasSize()) === JSON.stringify(sizeBefore), "the progress line goes and the view is back at the window's size");
+  check(/no longer here/.test((await vc("video_part", { id: (slow.result.id ?? 0) + 3, index: 0 })).error ?? ""), "nothing is left to fetch after a cancel");
+  check(await v('Boolean(document.querySelector("[data-export=video]"))'), "the Export menu has Video (turntable)");
+  // A film shows the view as it is: with the arm hidden, or the model cut,
+  // its frames differ from the whole model's, and the view keeps that state.
+  const oneFrame = async () => (await vc("record_video", { shots: [{ seconds: 0.1, camera: { view: "iso" }, motion: false }], width: 160, height: 90, test: { hashes: true } })).result?.hashes?.[0];
+  const wholeFrame = await oneFrame();
+  await vc("hide_parts", { hide: ["Arm"] });
+  const armHidden = await oneFrame();
+  await vc("clear_view");
+  await vc("section_view", { axis: "x", offset: 0 });
+  const cutOpen = await oneFrame();
+  await vc("clear_view");
+  check(wholeFrame && armHidden && cutOpen && new Set([wholeFrame, armHidden, cutOpen]).size === 3 && (await oneFrame()) === wholeFrame, `a film shows hidden parts hidden and a section cut, and the same frame again once the view is clear`);
+  // A rotor at 1200 rpm (120 degrees between the kernel's motion samples)
+  // about an axis 3 m from the origin: its hub stays on that axis between
+  // samples in the view, and in recorded frames, which take exact poses.
+  await vc("set_model", { script: 'part("Rotor", box(600, 20, 60).at(3000, 0, 500), { spin: { axis: "y", center: [3000, 0, 500], rpm: 1200 } });\nloop(1);' });
+  const hubOff = (m) => Math.hypot(m[0] * 3000 + m[8] * 500 + m[12] - 3000, m[1] * 3000 + m[9] * 500 + m[13], m[2] * 3000 + m[10] * 500 + m[14] - 500);
+  let liveOff = 0;
+  for (const t of [0.004, 0.0123, 0.2571, 0.5083, 0.9917]) liveOff = Math.max(liveOff, hubOff(await v(`window.__draftsman.partMatrix("Rotor", ${t})`)));
+  const tracked = await vc("record_video", { shots: [{ seconds: 0.2 }, { seconds: 0.2, move: "orbit", degrees: 10 }], width: 64, height: 64, test: { track: "Rotor" } });
+  const times = tracked.result?.times ?? [];
+  check(times.length === 12 && times.every((t, n) => Math.abs(t - n / 30) < 1e-9), `over two shots, frame n is posed at n/30 s into the motion (${times.slice(6, 9).map((t) => t.toFixed(4))})`);
+  const recOff = Math.max(...(tracked.result?.tracked ?? [[NaN]]).map(hubOff));
+  check(liveOff < 0.1 && recOff < 0.1, `a fast rotor's hub stays on its axis: ${liveOff.toFixed(4)} mm off in the view between samples, ${recOff.toFixed(4)} mm in recorded frames`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);
