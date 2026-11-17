@@ -227,18 +227,25 @@ export function createKernel() {
   // STEP: one named, coloured solid per visible part, exact where the script
   // says exactly what the shape is, else flat faces from a coarser mesh.
   async function exportSTEP(parts, title) {
-    const shown = visible(parts);
-    const exact = exactParts(shown);
+    // An exact part goes out even where the view has no mesh of it (a plate
+    // too thin for its cells); any other part with no mesh is left out, as
+    // in STL and 3MF, and named.
+    const unhidden = parts.filter((p) => !p.hidden);
+    const solids = exactParts(unhidden);
+    const keep = unhidden.map((p, i) => Boolean(solids[i] || p.mesh?.indices.length));
+    const shown = unhidden.filter((_, i) => keep[i]), exact = solids.filter((_, i) => keep[i]);
+    const left = unhidden.filter((_, i) => !keep[i]).map((p) => p.name);
+    if (!shown.length) throw new Error("There is nothing to export.");
     const { cell, budgets } = facetDetail(shown.map((p, i) => (exact[i] ? null : p)));
-    const full = exportDetail(shown);
     // Each part meshed whole (one closed surface, no pieces passing through
-    // each other); a part too thin for the coarse cells gets the STL's detail.
+    // each other); a part too thin for the coarse cells gets finer ones.
     const mesh = (p, budget, maxCell) => job({ type: "export", solid: true, node: p.node, budget, maxCell, what: `Part "${p.name}"` }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`);
-    const meshes = await Promise.all(shown.map((p, i) => !exact[i] && mesh(p, budgets[i], cell).catch(() => mesh(p, full.budgets[i], full.cell))));
+    const meshes = await Promise.all(shown.map((p, i) => !exact[i] && mesh(p, budgets[i], cell).catch(() => mesh(p, Math.max(8 * budgets[i], 4000), cell / 3))));
     const r = partsToSTEP(shown, exact, meshes, { title, file: `${(title || "model").replace(/[^\w.-]+/g, "-")}.step` });
     const n = shown.length, e = r.exact.length;
-    const line = e === n ? (n === 1 ? "It has exact surfaces." : "Every part has exact surfaces.") : e ? `${e} of ${n} parts have exact surfaces; the others are flat faces from their mesh.` : n === 1 ? "It is flat faces from its mesh." : "Every part is flat faces from its mesh.";
-    return { bytes: new TextEncoder().encode(r.text), exact_parts: r.exact, faceted_parts: r.faceted, faces: r.faces, line };
+    let line = e === n ? (n === 1 ? "It has exact surfaces." : "Every part has exact surfaces.") : e ? `${e} of ${n} parts have exact surfaces; the others are flat faces from their mesh.` : n === 1 ? "It is flat faces from its mesh." : "Every part is flat faces from its mesh.";
+    if (left.length) line += ` Left out, as too thin to mesh: ${left.join(", ")}.`;
+    return { bytes: new TextEncoder().encode(r.text), exact_parts: r.exact, faceted_parts: r.faceted, left_out: left, faces: r.faces, line };
   }
 
   // A drawing sheet as SVG: front, top and side views, an isometric view, a

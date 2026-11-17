@@ -212,7 +212,7 @@ tool(
 
 tool(
   "export_step",
-  "Export all visible parts as a STEP file (AP214) for other CAD programs: an assembly of named, coloured solids in mm. Parts that are a box, cylinder, cone, sphere, torus, capsule, or an extrude or revolve of an outline of lines and arcs (holes in the outline included), moved, turned or mirrored, or several of these that do not touch, come out with exact surfaces; any part with a cut, join, smooth blend or other shape comes out as flat faces from its mesh. path defaults to ~/Downloads/<title>.step. Only do this when the user asks. Returns the path, exact_parts and faceted_parts (part names); tell the user which parts are faceted.",
+  "Export all visible parts as a STEP file (AP214) for other CAD programs: an assembly of named, coloured solids in mm. Parts that are a box, cylinder, cone, sphere, torus, capsule, or an extrude or revolve of an outline of lines and arcs (holes in the outline included), moved, turned or mirrored, or several of these that do not touch, come out with exact surfaces; any part with a cut, join, smooth blend or other shape comes out as flat faces from its mesh. path defaults to ~/Downloads/<title>.step. Only do this when the user asks. Returns the path, exact_parts, faceted_parts and left_out (part names; left_out: too thin to mesh) and line; tell the user which parts are faceted or left out.",
   { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
   async ({ path }) => save(await call("export_step"), path, "step"),
 );

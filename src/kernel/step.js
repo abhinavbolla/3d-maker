@@ -216,18 +216,19 @@ export function writeSTEP(parts, { title = "", file = "model.step", time = new D
 
 // ---- parts to solids ----
 // Faceted parts are written from their own mesh, made coarser than the STL's
-// so the file stays a sane size: about FACET_CELLS surface cells (roughly
-// twice as many triangles) over all faceted parts together, shared out by
-// surface area, at least FACET_MIN per part. Flat faces merge, so flat parts
-// cost far less.
+// so the file stays a sane size: 1000 surface cells (roughly twice as many
+// triangles) plus 400 per faceted part, at most FACET_CELLS, over all
+// faceted parts together, shared out by surface area, at least FACET_MIN per
+// part. Thin parts get more, as the mesher refines them. Flat faces merge,
+// so flat parts cost far less.
 export const FACET_CELLS = 6000;
 export const FACET_MIN = 150;
 
 // Mesh detail for the faceted parts (null where a part is exact), from the
 // meshes on screen, as kernel.js sizes STL exports: a part meshed at cell s
 // with T triangles has about T/2 surface cells, (s/c)^2 times as many at c.
-export function facetDetail(parts, cells = FACET_CELLS) {
-  const est = parts.map((p) => (p ? (p.mesh.indices.length / 6) * p.mesh.cellSize ** 2 : 0));
+export function facetDetail(parts, cells = Math.min(FACET_CELLS, 1000 + 400 * parts.filter(Boolean).length)) {
+  const est = parts.map((p) => (p ? (p.mesh.indices.length / 6) * p.mesh.cellSize ** 2 || 1 : 0));
   const cell = Math.sqrt(est.reduce((a, b) => a + b, 0) / cells) || Infinity;
   return { cell, budgets: est.map((e) => Math.max(FACET_MIN, Math.round(e / cell ** 2))) };
 }
