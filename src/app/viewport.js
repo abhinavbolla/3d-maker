@@ -253,7 +253,8 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     key.shadow.normalBias = radius / 500;
     for (const f of [shadowFloor, mirror]) {
       f.visible = Boolean(box);
-      f.position.set(center.x, center.y, floorZ);
+      // A hair under the model (see makeGrid).
+      f.position.set(center.x, center.y, floorZ - radius * 2e-3);
       f.scale.setScalar(radius * 16);
     }
     // The origin's planes reach a little past a model that stands on the origin.
@@ -297,6 +298,11 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   function makeGrid(box) {
     grid.traverse((o) => o.geometry?.dispose());
     grid.clear();
+    // The grid, the floor's shadow and its mirror lie a hair (a thousandth
+    // of the model's size) under where the model stands, so the inside of a
+    // cut part's bottom face (a section, inspect.js), which lies in that
+    // plane, hides them instead of fighting them pixel by pixel.
+    grid.position.z = -stageSize * 1e-3;
     const size = box ? Math.max(box.max.x - box.min.x, box.max.y - box.min.y, 50) : 200;
     const step = 10 ** Math.floor(Math.log10(size / 4));
     const half = Math.ceil((size * 1.4) / step / 2) * step;

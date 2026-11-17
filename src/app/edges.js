@@ -11,7 +11,7 @@
 // angle. Those edges, and any open edge, are the lines.
 import * as THREE from "three";
 
-const lines = new WeakMap(); // mesh -> Float32Array of segment ends
+const lines = new WeakMap(); // mesh -> { positions, faces }: segment ends, and the normals of the two faces at each
 const COS_FOLD = Math.cos((25 * Math.PI) / 180);
 
 // An open-addressing table from the bits of a position to one id per place.
@@ -67,8 +67,12 @@ export function sharpEdges(mesh) {
     N[t + 2] = z / l;
   }
   const paired = new Uint8Array(size);
-  const out = [];
-  const segment = (u, v) => out.push(P[u * 3], P[u * 3 + 1], P[u * 3 + 2], P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
+  const out = [], faces = [];
+  // A segment from u to v between triangles s and t (by their first index).
+  const segment = (u, v, s, t) => {
+    out.push(P[u * 3], P[u * 3 + 1], P[u * 3 + 2], P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
+    for (let k = 0; k < 2; k++) faces.push(N[s], N[s + 1], N[s + 2], N[t], N[t + 1], N[t + 2]);
+  };
   for (let n = 0; n < ne; n++) {
     const t = n - (n % 3);
     const u = I[n], v = I[t + ((n % 3) + 1) % 3];
@@ -96,28 +100,58 @@ export function sharpEdges(mesh) {
         const same = (firstA[h] === u && firstB[h] === v) || (firstA[h] === v && firstB[h] === u);
         const s = firstT[h];
         const bend = N[s] * N[t] + N[s + 1] * N[t + 1] + N[s + 2] * N[t + 2];
-        if ((!same || bend < COS_FOLD) && !paired[h]) segment(u, v);
+        if ((!same || bend < COS_FOLD) && !paired[h]) segment(u, v, s, t);
         paired[h] = 1;
         break;
       }
       h++;
     }
   }
-  for (let h = 0; h < size; h++) if (keyA[h] >= 0 && !paired[h]) segment(firstA[h], firstB[h]);
-  const result = Float32Array.from(out);
+  for (let h = 0; h < size; h++) if (keyA[h] >= 0 && !paired[h]) segment(firstA[h], firstB[h], firstT[h], firstT[h]);
+  const result = { positions: Float32Array.from(out), faces: Float32Array.from(faces) };
   lines.set(mesh, result);
   return result;
 }
 
-const ink = new THREE.LineBasicMaterial({ color: 0x15181c, transparent: true, opacity: 0.78, toneMapped: false });
+// The lines lie exactly on the faces' edges, so they are drawn a hair
+// nearer than they are (a hundred-thousandth of the depth range), which
+// wins over the faces they lie on and loses to anything really in front.
+// Polygon offset on the faces would do the same, but the section (inspect.js)
+// uses that on cut parts, and it does not apply to lines.
+// A line both of whose faces look away from the camera is on the back of
+// the part: it is dropped (moved outside the picture), so it never shows
+// through a gap or a section's cut face.
+const BACK_EDGES = /* glsl */ `#include <project_vertex>
+  vec3 toEye = isOrthographic ? vec3(0.0, 0.0, 1.0) : -mvPosition.xyz;
+  if (dot(normalMatrix * faceA, toEye) < 0.0 && dot(normalMatrix * faceB, toEye) < 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  gl_Position.z -= 1e-5 * gl_Position.w;`;
 
-// The line object for a part's mesh, to add beside the part's own mesh.
-export function edgeLines(mesh) {
+function ink() {
+  const m = new THREE.LineBasicMaterial({ color: 0x15181c, transparent: true, opacity: 0.78, toneMapped: false });
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = "attribute vec3 faceA;\nattribute vec3 faceB;\n" + shader.vertexShader.replace("#include <project_vertex>", BACK_EDGES);
+  };
+  m.customProgramCacheKey = () => "edge-ink";
+  return m;
+}
+
+// The line object for a part: data is the part's mesh as the kernel made it,
+// mesh the three.js mesh it is drawn as. The lines are cut by the same
+// section plane as the part (inspect.js changes the part's clipping planes;
+// the lines follow them each time they are drawn).
+export function edgeLines(data, mesh) {
   const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(sharpEdges(mesh), 3));
-  const l = new THREE.LineSegments(g, ink);
+  const { positions, faces } = sharpEdges(data);
+  g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const both = new THREE.InterleavedBuffer(faces, 6);
+  g.setAttribute("faceA", new THREE.InterleavedBufferAttribute(both, 3, 0));
+  g.setAttribute("faceB", new THREE.InterleavedBufferAttribute(both, 3, 3));
+  const l = new THREE.LineSegments(g, ink());
   l.raycast = () => {};
   l.userData.edges = true;
+  l.onBeforeRender = () => {
+    if (l.material.clippingPlanes !== mesh.material.clippingPlanes) l.material.clippingPlanes = mesh.material.clippingPlanes;
+  };
   return l;
 }
 
