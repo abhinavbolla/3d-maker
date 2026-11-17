@@ -55,7 +55,8 @@ Notable changes to Draftsman. The format follows
   pass) and outlines once the view is still. Claude turns it on or off with the new `set_look`
   tool, and the app remembers it.
 - Two more materials a script can name: `brushed` and `anodised` metal.
-- `frame()` on the view draws one finished frame, crease shading included, synchronously.
+- `frame()` on the view draws one finished frame, crease shading included, synchronously, at
+  the window's size or a given one.
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
