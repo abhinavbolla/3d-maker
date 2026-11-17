@@ -359,6 +359,8 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // While the context is gone nothing can be drawn: pictures and films
   // refuse (see filmStudio) rather than come out black.
   let contextLost = false;
+  const GONE = "The view's graphics were reset by the browser (its GPU context was lost), so nothing could be drawn. Nothing was saved; try again in a moment.";
+  const lostNow = () => contextLost || renderer.getContext().isContextLost();
   renderer.domElement.addEventListener("webglcontextlost", () => (contextLost = true));
   renderer.domElement.addEventListener("webglcontextrestored", () => {
     contextLost = false;
@@ -812,6 +814,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // parts: frame just these parts. ghost: show the other parts faintly, so
   // the framed ones stand out but you can still see what they attach to.
   function screenshot({ view, width = 1024, height = 768, parts: only, ghost = false, at = 0 } = {}) {
+    if (lostNow()) throw new Error(GONE);
     const unknown = (only ?? []).filter((n) => !parts.has(n));
     if (unknown.length) throw new Error(`There is no part named ${unknown.map((n) => `"${n}"`).join(", ")}.`);
     inspect.settle();
@@ -854,6 +857,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     restore();
     selected = was;
     highlight();
+    if (lostNow()) throw new Error(GONE);
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -867,6 +871,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // A studio picture of the view as it is now, as base64 PNG: on the light
   // backdrop whatever the theme, without the grid or the selection tint.
   function picture({ width = 3200 } = {}) {
+    if (lostNow()) throw new Error(GONE);
     const { clientWidth: w, clientHeight: h } = container;
     const W = Math.min(Math.round(width), renderer.capabilities.maxTextureSize);
     const H = Math.round((W * h) / w);
@@ -887,6 +892,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       pose(time);
       renderer.render(scene, camera);
       look.paint(camera, W, H, null);
+      if (lostNow()) throw new Error(GONE);
       return { png: renderer.domElement.toDataURL("image/png").split(",")[1], width: W, height: H };
     } finally {
       key.shadow.mapSize.setScalar(was.shadow);
@@ -919,13 +925,12 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   // While a film studio is open the live view draws nothing, whatever the window
   // does, and the canvas shows each finished frame as it is made.
   let recording = false;
-  const GONE = "The view's graphics were reset by the browser (its GPU context was lost), so nothing could be drawn. Nothing was saved; try again in a moment.";
   // creases: lay the crease shading over each frame (look.js), worked out
   // afresh for that frame's pose and camera at the film's size.
   function filmStudio(W, H, { creases = true } = {}) {
     if (recording) throw new Error("A recording is already being made.");
     const gl = renderer.getContext();
-    if (contextLost || gl.isContextLost()) throw new Error(GONE);
+    if (lostNow()) throw new Error(GONE);
     recording = true;
     cancelAnimationFrame(frame);
     frame = 0;
@@ -975,12 +980,12 @@ export function createViewport(container, { onPick, onView = () => {} }) {
       // steps as picture()). A frame drawn without a context would be
       // black, so it is refused instead.
       draw(cam, t) {
-        if (contextLost || gl.isContextLost()) throw new Error(GONE);
+        if (lostNow()) throw new Error(GONE);
         pose(t);
         content.updateMatrixWorld(true);
         renderer.render(scene, cam);
         if (creases) look.paint(cam, W, H, null);
-        if (gl.isContextLost()) throw new Error(GONE);
+        if (lostNow()) throw new Error(GONE);
         return renderer.domElement;
       },
       // The frame just drawn, as RGBA rows from the bottom up.

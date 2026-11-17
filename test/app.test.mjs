@@ -1089,12 +1089,20 @@ joint("Rod", "Piston", top);` });
   // the studio light the parts reflect made again (it comes back black).
   const brightness = async () => (await vc("record_video", { shots: [{ seconds: 0.1, camera: { view: "iso" } }], width: 160, height: 90, test: { hashes: true, corners: true } })).result;
   const wholeBefore = await brightness();
+  const lookBefore = (await vc("screenshot", { view: "iso", width: 320, height: 240 })).result?.png;
   await v(`(() => { const gl = document.querySelector("#viewport canvas").getContext("webgl2"); window.__lose = gl.getExtension("WEBGL_lose_context"); window.__lose.loseContext(); })()`);
   await sleep(300);
   const whileLost = await vc("record_video", { shots: [{ seconds: 0.1 }], width: 160, height: 90 });
+  // Claude's screenshots and Export > Picture are refused too, with the same words.
+  const lookLost = await vc("screenshot", { view: "iso", width: 320, height: 240 });
+  await v(`document.querySelector("[data-export=png]").click()`);
+  await sleep(200);
+  const exportSaid = await v(`document.getElementById("status").textContent`);
   await v("window.__lose.restoreContext()");
   await sleep(1500);
   const wholeAfter = await brightness();
+  const lookAfter = (await vc("screenshot", { view: "iso", width: 320, height: 240 })).result?.png;
+  check(/graphics were reset/.test(lookLost.error ?? "") && /graphics were reset/.test(exportSaid) && lookAfter && lookAfter === lookBefore, `with the context lost a screenshot and Export > Picture are refused, not black (${(lookLost.error ?? "made").slice(0, 30)}…; the status line: ${exportSaid.slice(0, 30)}…), and the next screenshot is the same picture as before`);
   check(/graphics were reset/.test(whileLost.error ?? "") && wholeAfter?.hashes?.[0] === wholeBefore?.hashes?.[0], `with the graphics context lost a film is refused (${(whileLost.error ?? "made").slice(0, 40)}…), and once it is back the frame is the same picture as before (corner ${wholeBefore?.corners?.[0]}, then ${wholeAfter?.corners?.[0]})`);
 } catch (err) {
   fail(String(err.message ?? err));
