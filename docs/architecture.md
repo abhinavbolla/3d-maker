@@ -68,6 +68,7 @@ Everything in [src/kernel](../src/kernel) is our own code with no dependencies.
 | [threemf.js](../src/kernel/threemf.js) | 3MF export, including its own zip writer. |
 | [gltf.js](../src/kernel/gltf.js) | glTF binary (.glb) export: a node, mesh and PBR material per part, turned into metres with Y up, and the sampled motion as an animation. |
 | [obj.js](../src/kernel/obj.js), [ply.js](../src/kernel/ply.js) | OBJ with its MTL, and binary PLY coloured per vertex. |
+| [step.js](../src/kernel/step.js) | STEP export (AP214): an assembly of named, coloured solids. [brep.js](../src/kernel/brep.js) builds exact solids from shape trees that say exactly what a shape is, from outlines of lines and arcs ([outline2.js](../src/kernel/outline2.js)); [facets.js](../src/kernel/facets.js) turns any other part's mesh into a solid of flat faces. |
 | [drawing.js](../src/kernel/drawing.js) | 2D drawings: line views with hidden edges removed, sections, overall dimensions, and the drawing sheet as SVG. |
 | [worker.js](../src/kernel/worker.js) | The worker that runs scripts and meshes parts. |
 
@@ -76,11 +77,16 @@ More on the mesher and the fit checks:
 - **Detail** is shared out by surface area, so a big part gets as much detail as a small one.
   The fine pass uses the real surface of the preview meshes, so a rotor spread over 16 m does not
   starve the fuselage.
+- **Thin walls.** A wall thinner than a cell can fall between the grid points, so the search also tests cell edges: where the empty spheres around an edge's two ends (radius: their distance) do not cover it, the edge is split and its middle tested. A part with walls hidden this way is refined, or meshed stretched if it is flat; if no cell the budget allows can hold the wall, its surface is moved out until the wall is a little more than a cell thick, so it is drawn whole.
 - **Thin edges.** A flat part whose edges taper thinner than a cell (a rotor blade, a wing, a
   keel) is meshed stretched up to 8x through its thickness and squeezed back. Its trailing edge
   comes out straight instead of bitten, without filling its broad faces with cells.
 - **Shading.** In the view, vertices are split along sharp edges, so each face is shaded flat to
-  its edge instead of smearing into the next.
+  its edge instead of smearing into the next. Whether a fold between two triangles is a sharp edge
+  or a tight curve is asked of the distance function: its normal is followed from one triangle,
+  past the edge, to the next; over a fillet it turns all the way, over a sharp edge all at once.
+  The normals come from the distance function too, so a fillet only a cell or two across is
+  shaded round, and the face beside a sharp edge has its own normal right up to the edge.
 - **Fit checks** need no meshes. A box of space is settled as soon as the distances at its centre
   show it is wholly inside both parts or outside one.
 - **Export** meshes every visible part at the same detail on all cores.
