@@ -233,11 +233,13 @@ export function createKernel() {
   async function exportDrawing(parts, { info = {}, projection = "first", section, hidden = false, size = "A3", detail = null } = {}) {
     const shown = visible(parts);
     const meshes = await exportMeshes(parts);
-    const bounds = modelBounds(meshes);
     const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
     const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the drawing took too long.");
-    // Holes and turned parts decide where the section goes (see choosePlane).
-    const { plane, note } = choosePlane(await draw({ features: true }), bounds, section, shown.length, (axis) => planSheet({ bounds, axis, projection, size, roomy: shown.length <= 3 }).scale);
+    // Holes and turned parts decide where the section goes (see choosePlane);
+    // the overall sizes are taken from the surfaces (see surfaceBounds).
+    const found = await draw({ features: true });
+    const bounds = found.bounds;
+    const { plane, note } = choosePlane(found.features, bounds, section, shown.length, (axis) => planSheet({ bounds, axis, projection, size, roomy: shown.length <= 3 }).scale);
     // The isometric view only where the sheet has room for it.
     const roomForIso = planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(meshes, "iso"), size, roomy: shown.length <= 3 }).iso;
     const flat = { opts: { hidden, marks: true } };

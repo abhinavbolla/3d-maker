@@ -6,7 +6,7 @@ import { meshSDF, meshBounds, meshArea, displayMesh, lightMesh } from "./mesh.js
 import { meshPart } from "./pieces.js";
 import { checkPairs } from "./fit.js";
 import { viewOutline, sectionView, sectionCut } from "./drawing.js";
-import { markedView, partFeatures, sectionMarks } from "./holes.js";
+import { markedView, partFeatures, sectionMarks, surfaceBounds } from "./holes.js";
 
 // A part with at least this many triangles gets a lighter copy, its vertices
 // merged over this many of its cells: about a ninth of the triangles.
@@ -57,7 +57,7 @@ self.onmessage = ({ data: job }) => {
       // their distance functions compiled here.
       const parts = job.parts.map((p) => ({ ...p, ...compile(p.node) }));
       let result;
-      if (job.features) result = partFeatures(parts);
+      if (job.features) result = { features: partFeatures(parts), bounds: surfaceBounds(parts) };
       else if (job.section && job.cutOnly) result = sectionCut(parts, job.section);
       else if (job.section) {
         // The section, with the holes and turned parts whose axes lie in its plane.

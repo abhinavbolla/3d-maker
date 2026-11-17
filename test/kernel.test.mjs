@@ -1432,6 +1432,24 @@ test("drawing: a plate is cut through its holes' axes, and a section given besid
   assert.deepEqual(overlapping(textBoxes(d.svg)), []);
 });
 
+test("drawing: a boss plate reads its true sizes, and a chamfer's edge is not taken for a hole", () => {
+  // The part Claude made in the second prompt run: a rounded 100 x 60 x 8 plate, a ⌀24 boss
+  // turned from a profile with a 1 mm chamfer, a ⌀10 bore and two ⌀6.6 holes.
+  const script = 'title("Boss plate"); const L = 100, W = 60, T = 8, D = 24, H = 30; const plate = extrude(rect(L, W, 3), T).at(0, 0, T / 2); const boss = revolve(path([0, T / 2]).line(D / 2, T / 2).line(D / 2, T + H - 1).line(D / 2 - 1, T + H).line(0, T + H).close()); let body = union(plate, boss, 2).common(box(L + 10, W + 10, T + H).at(0, 0, (T + H) / 2)); body = body.cut(cylinder(5, 100).at(0, 0, 20), hole(6.6, T).at(-L / 2 + 15, 0, T), hole(6.6, T).at(L / 2 - 15, 0, T)); part("Plate", body);';
+  const parts = runScript(script, {}).parts.map((p) => {
+    const m = meshPart(p.node, { budget: 30000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: "Boss plate", projection: "third" });
+  const said = (kind) => [...d.svg.matchAll(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`, "g"))].map((m) => m[1]).sort();
+  // The meshes' boxes are a few hundredths proud or short; the sheet reads the surfaces.
+  assert.deepEqual([said("width"), said("depth"), said("height")].flat(), ["100", "60", "38"]);
+  assert.deepEqual(said("diameter"), ["2× ⌀6.6", "⌀10", "⌀24"]);
+  assert.deepEqual(d.marks.fitted, []);
+  assert.equal(leaderCrossings(d.svg).n, 0);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
 test("drawing: a big assembly gets centre lines but no hole sizes, and no text on other text", () => {
   const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
   const parts = r.parts.map((p) => {
@@ -1468,16 +1486,18 @@ test("drawing: a detail view shows a crowded place at a larger scale, marked on 
     return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
   });
   const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 }, detail: true });
-  assert.deepEqual(d.detail, { view: "top", scale: "1:10", letter: "B" });
-  assert.match(d.svg, /<g id="detail-B" class="detail" data-view="top" data-scale="1:10">/);
-  assert.match(d.svg, />B \(1:10\)</);
+  // A standard scale at least twice the sheet's (1:50): 1:20 or 1:10, whichever has room.
+  assert.ok(d.detail?.view === "top" && ["1:20", "1:10"].includes(d.detail.scale) && d.detail.letter === "B", JSON.stringify(d.detail));
+  const k = 50 / Number(d.detail.scale.slice(2));
+  assert.ok(d.svg.includes(`<g id="detail-B" class="detail" data-view="top" data-scale="${d.detail.scale}">`));
+  assert.ok(d.svg.includes(`>B (${d.detail.scale})<`));
   // Every detail line lies inside its circle.
   const g = d.svg.slice(d.svg.indexOf('<g id="detail-B"'), d.svg.indexOf('id="detail-name"'));
   const circles = [...g.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g)].map((m) => m.slice(1).map(Number));
   const [cx, cy, R] = circles[1];
   const pts = [...g.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
   assert.ok(pts.length > 500 && pts.every(([x, y]) => Math.hypot(x - cx, y - cy) <= R + 0.02), `${pts.length} points, the furthest ${Math.max(...pts.map(([x, y]) => Math.hypot(x - cx, y - cy))).toFixed(2)} from the middle (radius ${R})`);
-  assert.ok(Math.abs(R / circles[0][2] - 5) < 1e-6, "the detail is not 5 times its circle on the view");
+  assert.ok(Math.abs(R / circles[0][2] - k) < 1e-6, `the detail is not ${k} times its circle on the view`);
   assert.deepEqual(overlapping(textBoxes(d.svg)), []);
   // At a given place too.
   const at = drawingSVG(parts, { section: { axis: "y", offset: 0 }, detail: { view: "front", at: [0, 0, 800], radius: 300 } });

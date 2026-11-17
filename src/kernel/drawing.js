@@ -10,7 +10,7 @@
 // function, whatever the mesh detail.
 // Units are millimetres; on the sheet, millimetres of paper.
 
-import { markedView, partFeatures, choosePlane, sectionMarks } from "./holes.js";
+import { markedView, partFeatures, choosePlane, sectionMarks, surfaceBounds } from "./holes.js";
 
 const { abs, min, max, sqrt, hypot, floor, ceil, round, cos, sin, PI } = Math;
 
@@ -1514,7 +1514,8 @@ export function sheetSVG({ info = {}, bounds, views, section, projection = "firs
       // The line itself, across the view: no label on it.
       overall.thin.push([c - 0.6, host.y, c + 0.6, host.y + host.h]);
     } else {
-      const c = hy(section.offset), s = section.axis === "y" ? -1 : 1;
+      // Across Y the letters sit under the line (the arrows look up); across Z, over it.
+      const c = hy(section.offset), s = section.axis === "y" ? 1 : -1;
       const [y0, y1] = s < 0 ? [c - 12, c + 2] : [c - 2, c + 12];
       taken.push([host.x - 14, y0, host.x, y1], [host.x + host.w, y0, host.x + host.w + 14, y1]);
       overall.thin.push([host.x, c - 0.6, host.x + host.w, c + 0.6]);
@@ -1767,7 +1768,7 @@ function annotate({ views, at, map, scale, narrow, taken, keys, section, bounds,
     // on the cutting line, so it gets none.
     const { u: uw, v: vw } = VIEWS[views[k].view];
     const a = "xyz".indexOf(section?.axis);
-    const onCut = (q, w, lo, hi) => a >= 0 && abs(w[a]) > 0.99 && abs(q - w[a] * section.offset) < 0.01 && abs(q - (lo + hi) / 2) < 0.01;
+    const onCut = (q, w, lo, hi) => a >= 0 && abs(w[a]) > 0.99 && abs(q - w[a] * section.offset) < 0.01 && abs(q - (lo + hi) / 2) < max(0.05, (hi - lo) * 2e-3);
     let us = distinct(placed.map((c) => c.u)).filter((u) => u - datum[0] > 0.05 && !onCut(u, uw, datum[0], datum[2]));
     let vs = distinct(placed.map((c) => c.v)).filter((v) => v - datum[1] > 0.05 && !onCut(v, vw, datum[1], datum[3]));
     if (placed.some((c) => onCut(c.u, uw, datum[0], datum[2]) || onCut(c.v, vw, datum[1], datum[3]))) notes.on_centre = true;
@@ -1995,7 +1996,8 @@ export const sideViewOf = (projection) => (projection === "third" ? "right" : "l
 // title and date go in the title block, with the rest of info (see sheetSVG).
 // section: { axis, offset }, both optional (see sectionPlane).
 export function drawingSVG(parts, { title, date = today(), info = {}, section, projection = "first", resolution, crease, hidden = false, size = "A3", detail = null } = {}) {
-  const bounds = modelBounds(parts);
+  // The overall sizes from the surfaces, not the meshes (see surfaceBounds).
+  const bounds = surfaceBounds(parts);
   // Holes and turned parts, which also decide where the section goes.
   const features = partFeatures(parts);
   const { plane, note } = choosePlane(features, bounds, section, parts.length, (axis) => planSheet({ bounds, axis, projection, size, roomy: parts.length <= MOST_PARTS }).scale);

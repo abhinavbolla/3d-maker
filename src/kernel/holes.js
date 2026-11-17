@@ -91,7 +91,8 @@ export function scriptFeatures(node) {
               return;
             }
           }
-          if (r > 0) add(M, cut, r, z0, z1, { dim: false });
+          // Sized by its largest radius, where the surface is checked to be round.
+          if (r > 0) add(M, cut, r, z0, z1);
         }
         return;
       case "extrude":
@@ -388,7 +389,8 @@ export function featuresInView(features, view, parts = []) {
           for (let k = 0; k <= 8; k++) bins[Math.floor(((a0 + ((a1 - a0) * k) / 8 + 3 * PI) / (2 * PI)) * 72) % 72] = 1;
         }
       if (bins.reduce((s, b) => s + b, 0) < 60) continue;
-      if (circles.some((k) => hypot(k.u - c.cx, k.v - c.cy) < max(tol, 0.05 * k.r) && abs(k.r - c.r) < max(tol, 0.05 * k.r))) continue;
+      // A circle round the centre of one the script explains and close to its size is an edge of that feature (a chamfer, a fillet), not a hole of its own.
+      if (circles.some((k) => k.source === "script" && hypot(k.u - c.cx, k.v - c.cy) < max(tol, 0.05 * k.r) && abs(k.r - c.r) < 0.15 * k.r)) continue;
       // A hole if, a little way in from the face, the middle is empty and
       // just outside the circle is solid.
       let kind = "solid";
@@ -446,4 +448,55 @@ export function choosePlane(features, bounds, section = {}, parts = 1, sheetScal
     }
   }
   return { plane, note };
+}
+
+// The model's box from its surfaces, not only its meshes: a mesh's
+// outermost vertex may stand a little proud of the surface or short of it
+// (a rounded corner meshed in cells), which would make a 100 mm plate read
+// 100.1. For each side of each part, the surface is found exactly along
+// that axis through its outermost vertices (the distance function changes
+// sign there), and the furthest of them is the side. parts: { positions,
+// f? or node }.
+export function surfaceBounds(parts) {
+  const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  for (const p of parts) {
+    const P = p.positions, n = P.length / 3;
+    if (!n) continue;
+    const f = p.f ?? (p.node ? compile(p.node).f : null);
+    for (let a = 0; a < 3; a++) {
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < n; i++) (lo = min(lo, P[i * 3 + a])), (hi = max(hi, P[i * 3 + a]));
+      const reach = max((hi - lo) * 0.01, 1e-3);
+      for (const top of [false, true]) {
+        const edge = top ? hi : lo;
+        let side = edge;
+        if (f) {
+          let found = -Infinity;
+          const s = top ? 1 : -1;
+          for (let i = 0; i < n; i++) {
+            const c = P[i * 3 + a];
+            if (abs(c - edge) > reach) continue;
+            const v = [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]];
+            const at = (t) => {
+              v[a] = t;
+              return f(v[0], v[1], v[2]);
+            };
+            // Inside a little way in, outside a little way out: bisect.
+            let tin = c - s * reach, tout = c + s * reach;
+            if (!(at(tin) < 0 && at(tout) > 0)) continue;
+            for (let k = 0; k < 40; k++) {
+              const m = (tin + tout) / 2;
+              if (at(m) < 0) tin = m;
+              else tout = m;
+            }
+            found = max(found, s * tin);
+          }
+          if (found > -Infinity) side = s * found;
+        }
+        if (top) b[a + 3] = max(b[a + 3], side);
+        else b[a] = min(b[a], side);
+      }
+    }
+  }
+  return b;
 }
