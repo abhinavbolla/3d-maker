@@ -356,5 +356,10 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, checkFit, exportGLB, exportOBJ, exportPLY };
+  // Volume and centre of mass of each part, from its distance function
+  // (kernel/measure.js), one worker per part; and how close two parts come.
+  const measureSolids = (parts) => Promise.all(parts.map((p) => job({ type: "measure", what: "solid", node: p.node }, FIT_TIMEOUT_MS, `Measuring part "${p.name}" took too long.`)));
+  const measureGap = (a, b) => job({ type: "measure", what: "gap", a: a.node, b: b.node }, FIT_TIMEOUT_MS, "Measuring the distance took too long.");
+
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, checkFit, exportGLB, exportOBJ, exportPLY, measureSolids, measureGap };
 }
