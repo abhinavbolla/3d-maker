@@ -8,6 +8,8 @@
 ![A helicopter rotor head made in Draftsman: hub, blade cuffs, pitch links, swashplate, scissors and servos, on a studio floor](docs/rotor-head.png)
 
 > **Draftsman is in early development.** From the first [release](https://github.com/abhinavbolla/draftsman/releases) on, each comes with installers for macOS, Windows and Linux, not signed yet. Until then it runs from a clone of this repository.
+>
+> Draftsman was formerly called 3D Maker.
 
 ## What works today
 
