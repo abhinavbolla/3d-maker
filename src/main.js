@@ -332,7 +332,7 @@ const actions = {
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
   // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
-  // "svg" (a drawing sheet), "png" (a studio picture of the view), "glb",
+  // "step", "svg" (a drawing sheet), "png" (a studio picture of the view), "glb",
   // "obj" or "ply".
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
@@ -364,8 +364,8 @@ const actions = {
     try {
       const { parts, title } = store.state.result;
       const drawing = kind === "svg" ? await makeDrawing({ store, kernel }) : null;
-      const r = drawing ? drawing.result : kind === "3mf" ? await kernel.export3MF(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
-      const ext = kind === "svg" || kind === "3mf" ? kind : "stl";
+      const r = drawing ? drawing.result : kind === "3mf" ? await kernel.export3MF(parts, title) : kind === "step" ? await kernel.exportSTEP(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
+      const ext = kind === "svg" || kind === "3mf" || kind === "step" ? kind : "stl";
       const where = await saveBytes(r.bytes, `${fileName()}.${ext}`, ext);
       // A drawing whose save was cancelled leaves nothing remembered.
       if (where) drawing?.keep();
