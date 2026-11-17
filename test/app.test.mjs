@@ -560,14 +560,20 @@ joint("Rod", "Piston", top);` });
   await call("hide_parts", { all: true });
 
   // Section: the cut faces are filled and flat, and lie on the plane.
-  const blue = [48, 96, 192];
-  const topWhole = await near(await snap({ view: "top" }), blue, 90);
+  // From above, the view frames x -20 to 60 and y -10 to 75 (with 6% to
+  // spare): 225 / 45.05 px per mm, and the block's top face at x 0, y 5 is
+  // at pixel (200, 362).
+  const topWholePng = await snap({ view: "top" });
+  const topColour = await pixelAt(topWholePng, 200, 362);
+  const topWhole = await near(topWholePng, topColour, 24);
   const frontWhole = await snap({ view: "front" });
   const sec = await call("section_view", { axis: "y", offset: 0, remove: "-" });
   check(sec.result?.parts_cut.join() === "Block,Can" && sec.result.look_into_it_from === "front", `a section across y cuts the block and the can, and says where to look from (${JSON.stringify(sec.result ?? sec.error)})`);
-  const topCut = await near(await snap({ view: "top" }), blue, 90);
-  // Seen from above the block reached from y -10 to 10; cut at 0 it reaches from 0 to 10.
-  check(topWhole.n > 1000 && Math.abs((topCut.y1 - topCut.y0 + 1) / (topWhole.y1 - topWhole.y0 + 1) - 0.5) < 0.04 && Math.abs(topCut.y0 - topWhole.y0) <= 1, `from above, the cut block ends at the plane: half as deep (${topCut.y1 - topCut.y0 + 1} px of ${topWhole.y1 - topWhole.y0 + 1})`);
+  const topCutPng = await snap({ view: "top" });
+  const topCut = await near(topCutPng, topColour, 24);
+  // Seen from above the block reached from y -10 to 10 (100 px); cut at 0 it
+  // reaches from 0 to 10, and its top face is shaded as before.
+  check(topWhole.n > 1000 && Math.abs((topCut.y1 - topCut.y0 + 1) / (topWhole.y1 - topWhole.y0 + 1) - 0.5) < 0.04 && Math.abs(topCut.y0 - topWhole.y0) <= 1, `from above, the cut block ends at the plane: half as deep (${topCut.y1 - topCut.y0 + 1} px of ${topWhole.y1 - topWhole.y0 + 1}; top face ${topColour}, then ${await pixelAt(topCutPng, 200, 340)})`);
   const frontCut = await snap({ view: "front" });
   // The front view looks into the cut. It frames x -20 to 60 and z 0 to 30
   // (with 6% to spare): 300 / 42.4 px per mm. The block's cut face is 40 x
