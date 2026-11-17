@@ -965,8 +965,9 @@ function rawLine(err) {
   return typeof err?.line === "number" ? err.line : null;
 }
 
-// values: { label: number } overrides from the sliders.
-export function runScript(source, values = {}) {
+// values: { label: number } overrides from the sliders. times: motion times
+// to give every moving part's exact pose at (see poses below).
+export function runScript(source, values = {}, { times } = {}) {
   const parts = [];
   const params = [];
   const prints = [];
@@ -1128,8 +1129,18 @@ export function runScript(source, values = {}) {
   }
   const out = parts.map(({ own, ...p }) => ({ ...p, frames: sampled.frames.get(p.name) ?? null }));
   const motion = sampled.count ? { loop: loopLen, frames: sampled.count, joints: jointReport, links } : null;
+  // Poses at exactly the times asked for (a recording's frames), from the
+  // motion itself rather than between samples: { name: Float32Array }.
+  let exactPoses;
+  if (times?.length && sampled.count) {
+    exactPoses = {};
+    for (const p of out) if (p.frames) exactPoses[p.name] = new Float32Array(times.length * 12);
+    times.forEach((t, i) => {
+      for (const name of Object.keys(exactPoses)) exactPoses[name].set(sampled.world(name, t), i * 12);
+    });
+  }
   // joints also go on their own, so the fit check leaves their overlap out in a model that does not move.
-  return { title: modelTitle, parts: out, params, prints, warnings, motion, joints: jointReport };
+  return { title: modelTitle, parts: out, params, prints, warnings, motion, joints: jointReport, ...(exactPoses ? { poses: exactPoses } : {}) };
 }
 
 function niceStep(range) {

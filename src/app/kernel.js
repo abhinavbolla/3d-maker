@@ -294,5 +294,14 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportDrawing, checkFit };
+  // Every moving part's exact pose at each of these motion times (a
+  // recording's frames), from running the script's motion itself:
+  // { name: Float32Array of times.length x 12 }.
+  async function posesAt(doc, times) {
+    const r = await job({ type: "run", script: doc.script, values: doc.values, times }, RUN_TIMEOUT_MS, "Working out the motion for the recording took too long.");
+    if (r.error) throw new Error(r.error);
+    return r.poses ?? {};
+  }
+
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportDrawing, checkFit, posesAt };
 }

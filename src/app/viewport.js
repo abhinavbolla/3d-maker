@@ -415,30 +415,62 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     schedule();
   }
 
-  // Poses come from the kernel, sampled over the loop (60 per second); in
-  // between two samples, rotation is slerped and position interpolated.
+  // Poses come from the kernel, sampled over the loop (60 per second). In
+  // between two samples a part moves as a screw: it turns about the axis the
+  // step between them turns about, wherever that axis is, and slides along
+  // it. So a part spinning about a centre far from the origin stays on its
+  // axis (taking position and rotation apart would cut across the circle).
+  // A recording gives exact poses for its frames instead (useExactPoses).
   const qa = new THREE.Quaternion();
-  const qb = new THREE.Quaternion();
+  const qd = new THREE.Quaternion();
   const pa = new THREE.Vector3();
   const pb = new THREE.Vector3();
+  const axis = new THREE.Vector3();
+  const centre = new THREE.Vector3();
+  const along = new THREE.Vector3();
   const sc = new THREE.Vector3();
   const ma = new THREE.Matrix4();
   const mb = new THREE.Matrix4();
+  const md = new THREE.Matrix4();
   const setFrame = (m, f, i) => m.set(f[i], f[i + 1], f[i + 2], f[i + 3], f[i + 4], f[i + 5], f[i + 6], f[i + 7], f[i + 8], f[i + 9], f[i + 10], f[i + 11], 0, 0, 0, 1);
+  // out = the screw motion a fraction w of the way from pose a to pose b.
+  function screw(a, b, w, out) {
+    md.copy(a).invert().premultiply(b); // the step: b = md · a
+    md.decompose(pb, qd, sc);
+    if (qd.w < 0) qd.set(-qd.x, -qd.y, -qd.z, -qd.w);
+    const angle = 2 * Math.acos(Math.min(1, qd.w));
+    if (angle < 1e-9) return out.makeTranslation(pb.multiplyScalar(w)).multiply(a);
+    axis.set(qd.x, qd.y, qd.z).normalize();
+    const slide = pb.dot(axis);
+    // The axis passes through the point centre: the part of the step's
+    // move square to the axis is a turn about it.
+    along.copy(pb).addScaledVector(axis, -slide);
+    centre.crossVectors(axis, along).multiplyScalar(1 / Math.tan(angle / 2)).add(along).multiplyScalar(0.5);
+    qd.setFromAxisAngle(axis, angle * w);
+    // x -> R(x - centre) + centre + slide·w·axis
+    out.makeRotationFromQuaternion(qd);
+    pa.copy(centre).applyQuaternion(qd).negate().add(centre).addScaledVector(axis, slide * w);
+    out.setPosition(pa);
+    return out.multiply(a);
+  }
+  let exact = null; // { index: Map(time -> i), frames: { name: Float32Array } }
   function pose(t) {
-    for (const { object, part } of parts.values()) {
+    const k = exact?.index.get(t);
+    for (const [name, { object, part }] of parts) {
       const f = part.frames;
       if (!f) {
         object.matrix.identity();
+      } else if (k !== undefined && exact.frames[name]) {
+        setFrame(object.matrix, exact.frames[name], k * 12);
       } else {
         const n = f.length / 12;
         const x = (((t % loopSeconds) + loopSeconds) % loopSeconds) / loopSeconds * n;
         const i = Math.floor(x) % n;
         const j = (i + 1) % n;
         const w = x - Math.floor(x);
-        setFrame(ma, f, i * 12).decompose(pa, qa, sc);
-        setFrame(mb, f, j * 12).decompose(pb, qb, sc);
-        object.matrix.compose(pa.lerp(pb, w), qa.slerp(qb, w), sc.set(1, 1, 1));
+        setFrame(ma, f, i * 12);
+        setFrame(mb, f, j * 12);
+        screw(ma, mb, w, object.matrix);
       }
       object.matrixWorldNeedsUpdate = true;
     }
@@ -915,6 +947,12 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     canvas: renderer.domElement,
     motionTime: () => time,
     isRecording: () => recording,
+    // Poses worked out by the kernel at exactly these motion times (a
+    // recording's frames): { times: [t], frames: { name: Float32Array } },
+    // or null to go back to the sampled loop.
+    useExactPoses(table) {
+      exact = table ? { index: new Map(table.times.map((t, i) => [t, i])), frames: table.frames } : null;
+    },
     maxSize: () => renderer.capabilities.maxTextureSize,
     // The live camera, and placing it (the view then turns around target).
     liveCamera: () => ({ position: camera.position.clone(), target: nav.target.clone(), up: camera.up.clone(), fov: camera.fov, aspect: camera.aspect }),

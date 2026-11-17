@@ -15,7 +15,7 @@ const base64 = (bytes) => {
 };
 
 // onRecording({ done, total } | null): a film is being made, or no longer.
-export function createDirector({ store, viewport, onRecording = () => {} }) {
+export function createDirector({ store, viewport, kernel, onRecording = () => {} }) {
   const r1 = (v) => Math.round(v * 10) / 10;
   const title = () => store.state.result?.title || "model";
   const fineDetail = () => store.state.refining && Promise.race([store.state.refining, new Promise((r) => setTimeout(r, 15000))]);
@@ -36,6 +36,11 @@ export function createDirector({ store, viewport, onRecording = () => {} }) {
       views: views(),
       partNames: names,
       hasMotion: viewport.hasMotion(),
+      // Exact poses at motion times, wrapped into the loop as the view plays it.
+      posesAt: viewport.hasMotion() && kernel ? async (times) => {
+        const loop = store.state.result?.motion?.loop || 4;
+        return { times, frames: await kernel.posesAt(store.state.doc, times.map((x) => ((x % loop) + loop) % loop)) };
+      } : null,
       partsAt,
       size: modelSize,
       current: () => ({ position: live.position, target: live.target, up: live.up, lens: fovToLens(live.fov, live.aspect) }),
@@ -213,7 +218,7 @@ export function createDirector({ store, viewport, onRecording = () => {} }) {
           if (err instanceof Cancelled) throw new Error("The user cancelled the recording. No file was written.");
           throw err;
         }
-        const { bytes, stills: kept, end, hashes, ...facts } = result;
+        const { bytes, stills: kept, end, hashes, tracked, times, ...facts } = result;
         film = { id: ++filmId, bytes };
         return {
           name: title(),
@@ -225,6 +230,7 @@ export function createDirector({ store, viewport, onRecording = () => {} }) {
           end_camera: describe(end),
           stills: Object.entries(kept).map(([n, jpeg]) => ({ frame: Number(n), at_seconds: r1(Number(n) / fps), jpeg })),
           ...(hashes ? { hashes } : {}),
+          ...(tracked ? { tracked, times } : {}),
         };
       },
       // One piece of the film record_video made, as base64. The film is let

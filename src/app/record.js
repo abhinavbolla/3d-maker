@@ -73,7 +73,8 @@ export class Cancelled extends Error {
 // onFrame(done, total): after each frame. signal: an AbortSignal to cancel.
 // stills: frame numbers to keep a small JPEG of (for Claude to look at).
 // test: { hashes: true } returns each frame's pixel hash; { slowMs } waits
-// that long after each frame, to show that slow frames change nothing.
+// that long after each frame, to show that slow frames change nothing;
+// { track: part } returns that part's pose matrix in each frame.
 export async function record({ viewport, shots, width = 1920, height = 1080, fps = 30, format = "mp4", startAt = 0, ctx, onFrame = () => {}, signal, stills = [], test = {} }) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 64 || height < 64 || width > MAX_SIDE || height > MAX_SIDE) throw new Error(`width and height must be whole numbers from 64 to ${MAX_SIDE}.`);
   if (width % 2 || height % 2) throw new Error("width and height must be even numbers (video encoders need them so).");
@@ -104,9 +105,14 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
   encoder.configure(chosen.config);
   const keyEvery = fps * 2;
   const frameUs = 1e6 / fps;
+  // Every frame's pose from the motion itself, at exactly its time.
+  const times = [...new Set(Array.from({ length: plan.frames }, (_, n) => plan.timeAt(n)))];
+  const exact = ctx.posesAt ? await ctx.posesAt(times) : null;
   const studio = viewport.studio(width, height);
+  if (exact) viewport.useExactPoses(exact);
   const cam = toThree(plan.at(0).camera, width / height, size);
   const hashes = [];
+  const tracked = []; // test.track: that part's pose in each frame
   const kept = {};
   try {
     for (let n = 0; n < plan.frames; n++) {
@@ -118,6 +124,7 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
       // (pose, shadows, mirror, shading) happens inside studio.draw.
       const canvas = studio.draw(cam, time);
       if (test.hashes) hashes.push(hash(studio.pixels()));
+      if (test.track) tracked.push(ctx.partsAt(time).get(test.track)?.matrix.elements);
       if (stills.includes(n)) kept[n] = studio.still(480);
       const frame = new VideoFrame(canvas, { timestamp: Math.round(n * frameUs), duration: Math.round(frameUs) });
       encoder.encode(frame, { keyFrame: n % keyEvery === 0 });
@@ -131,6 +138,7 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
     if (failure) throw new Error(`The video encoder failed: ${failure.message ?? failure}`);
   } finally {
     if (encoder.state !== "closed") encoder.close();
+    viewport.useExactPoses(null);
     studio.end();
   }
   // Kept in the order the encoder gave them, which is decode order.
@@ -150,5 +158,6 @@ export async function record({ viewport, shots, width = 1920, height = 1080, fps
     end: plan.end,
     stills: kept,
     ...(test.hashes ? { hashes } : {}),
+    ...(test.track ? { tracked, times: Array.from({ length: plan.frames }, (_, n) => plan.timeAt(n)) } : {}),
   };
 }

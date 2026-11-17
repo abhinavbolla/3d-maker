@@ -556,7 +556,7 @@ joint("Rod", "Piston", top);` });
   const fov50 = (2 * Math.atan(Math.tan(Math.atan(18 / 50)) / live.aspect) * 180) / Math.PI;
   check(r1(live.position).join() === r1(sc.position).join() && Math.abs(live.fov - fov50) < 0.01, `the view moves there, and 50 mm is ${live.fov.toFixed(2)} degrees high at this window's shape (${r1(live.position)})`);
   const savedViews = await v("window.__draftsman.views()");
-  check(JSON.stringify(Object.keys(savedViews)) === '["side"]' && savedViews.side.lens_mm === 50 && (await vc("get_model")).result?.saved_views?.[0] === "side", "the saved view is savedViews with the model, and get_model names it");
+  check(JSON.stringify(Object.keys(savedViews)) === '["side"]' && savedViews.side.lens_mm === 50 && (await vc("get_model")).result?.saved_views?.[0] === "side", "the saved view is kept with the model, and get_model names it");
   check(/no view named "nope"/.test((await vc("set_camera", { view: "nope" })).error ?? ""), "an unknown view is refused, naming the views there are");
   check(/no setting "zoom"/.test((await vc("set_camera", { zoom: 2 })).error ?? ""), "an unknown camera setting is refused");
   const sidePicture = await vc("save_picture", { camera: "side", width: 320, height: 200 });
@@ -605,7 +605,7 @@ joint("Rod", "Piston", top);` });
   check(mp4.toString("latin1", avc1 + 4, avc1 + 8) === "avc1" && mp4.readUInt16BE(avc1 + 32) === 320 && mp4.readUInt16BE(avc1 + 34) === 180, "its frames are H.264, 320 x 180");
   check(/no longer here/.test((await vc("video_part", { id: slow.result.id, index: 0 })).error ?? ""), "the film is let go once fetched");
   // Saved views, follow with ride, and WebM.
-  const follow = await vc("record_video", { shots: [{ seconds: 1, camera: { view: "side" }, move: "follow", part: "Arm", ride: true }], width: 160, height: 90, format: "webm" });
+  const follow = await vc("record_video", { shots: [{ seconds: 1, camera: { azimuth: 90, elevation: 10, parts: ["Arm"] }, move: "follow", part: "Arm", ride: true }], width: 160, height: 90, format: "webm" });
   const turnedBy = (((follow.result?.end_camera.azimuth - 90) % 360) + 360) % 360;
   check(follow.result?.codec === "vp9" && Math.abs(turnedBy - 90) < 2, `following the arm, riding with it, turns the camera 90 degrees in 1 s (${turnedBy.toFixed(1)}); format webm gives ${follow.result?.format}`);
   const webm = await film(follow.result);
@@ -623,6 +623,18 @@ joint("Rod", "Piston", top);` });
   check((await v('document.getElementById("recording").hidden')) && JSON.stringify(await canvasSize()) === JSON.stringify(sizeBefore), "the progress line goes and the view is back at the window's size");
   check(/no longer here/.test((await vc("video_part", { id: (slow.result.id ?? 0) + 3, index: 0 })).error ?? ""), "nothing is left to fetch after a cancel");
   check(await v('Boolean(document.querySelector("[data-export=video]"))'), "the Export menu has Video (turntable)");
+  // A rotor at 1200 rpm (120 degrees between the kernel's motion samples)
+  // about an axis 3 m from the origin: its hub stays on that axis between
+  // samples in the view, and in recorded frames, which take exact poses.
+  await vc("set_model", { script: 'part("Rotor", box(600, 20, 60).at(3000, 0, 500), { spin: { axis: "y", center: [3000, 0, 500], rpm: 1200 } });\nloop(1);' });
+  const hubOff = (m) => Math.hypot(m[0] * 3000 + m[8] * 500 + m[12] - 3000, m[1] * 3000 + m[9] * 500 + m[13], m[2] * 3000 + m[10] * 500 + m[14] - 500);
+  let liveOff = 0;
+  for (const t of [0.004, 0.0123, 0.2571, 0.5083, 0.9917]) liveOff = Math.max(liveOff, hubOff(await v(`window.__draftsman.partMatrix("Rotor", ${t})`)));
+  const tracked = await vc("record_video", { shots: [{ seconds: 0.2 }, { seconds: 0.2, move: "orbit", degrees: 10 }], width: 64, height: 64, test: { track: "Rotor" } });
+  const times = tracked.result?.times ?? [];
+  check(times.length === 12 && times.every((t, n) => Math.abs(t - n / 30) < 1e-9), `over two shots, frame n is posed at n/30 s into the motion (${times.slice(6, 9).map((t) => t.toFixed(4))})`);
+  const recOff = Math.max(...(tracked.result?.tracked ?? [[NaN]]).map(hubOff));
+  check(liveOff < 0.1 && recOff < 0.1, `a fast rotor's hub stays on its axis: ${liveOff.toFixed(4)} mm off in the view between samples, ${recOff.toFixed(4)} mm in recorded frames`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);

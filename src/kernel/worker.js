@@ -15,7 +15,7 @@ const LIGHT_CELLS = 3;
 self.onmessage = ({ data: job }) => {
   try {
     if (job.type === "run") {
-      const r = runScript(job.script, job.values);
+      const r = runScript(job.script, job.values, { times: job.times });
       // Each part's bounding box, so the app can size detail to the whole model.
       for (const p of r.parts ?? []) p.box = compile(p.node).box;
       // Shape trees go back as data so any worker can mesh them.

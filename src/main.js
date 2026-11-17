@@ -59,6 +59,7 @@ const claude = createClaude({
 // The camera and video commands (director.js), with a quiet line while a
 // video is recorded: how far it is, and Cancel.
 const director = createDirector({
+  kernel,
   store,
   viewport,
   onRecording(p) {
@@ -444,6 +445,7 @@ if (import.meta.env.DEV) {
     call: (name, args = {}) => commands[name](args),
     camera: () => Object.fromEntries(Object.entries(viewport.liveCamera()).map(([k, v]) => [k, v?.toArray ? v.toArray() : v])),
     cancelRecording: () => director.cancel(),
+    partMatrix: (name, t) => viewport.partsAt(t).get(name)?.matrix.elements,
     views: () => store.state.doc.views ?? {},
     exportVideo: () => exportVideo(),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
