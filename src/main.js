@@ -10,6 +10,7 @@ import { loadAutosave } from "./app/autosave.js";
 import { saveBytes, openText, saveOBJ } from "./app/files.js";
 import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
+import { makeFloorPlan } from "./app/floorplan.js";
 import { showExamples, exampleScript, tryText } from "./app/examples.js";
 import { mountInspectLine } from "./app/inspect-tools.js";
 
@@ -391,6 +392,19 @@ const actions = {
         return say(err.message, 8000);
       }
     }
+    // A floor plan of a building, saved as SVG, PDF or DXF like the drawing.
+    const planFormat = { plan: "svg", "plan-pdf": "pdf", "plan-dxf": "dxf" }[kind];
+    if (planFormat) {
+      say("Making the floor plan", 0);
+      try {
+        const plan = await makeFloorPlan({ store, kernel }, { format: planFormat });
+        const where = await saveBytes(plan.result.bytes, `${fileName()}-plan.${planFormat}`, planFormat);
+        if (where) plan.keep();
+        return say(where ? `Exported ${where.split("/").pop()}. ${plan.result.line}` : "", 20000);
+      } catch (err) {
+        return say(err.message, 8000);
+      }
+    }
     // Drawings: the sheet as SVG, PDF or DXF, or the section alone at 1:1 for cutting.
     const sheet = { svg: {}, pdf: { format: "pdf" }, dxf: { format: "dxf" }, outline: { format: "dxf", outline: "section" } }[kind];
     say(kind === "solid" ? "Joining the parts into one solid" : sheet ? "Making the drawing" : "Exporting", 0);
@@ -415,6 +429,8 @@ document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("cl
 const exportMenu = $("export-menu");
 const showExportMenu = (open) => {
   exportMenu.hidden = !open;
+  // Floor plans only for a model with a building in it.
+  exportMenu.querySelectorAll('[data-export^="plan"]').forEach((b) => (b.hidden = !store.state.result?.building));
   $("export-button").setAttribute("aria-expanded", String(open));
   if (open) exportMenu.querySelector("button").focus();
 };
@@ -429,7 +445,7 @@ document.addEventListener("pointerdown", (e) => {
   if (!exportMenu.hidden && !e.target.closest(".menu")) showExportMenu(false);
 });
 exportMenu.addEventListener("keydown", (e) => {
-  const items = [...exportMenu.querySelectorAll("button")];
+  const items = [...exportMenu.querySelectorAll("button:not([hidden])")];
   const at = items.indexOf(document.activeElement);
   if (e.key === "Escape") e.stopPropagation(), showExportMenu(false), $("export-button").focus();
   else if (e.key === "ArrowDown" || e.key === "ArrowUp") e.preventDefault(), items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();

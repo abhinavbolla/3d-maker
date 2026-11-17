@@ -25,6 +25,12 @@ Notable changes to Draftsman. The format follows
 - Plans for big models: Claude lists the sub-assemblies and their parts, then builds and checks
   them one step at a time, with progress shown above the prompt.
 - Export as STL (each part its own shell), STL as one solid, and 3MF with named, coloured parts.
+- Buildings in the script: outer and inner walls joined cleanly, doors and windows placed along named
+  walls, a floor slab, a gable or flat roof, a straight stair, and rooms whose areas come from the walls.
+  A floor plan of a building as an A3 SVG sheet at 1:50 or 1:100, with the walls cut at 1200 mm, door
+  swings, windows, room names and areas, inside sizes and outside dimension chains, a north arrow and a
+  scale bar, as SVG, PDF or DXF (layers for walls, openings, dimensions and text): from the Export
+  menu, and for Claude as `export_floor_plan`.
 - Export as glTF (.glb) with a named node, colour and material per part and the motion as an
   animation; OBJ with an MTL; and binary PLY coloured per vertex. From the Export menu, and for
   Claude as `export_glb`, `export_obj` and `export_ply`.

@@ -9,7 +9,7 @@ import { REFERENCE } from "../../mcp/reference.mjs";
 
 const isTauri = () => Boolean(window.__TAURI_INTERNALS__);
 
-const TOOLS = ["get_model", "set_model", "edit_model", "append_to_model", "set_plan", "finish_step", "check_fit", "screenshot", "export_stl", "export_3mf", "export_step", "export_drawing", "export_glb", "export_obj", "export_ply", "hide_parts", "section_view", "explode_view", "clear_view", "measure", "set_look", "reference"].map((t) => `mcp__draftsman__${t}`);
+const TOOLS = ["get_model", "set_model", "edit_model", "append_to_model", "set_plan", "finish_step", "check_fit", "screenshot", "export_stl", "export_3mf", "export_step", "export_drawing", "export_glb", "export_obj", "export_ply", "hide_parts", "section_view", "explode_view", "clear_view", "measure", "set_look", "export_floor_plan", "reference"].map((t) => `mcp__draftsman__${t}`);
 
 const APP_PROMPT = `You are the modelling assistant inside the Draftsman app. The user types requests into the app and watches the 3D view while you work. Use only the draftsman tools: call get_model before changing an existing model, follow HOW TO WORK below (big or mechanical models are built step by step with set_plan and finish_step; put the plan up within a minute and work out each step's details when you reach it), check your work with screenshots and check_fit, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.
 
@@ -43,6 +43,7 @@ const TOOL_STATUS = {
   export_glb: "Exporting",
   export_obj: "Exporting",
   export_ply: "Exporting",
+  export_floor_plan: "Making the floor plan",
 };
 
 // onEvent receives { kind: "session" | "text" | "status" | "done", ... }.
