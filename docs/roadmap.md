@@ -31,6 +31,7 @@ What is left:
 3. **Small fillets and chamfers everywhere.** Real machined parts have a small break on every edge, and those edges catch the light. The kernel can round edges; what is missing is detail in the mesh where the surface curves tightly, so a 1 mm fillet on a 1 m part survives. This needs detail shared out by curvature, not only by surface area.
 4. **Smoother metal.** Normals now come from the distance field, so small fillets and curves are shaded round and sharp edges stay crisp. What is left: finer view meshes on shiny parts, where the outline of a coarse mesh still shows its facets.
 5. **Materials Claude chooses.** Parts can now be metal, brushed or anodised metal, paint, plastic, rubber or glass. Next: brushed metal with a grain that follows the part, textures such as tread and knurling, and decals.
+6. **Surroundings.** Pictures and films have one studio backdrop. Other places to put a model: an outdoor sky and ground, and a darker studio.
 
 ## 2D drawings
 
@@ -60,6 +61,7 @@ What is left:
 4. **Roofs**: hip roofs, roofs over outlines that are not rectangles, and fascia, gutters and tiles.
 5. **The plan**: furniture and fittings (kitchen, bathroom), door and window tags with a schedule, a room too small for its name labelled from outside with a leader, grid lines, and a level for the floor.
 6. **Rules**: room sizes, door widths and window areas checked against a building code the user names.
+7. **Renderings**: a house that reads as a house in a picture, with materials for walls, roof and ground, glass you can see through, and daylight. Today the 3D building is plain walls and a roof.
 
 ## Files for other apps
 
@@ -67,8 +69,10 @@ Done so far: STL, 3MF, glTF (a named node per part, its colour and material, and
 
 What is left:
 
-1. **STEP.** This is the hard one, and the main thing that separates Draftsman from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. Done so far: STEP (AP214) with exact surfaces written straight from the script for boxes, cylinders, cones, spheres, tori, capsules, and extrusions and revolves of line-and-arc outlines with their holes, and a closed solid of flat faces from the mesh for every other part, as a named, coloured assembly. What is left: exact cuts and joins in 3D (a plate with a drilled hole, a shaft with a key), which need the solids intersected; fillets and rounded boxes; fitted surfaces for smooth blends, lofts and sweeps instead of flat faces; and checking the files in FreeCAD, Fusion and SolidWorks. This will take a long time, and it is the largest open question on this page.
+1. **STEP.** This is the hard one, and the main thing that separates Draftsman from professional CAD. STEP files hold exact surfaces; our kernel holds distance fields. Done so far: STEP (AP214) with exact surfaces written straight from the script for boxes, cylinders, cones, spheres, tori, capsules, and extrusions and revolves of line-and-arc outlines with their holes, and a closed solid of flat faces from the mesh for every other part, as a named, coloured assembly. What is left: exact cuts and joins in 3D (a plate with a drilled hole, a shaft with a key), which need the solids intersected; fillets and rounded boxes; fitted surfaces for smooth blends, lofts and sweeps instead of flat faces. This will take a long time, and it is the largest open question on this page.
 2. **Import.** Open an STL or a STEP file as a reference to build around.
+3. **Checked in the programs people use.** FreeCAD opens our STEP samples as valid, closed solids in CI ([testing.md](testing.md)). The other files have not been opened in the programs they are meant for: glTF in Blender, DXF in a 2D CAD program, and STEP in Fusion and SolidWorks.
+4. **A model as one HTML file** that anyone can open in a browser and turn, with no app.
 
 ## Working with the model directly
 
@@ -90,7 +94,8 @@ Done so far: recording frame by frame (each frame's camera and motion come from 
 What is left:
 
 1. **Exploding and assembling** a model on camera.
-2. **Sound, motion blur and titles.**
+2. **Sound, motion blur and titles.** Without motion blur a fast rotor strobes.
+3. **A judge for films.** A fresh look at each film (framing, pace, what the frame cuts off) before it is handed over, the way the benchmark judges a model.
 
 ## Modelling depth
 
@@ -101,7 +106,17 @@ Rhino's strength is free-form curves and surfaces. To compete there:
 3. **Sheet-metal and shell tools**: exact wall thickness, bends and flat patterns.
 4. **Constraints** between parts ("this face sits on that one"), so assemblies update when a part changes.
 5. **A parts list** with quantities and materials.
-6. **Faster builds.** A helicopter takes minutes. Parts of a plan could be built side by side, and a model could appear piece by piece as Claude writes it.
+6. **Faster builds.** A helicopter takes minutes, and keeping thin walls whole made builds about 20% slower (39% on the helicopter's first view). First win that time back; then parts of a plan could be built side by side, and a model could appear piece by piece as Claude writes it.
+
+## Realism
+
+What limits how real a prompted model looks is mostly judgement, not geometry. Done so far: Claude writes down the real object's main sizes first, and compares flat side, top and front pictures of the model with the real thing.
+
+What is left:
+
+1. **A critic pass.** A fresh judge that looks at the finished model and asks whether it looks like the real thing, before Claude may call it done. Today Claude judges its own pictures.
+2. **Proportion warnings**, reported the way the fit check reports overlaps: a strut too thin for its length, a wheel too small for the body.
+3. **A size sheet.** Every main dimension written down with where it came from, and the model checked against it.
 
 ## The app
 
@@ -112,7 +127,19 @@ What is left:
 1. **Signed installers.** The workflow signs as soon as the certificates exist ([releasing.md](releasing.md)); then automatic updates.
 2. **Settings**: units, theme, grid, and which Claude model to use.
 3. **Touch and trackpad gestures** throughout.
+4. **A first release**, and the plugin and the other clients tried for real. The Claude Code plugin has not been installed from the marketplace yet, and the setup written for Claude Desktop, Cursor and VS Code has not been tried.
+5. **Building with no window open.** Claude Code makes a model and writes its files without the app running.
+6. **Trying it in the browser** in one click, with the examples, sliders and exports working without Claude.
+7. **A shorter Export menu.** It has grown to 13 entries, 16 for a building.
+8. **Starter issues** taken from this page, for people who want to help.
 
 ## How we measure progress
 
 Changes to what Claude makes are checked against the [benchmarks](benchmarks.md): eight complex moving objects scored by a judge, and CADPrompt scored against its ground-truth meshes. A change that claims to improve the look or the shapes should move those numbers.
+
+The benchmarks last ran on 10 November 2026: 6.4 out of 10 on the eight objects, and 20 of CADPrompt's 200 parts. The mesher, the look and what Claude is told have all changed since, so the next run is due now, and after it all 200 CADPrompt parts.
+
+Not measured yet:
+
+1. **The desktop app.** Every automatic test runs the app in Chrome. Films, large saves and the newer exports have not been run in the desktop window, and no test drives it.
+2. **A weak machine.** The app is meant to be light enough for a low-end computer, but GPU time and memory have been measured on one Apple silicon Mac only. Wanted: the same numbers on a 4 GB machine with built-in graphics, and then ways of drawing that keep a big model smooth there.
