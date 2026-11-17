@@ -84,8 +84,7 @@ function wallThickness(f, c) {
   }
   return -d + s;
 }
-function missedDetail(f, O, c, kept, centres) {
-  const vals = new Map();
+function missedDetail(f, O, c, kept, centres, withWalls = true, vals = new Map()) {
   const at = (i, j, k) => {
     const key = key3(i, j, k);
     let v = vals.get(key);
@@ -107,7 +106,7 @@ function missedDetail(f, O, c, kept, centres) {
     if (all) {
       slivers++;
       // Solid at the centre, outside at every corner: a wall too.
-      if (inside) {
+      if (inside && withWalls) {
         walls++;
         if (thick.length < 64) {
           const [i0, j0, k0] = [i + 0.5, j + 0.5, k + 0.5];
@@ -117,6 +116,7 @@ function missedDetail(f, O, c, kept, centres) {
       }
       continue;
     }
+    if (!withWalls) continue;
     // Only solid walls between two outside corners: a slot thinner than a
     // cell fills in, which loses no material.
     for (let e = 0; e < 12; e++) {
@@ -129,7 +129,15 @@ function missedDetail(f, O, c, kept, centres) {
       let g = gaps.get(ekey);
       if (g === undefined) {
         const x0 = O[0] + ci * c, y0 = O[1] + cj * c, z0 = O[2] + ck * c;
-        g = wallInEdge(f, x0, y0, z0, x0 + (a === 0 ? c : 0), y0 + (a === 1 ? c : 0), z0 + (a === 2 ? c : 0), f0, f1, c);
+        const dx = a === 0 ? c : 0, dy = a === 1 ? c : 0, dz = a === 2 ? c : 0;
+        // First, cheaply: a wall between the ends has the distance falling
+        // from both ends into the edge. Most edges near a surface run along
+        // it, where it does not.
+        const s = 0.02;
+        g =
+          f(x0 + dx * s, y0 + dy * s, z0 + dz * s) < f0 - 0.3 * s * c &&
+          f(x0 + dx * (1 - s), y0 + dy * (1 - s), z0 + dz * (1 - s)) < f1 - 0.3 * s * c &&
+          wallInEdge(f, x0, y0, z0, x0 + dx, y0 + dy, z0 + dz, f0, f1, c);
         gaps.set(ekey, g);
         if (g && thick.length < 64) thick.push(wallThickness(f, c));
       }
@@ -203,7 +211,7 @@ export function meshSDF(f, box, opts = {}) {
   if (!s) return meshGrid(f, box, opts);
   // The search alone (no surface yet) says the cell size and what it misses.
   const probe = meshGrid(f, box, opts, null, true);
-  if (!(probe.missed > SLIVERS)) return meshGrid(f, box, opts);
+  if (!(probe.slivers > SLIVERS || probe.walls > LOST)) return meshGrid(f, box, opts);
   // Never coarser along the broad faces than the plain mesh would be.
   const stretched = meshGrid(f, box, { ...opts, maxCell: Math.min(opts.maxCell ?? Infinity, probe.cellSize) }, s);
   return stretched.incomplete || stretched.cellSize > probe.cellSize * 1.01 ? meshGrid(f, box, opts) : stretched;
@@ -256,9 +264,12 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
       // still slip between the grid corners.
       const over = count * 4 > budget * THIN_CAP;
       if (over && probe) break;
-      const md = missedDetail(f, O, c, kept, centres);
+      // Walls are only looked for when slivers alone would not refine (the
+      // probe looks for slivers only: walls are what stretching is for).
+      const vals = new Map();
+      let md = missedDetail(f, O, c, kept, centres, over, vals);
       if (!over) {
-        if (md.slivers <= 0.002 && (probe || md.walls <= WALLS)) break;
+        if (md.slivers <= 0.002 && (probe || (md = missedDetail(f, O, c, kept, centres, true, vals)).walls <= WALLS)) break;
       } else {
         // Past the cap, only for walls going missing over much of the part,
         // and only if cells fine enough for them fit under WALL_CAP.
@@ -280,7 +291,7 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
 
   if (probe) {
     const md = missedDetail(f, O, c, kept, centres);
-    return { missed: Math.max(md.slivers, md.walls), cellSize: c };
+    return { slivers: md.slivers, walls: md.walls, cellSize: c };
   }
 
   // Cells too coarse for a wall thinner than them (a thin tube, a tilted

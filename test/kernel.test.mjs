@@ -547,6 +547,8 @@ test("thin plates, tubes, blades and pins never mesh to nothing or lose a wall",
     [{ t: "box", s: [200, 120, 1] }, 1500, 24000, 0.01],
     [{ t: "box", s: [200, 120, 1] }, 20000, 24000, 0.01],
     [{ t: "box", s: [200, 120, 0.6] }, 6000, 14400, 0.01],
+    [{ t: "box", s: [200, 120, 0.8] }, 20000, 19200, 0.01],
+    [{ t: "box", s: [200, 120, 0.8] }, 40000, 19200, 0.01],
     [{ t: "box", s: [500, 500, 2] }, 1500, 500000, 0.01],
     [{ t: "move", v: [7, 3, 0.3], c: { t: "box", s: [300, 80, 1.5] } }, 1500, 36000, 0.01],
     [{ t: "cylinder", r: 100, h: 1 }, 1500, Math.PI * 1e4, 0.01],
@@ -586,6 +588,18 @@ test("thin plates, tubes, blades and pins never mesh to nothing or lose a wall",
   // A part through meshPart, as the app meshes it, the same.
   const p = meshPart({ t: "box", s: [200, 120, 1] }, { budget: 20000, normals: true });
   assert.ok(p.indices.length > 1000 && Math.abs(p.volume / 24000 - 1) < 0.01, `plate part: ${p.indices.length / 3} triangles, volume ${p.volume.toFixed(0)}`);
+});
+
+test("pieces that are the same piece, or share a box, give no edge with four triangles", () => {
+  // The rotor head's mast: a centred bar in radial(6) is itself again turned
+  // by 180 degrees, and the three bars left share one box. Meshed one by one
+  // they made one surface twice, and their ends in one plane twice.
+  const r = runScript('part("Mast", cylinder(110, 450).move(0, 0, 455).add(box(12, 232, 150).move(0, 0, 790).radial(6, "z")));');
+  for (const [budget, maxCell] of [[9375, 19], [40000, 4]]) {
+    const m = meshPart(r.parts[0].node, { budget, maxCell });
+    assert.equal(openEdges(m), 0);
+    assert.ok(closedByPosition(m), `budget ${budget}: edges shared by more than two triangles`);
+  }
 });
 
 test("model scripts: example, test helicopter, Claude's helicopter", () => {
