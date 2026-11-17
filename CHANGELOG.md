@@ -50,6 +50,16 @@ Notable changes to 3D Maker. The format follows
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
+- Video. Export > Video (turntable) records one turn round the model with its motion playing,
+  and Claude can direct a film from shots (hold, turntable, orbit, a move between two cameras
+  or saved views, following a part) with the new `preview_shots` and `record_video` tools.
+  Each frame's camera and motion come from its number, so the film is smooth however slowly
+  frames draw. The file is H.264 in MP4, or VP9 or VP8 in WebM where the browser has no H.264
+  encoder, written by our own code with the browser's WebCodecs encoder. A line shows the
+  progress, with Cancel.
+- A camera Claude can direct: `set_camera` places the view (a direction, a position and a
+  target, or framed on chosen parts) with a lens in millimetres, and keeps named views with
+  the model; `save_picture` saves a studio picture from any camera at any size.
 
 ### Changed
 

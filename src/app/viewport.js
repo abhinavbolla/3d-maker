@@ -11,7 +11,7 @@ import { createNavigation } from "./navigate.js";
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 const DEG = Math.PI / 180;
-const VIEWS = {
+export const VIEWS = {
   iso: [1, -1.25, 0.8],
   low: [1, -1.5, 0.28],
   top: [0, 0, 1],
@@ -346,6 +346,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
   let drawnAt = -Infinity;
   function tick(now) {
     frame = 0;
+    if (recording) return; // a film is being made (see filmStudio); it redraws after
     if (!asked) {
       if (!moving()) return;
       // 4 ms short of the full gap, so a frame that comes a little early still counts.
@@ -452,6 +453,7 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     target.setSize(w, h);
   }
   function resize() {
+    if (recording) return; // filmStudio's end() sizes the view again
     const { clientWidth: w, clientHeight: h } = container;
     if (!w || !h) return;
     renderer.setSize(w, h, false);
@@ -818,10 +820,113 @@ export function createViewport(container, { onPick, onView = () => {} }) {
     render();
   }
 
+  // ---- for camera.js and record.js: a directed camera, and films ----
+  // While a film studio is open the live view draws nothing, whatever the window
+  // does, and the canvas shows each finished frame as it is made.
+  let recording = false;
+  function filmStudio(W, H) {
+    if (recording) throw new Error("A recording is already being made.");
+    recording = true;
+    cancelAnimationFrame(frame);
+    frame = 0;
+    stopTurning();
+    const was = { selected, ratio: renderer.getPixelRatio(), grid: grid.visible, guides: guides.visible, fit: renderer.domElement.style.objectFit };
+    selected = null;
+    highlight();
+    grid.visible = guides.visible = false;
+    scene.background = paper;
+    renderer.setPixelRatio(1);
+    renderer.setSize(W, H, false);
+    renderer.domElement.style.objectFit = "contain";
+    sizeMirror(W, H, 4);
+    renderer.shadowMap.autoUpdate = true;
+    const gl = renderer.getContext();
+    let small = null;
+    return {
+      // One finished frame at the film's size, posed at motion time t. The
+      // whole frame is drawn here; this is the call to swap for a fuller
+      // one (crease shading) without touching the recorder.
+      draw(cam, t) {
+        pose(t);
+        content.updateMatrixWorld(true);
+        renderer.render(scene, cam);
+        return renderer.domElement;
+      },
+      // The frame just drawn, as RGBA rows from the bottom up.
+      pixels() {
+        const p = new Uint8Array(W * H * 4);
+        gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, p);
+        return p;
+      },
+      png: () => renderer.domElement.toDataURL("image/png").split(",")[1],
+      // The frame just drawn, `width` px across, as base64 JPEG.
+      still(width) {
+        small ??= document.createElement("canvas");
+        small.width = width;
+        small.height = Math.round((width * H) / W);
+        small.getContext("2d").drawImage(renderer.domElement, 0, 0, small.width, small.height);
+        return small.toDataURL("image/jpeg", 0.85).split(",")[1];
+      },
+      end() {
+        grid.visible = was.grid;
+        guides.visible = was.guides;
+        scene.background = theme.bg;
+        renderer.setPixelRatio(was.ratio);
+        renderer.domElement.style.objectFit = was.fit;
+        selected = was.selected;
+        recording = false;
+        shadowsMoved = true;
+        pose(time);
+        highlight();
+        resize();
+      },
+    };
+  }
+  // Up to about 1500 of a mesh's vertices, for framing it tightly.
+  const samples = new WeakMap();
+  const sampled = (mesh) => {
+    if (!samples.has(mesh)) {
+      const p = mesh.positions, n = p.length / 3, step = Math.max(1, Math.floor(n / 1500));
+      const out = new Float32Array(Math.ceil(n / step) * 3);
+      for (let i = 0, k = 0; i < n; i += step, k += 3) out.set(p.subarray(i * 3, i * 3 + 3), k);
+      samples.set(mesh, out);
+    }
+    return samples.get(mesh);
+  };
+  // Where each shown part is at motion time t: its pose, its own bounds and
+  // some of its own vertices.
+  function partsAt(t) {
+    pose(t);
+    const out = new Map();
+    for (const [name, { object, part }] of parts) {
+      const b = part.mesh.bounds;
+      if (b) out.set(name, { matrix: object.matrix.clone(), bounds: new THREE.Box3(new THREE.Vector3(b[0], b[1], b[2]), new THREE.Vector3(b[3], b[4], b[5])), points: () => sampled(part.mesh) });
+    }
+    pose(time);
+    return out;
+  }
+
   setStage(null);
   applyTheme();
   resize();
   return {
+    studio: filmStudio,
+    partsAt,
+    canvas: renderer.domElement,
+    motionTime: () => time,
+    isRecording: () => recording,
+    maxSize: () => renderer.capabilities.maxTextureSize,
+    // The live camera, and placing it (the view then turns around target).
+    liveCamera: () => ({ position: camera.position.clone(), target: nav.target.clone(), up: camera.up.clone(), fov: camera.fov, aspect: camera.aspect }),
+    setLiveCamera({ position, target, up, fov }) {
+      stopTurning();
+      camera.position.copy(position);
+      camera.up.copy(up);
+      camera.fov = fov;
+      camera.lookAt(target);
+      nav.lookAt(target);
+      fitted = true;
+    },
     setParts,
     select,
     fit,

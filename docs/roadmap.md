@@ -11,24 +11,23 @@ This page says where it stands against that goal and what comes next. The order 
 | Making 3D models | By prompt, with sliders on parts. Outlines, extrude, revolve, sweep, loft, bodies from views, bend, twist, taper, threads and hardware. |
 | Mechanisms | Motion, joints checked over the whole loop, collision checks. |
 | Looking at the model | Studio view with shadows, a reflecting floor and materials. Turn, slide and zoom as in other CAD programs, with a view cube, and the turning centre and the origin's axes and planes shown while you turn. |
-| Pictures | PNG studio shots of any view. |
+| Pictures | PNG studio shots of any view, and from cameras Claude places, with a chosen lens and size. |
 | 2D drawings | One A3 sheet as SVG: front, top, side and isometric views with hidden edges left out, a hatched section, the overall sizes and an ISO title block. |
 | Files for other apps | Meshes only: STL and 3MF. |
 | Exact surfaces | None. Surfaces are fine meshes of distance fields. |
 | Direct editing | Sliders and prompts. No dragging, measuring or sectioning. |
-| Video | Motion plays in the view. Nothing is recorded. |
+| Video | MP4 films (WebM where H.264 is missing) from shots Claude plans: turntables, orbits, moves between saved views, following a part. |
 | Installing | Runs from a clone of the repository. |
 
 ## The look
 
-A studio shot of a mechanism from a professional tool gets its look from four things: lighting, materials, crisp small edges, and framing. The first two are in. What is left:
+A studio shot of a mechanism from a professional tool gets its look from four things: lighting, materials, crisp small edges, and framing. Lighting, materials and framing are in: Claude can place the camera, pick a lens and save a picture, so "give me a hero shot of the rotor head" works. What is left:
 
 1. **Shading in the creases.** Ambient occlusion darkens the gaps between parts and the inside of corners. It is what makes an assembly read as many parts fitted together.
 2. **Edge lines.** An optional "shaded with edges" look, where sharp edges and outlines are drawn as thin dark lines, as in engineering views.
 3. **Small fillets and chamfers everywhere.** Real machined parts have a small break on every edge, and those edges catch the light. The kernel can round edges; what is missing is detail in the mesh where the surface curves tightly, so a 1 mm fillet on a 1 m part survives. This needs detail shared out by curvature, not only by surface area.
 4. **Smoother metal.** Polished materials show every mesh facet. Normals taken from the distance field itself, and finer view meshes on shiny parts, fix most of it.
 5. **Materials Claude chooses.** Parts can now be metal, paint, plastic, rubber or glass. Next: brushed and anodised metals, textures such as tread and knurling, and decals.
-6. **A camera Claude can direct.** Tools for Claude to place the camera, pick a lens and save a picture, so "give me a hero shot of the rotor head" works.
 
 ## 2D drawings
 
@@ -65,12 +64,12 @@ The prompt stays the main way to make things. These are for looking, checking an
 
 ## Video
 
-Motion already plays in the view. Making a film of it needs:
+Done so far: recording frame by frame (each frame's camera and motion come from its number, so the film is smooth however long a frame takes), MP4 with H.264 or WebM with VP9 or VP8 from our own file writers, camera moves (hold, turntable, orbit, moves between cameras or saved views, following a part), and shots Claude plans and previews by prompt.
 
-1. **Recording.** Save the view as a video file, frame by frame, so the result is smooth however long each frame takes to draw.
-2. **Camera moves.** Turntables, fly-arounds, and moves between saved views.
-3. **Shots by prompt.** Tools for Claude to plan a sequence: "start wide, move in on the swashplate, then follow one blade round".
-4. **Exploding and assembling** a model on camera.
+What is left:
+
+1. **Exploding and assembling** a model on camera.
+2. **Sound, motion blur and titles.**
 
 ## Modelling depth
 

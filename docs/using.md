@@ -36,8 +36,17 @@ The Export menu saves:
 - **3MF**: one named, coloured object per part, for other 3D apps and slicers.
 - **STL**: each part its own closed shell, or all parts joined into one solid.
 - **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
+- **Video (turntable)**: one turn round the model from where you are looking, with its motion playing, at 1920 x 1080 and 30 frames a second. A model whose motion repeats every few seconds gets a whole number of its loops, so the video plays round without a jump.
 
 Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
+
+### Pictures and videos by prompt
+
+Ask Claude for the shot you want: "give me a hero shot of the rotor head", "show me the swashplate from below with a long lens", "save this view as Side". Claude places the camera (the view moves there), picks a lens, and saves a studio picture at the size you ask for. Saved views are kept with the model and saved in its file.
+
+For a video, describe it: "a ten second turntable with the rotor spinning", "start wide, move in on the swashplate, then follow one blade round". Claude plans it as shots (a held camera, a turn, a move from one camera to another, following a moving part, with the motion at any speed), looks at a few frames of each, then records it. Each frame is drawn finished at the video's size, and its camera and motion are worked out from its number alone, so the video is smooth however long a frame takes to draw. The window can be any size meanwhile.
+
+While a video is recorded, a line under the prompt box counts the frames; Cancel (or Esc) stops it and nothing is saved. Videos are H.264 in an MP4 file, which every player opens. Where the browser has no H.264 encoder they are VP9 (or VP8) in a WebM file, and the app says so. Sound, motion blur and titles are not part of it yet.
 
 ### The drawing
 

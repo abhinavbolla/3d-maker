@@ -26,6 +26,7 @@
             <button type="button" role="menuitem" data-export="solid"><span>STL, one solid</span><small>All parts joined, to print in one piece</small></button>
             <button type="button" role="menuitem" data-export="3mf"><span>3MF</span><small>Named, coloured parts</small></button>
             <button type="button" role="menuitem" data-export="svg"><span>Drawing</span><small>Three views, a section and sizes on an A3 sheet, SVG</small></button>
+            <button type="button" role="menuitem" data-export="video"><span>Video (turntable)</span><small>One turn round the model, with its motion, MP4</small></button>
           </div>
         </div>
       </nav>
@@ -74,6 +75,7 @@
         <button id="send" type="submit">Make</button>
       </form>
       <div id="status" aria-live="polite"></div>
+      <div id="recording" hidden><span id="recording-text"></span><button id="recording-cancel" type="button" title="Stop recording; nothing is saved (Esc)">Cancel</button></div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

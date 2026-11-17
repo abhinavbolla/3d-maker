@@ -9,14 +9,18 @@ import { join } from "node:path";
 export const root = new URL("..", import.meta.url).pathname;
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Tests draw in software, the same on every machine. HARNESS_GL=metal draws
+// on the Mac's GPU instead, for full-size pictures and videos made by hand.
+const GL = process.env.HARNESS_GL === "metal" ? ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 
 // Live reload is off, so editing the app's code while a test runs cannot
 // reload a window and lose a Claude run.
 export async function startHarness({ port = 5178 } = {}) {
+  port = Number(process.env.TEST_PORT) || port;
   const vite = await createServer({ root, configFile: join(root, "vite.config.js"), server: { port, strictPort: true, hmr: false, watch: null }, logLevel: "warn" });
   await vite.listen();
   const profile = mkdtempSync(join(tmpdir(), "3d-maker-test-"));
-  const chrome = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--window-size=1280,800", "about:blank"], { stdio: "ignore" });
+  const chrome = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", ...GL, "--window-size=1280,800", "about:blank"], { stdio: "ignore" });
   process.on("exit", () => chrome.kill());
 
   const portFile = join(profile, "DevToolsActivePort");

@@ -31,6 +31,7 @@ export function summarize(state) {
   if (res.prints?.length) out.printed = res.prints;
   if (state.selected) out.selected_by_user = state.selected;
   if (state.doc.plan) out.plan = planProgress(state.doc.plan);
+  if (Object.keys(state.doc.views ?? {}).length) out.saved_views = Object.keys(state.doc.views);
   return out;
 }
 
