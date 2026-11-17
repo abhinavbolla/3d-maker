@@ -73,3 +73,10 @@ Notable changes to Draftsman. The format follows
 - The view's shadow and floor reflection cost the GPU much less. Both are drawn before the view
   instead of in the middle of it, from a lighter copy of each part with about a ninth of its
   triangles. Pictures and screenshots still use the full meshes.
+
+### Fixed
+
+- Parts that spin fast about an axis away from the origin stay on it in the view. Between the
+  motion's samples a part used to move its position and its turn apart, which put the
+  helicopter's 1200 rpm tail rotor up to 3.2 m off its axis; it now turns about the axis itself.
+  Recorded videos pose every frame from the motion at exactly that frame's time.
