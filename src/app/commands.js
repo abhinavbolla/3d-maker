@@ -1,5 +1,6 @@
 // What Claude can do in the app, called through the MCP bridge.
 import { makeDrawing } from "./sheet.js";
+import { createInspectCommands } from "./inspect-tools.js";
 
 const r1 = (v) => Math.round(v * 10) / 10;
 
@@ -81,7 +82,14 @@ export function createCommands({ store, viewport, kernel }) {
     return summarize(store.state);
   };
 
+  // What the view leaves out (hidden, cut, exploded), for Claude to know.
+  const viewState = () => {
+    const { active, line } = viewport.inspect?.describe() ?? {};
+    return active ? { view: `The view shows: ${line}. clear_view shows the whole model again.` } : {};
+  };
+
   return {
+    ...createInspectCommands({ store, viewport, kernel }),
     set_plan: ({ steps }) => {
       if (!Array.isArray(steps) || steps.length < 2) throw new Error("A plan needs at least 2 steps.");
       if (steps.length > MAX_STEPS) throw new Error(`A plan can have at most ${MAX_STEPS} steps; group smaller pieces into one step.`);
@@ -137,7 +145,7 @@ export function createCommands({ store, viewport, kernel }) {
       const s = store.state.doc.script;
       return setScript(s ? `${s.replace(/\s*$/, "")}\n\n${code.trim()}\n` : code);
     },
-    get_model: async () => ({ script: store.state.doc.script, values: store.state.doc.values, ...summarize(store.state) }),
+    get_model: async () => ({ script: store.state.doc.script, values: store.state.doc.values, ...summarize(store.state), ...viewState() }),
     set_model: ({ script }) => setScript(script),
     edit_model: ({ old_text, new_text }) => {
       const s = store.state.doc.script;
@@ -155,7 +163,7 @@ export function createCommands({ store, viewport, kernel }) {
       else out.note = store.state.result?.motion ? "No parts pass into each other, at rest or during the motion." : "No parts pass into each other.";
       return out;
     },
-    screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }) }),
+    screenshot: async ({ view, width, height, part, parts, at } = {}) => (await fineDetail(), { png: viewport.screenshot({ view, width, height, at, parts: parts ?? (part ? [part] : undefined), ghost: Boolean(parts) }), ...viewState() }),
     export_stl: async ({ solid = false } = {}) => exported(await kernel.exportSTL(store.state.result?.parts ?? [], { solid: Boolean(solid) })),
     export_3mf: async () => exported(await kernel.export3MF(store.state.result?.parts ?? [], store.state.result?.title ?? "")),
     // The MCP server writes the file once this returns, with no dialog to

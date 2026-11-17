@@ -15,7 +15,7 @@ This page says where it stands against that goal and what comes next. The order 
 | 2D drawings | One A3 sheet as SVG: front, top, side and isometric views with hidden edges left out, a hatched section, the overall sizes and an ISO title block. |
 | Files for other apps | Meshes only: STL and 3MF. |
 | Exact surfaces | None. Surfaces are fine meshes of distance fields. |
-| Direct editing | Sliders and prompts. No dragging, measuring or sectioning. |
+| Direct editing | Sliders and prompts. Hiding and isolating parts, sections, exploded views and measuring, by prompt. No dragging. |
 | Video | Motion plays in the view. Nothing is recorded. |
 | Installing | Runs from a clone of the repository. |
 
@@ -56,12 +56,14 @@ What is left:
 
 The prompt stays the main way to make things. These are for looking, checking and small adjustments, and they stay out of the way until you reach for them.
 
-1. **Measure.** Click two points for a distance, or a part for its size, volume and mass.
-2. **Hide and isolate parts**, and a short list of the model's parts.
-3. **Section view.** Slide a cutting plane through the model to see inside.
-4. **Exploded view** of an assembly.
-5. **Move a part by dragging it**, with the change written back into the script.
-6. **Reference pictures.** Drop in a photo or a blueprint for Claude to work from, shown behind the model for comparison.
+Done so far, by prompt: measuring (a part's size, volume, surface area, centre of mass and mass; the distance between two parts or two points), hiding and isolating parts, a section view with filled cut faces at any plane, and an exploded view that keeps sub-assemblies together. A line above the prompt box says what the view leaves out.
+
+What is left:
+
+1. **Measuring and cutting by hand.** Click two points for a distance, slide the cutting plane, and a thin dimension line in the view for the last measurement.
+2. **A short list of the model's parts**, to hide and pick from.
+3. **Move a part by dragging it**, with the change written back into the script.
+4. **Reference pictures.** Drop in a photo or a blueprint for Claude to work from, shown behind the model for comparison.
 
 ## Video
 

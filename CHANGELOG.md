@@ -50,6 +50,13 @@ Notable changes to 3D Maker. The format follows
 - `node test/gpu-load.mjs` measures what the view really costs the GPU on a Mac with Apple
   silicon: GPU time per second and per frame, read from the driver, for a still model, a turning
   view and moving parts.
+- Looking inside and checking a model, by prompt: ask Claude to hide or isolate parts, cut the
+  model open with a section (its cut faces filled, so solids look solid), or explode it, and a
+  line above the prompt box says what the view leaves out (a click or Esc shows the whole model
+  again). This is view state: exports, drawings and undo are not affected. Claude can also
+  measure a part's size, volume, surface area, centre of mass and mass in a named material, the
+  shortest distance between two parts, and the distance between two points, from the exact
+  shapes. New tools: `hide_parts`, `section_view`, `explode_view`, `clear_view` and `measure`.
 
 ### Changed
 
