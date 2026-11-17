@@ -12,6 +12,7 @@
 import * as THREE from "three";
 
 const lines = new WeakMap(); // mesh -> Float32Array of segment ends
+const COS_FOLD = Math.cos((25 * Math.PI) / 180);
 
 // An open-addressing table from the bits of a position to one id per place.
 function weld(P) {
@@ -52,7 +53,19 @@ export function sharpEdges(mesh) {
   while (size < ne * 2) size *= 2;
   // Per slot: the edge's welded ends (lower first) and its first vertex pair.
   const keyA = new Int32Array(size).fill(-1), keyB = new Int32Array(size);
-  const firstA = new Int32Array(size), firstB = new Int32Array(size);
+  const firstA = new Int32Array(size), firstB = new Int32Array(size), firstT = new Int32Array(size);
+  // Each triangle's unit normal.
+  const N = new Float32Array(I.length);
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+    const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+    const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+    const x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx;
+    const l = Math.hypot(x, y, z) || 1;
+    N[t] = x / l;
+    N[t + 1] = y / l;
+    N[t + 2] = z / l;
+  }
   const paired = new Uint8Array(size);
   const out = [];
   const segment = (u, v) => out.push(P[u * 3], P[u * 3 + 1], P[u * 3 + 2], P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
@@ -70,13 +83,20 @@ export function sharpEdges(mesh) {
         keyB[h] = b;
         firstA[h] = u;
         firstB[h] = v;
+        firstT[h] = t;
         break;
       }
       if (keyA[h] === a && keyB[h] === b) {
         // The second triangle on this edge: the same two vertices (in either
-        // order) means one smooth patch; other copies mean a fold.
+        // order) means one smooth patch; other copies mean a fold. Where the
+        // mesh cuts a sharp edge's corner with a narrow strip, the fold is
+        // split in two, each under the kernel's crease angle and sometimes
+        // one side over it, which drew the edge as dashes: so a fold of more
+        // than FOLD between the two triangles counts too.
         const same = (firstA[h] === u && firstB[h] === v) || (firstA[h] === v && firstB[h] === u);
-        if (!same && !paired[h]) segment(u, v);
+        const s = firstT[h];
+        const bend = N[s] * N[t] + N[s + 1] * N[t + 1] + N[s + 2] * N[t + 2];
+        if ((!same || bend < COS_FOLD) && !paired[h]) segment(u, v);
         paired[h] = 1;
         break;
       }

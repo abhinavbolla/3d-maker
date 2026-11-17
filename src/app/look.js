@@ -5,7 +5,8 @@
 // - While anything moves (parts, the view turning, a slider), nothing: the
 //   frame is drawn as before, and the shading is hidden.
 // - Once nothing has been drawn for REST_MS, one step works out the shading
-//   for the view as it is (three passes at one pixel per CSS pixel) and lays
+//   for the view as it is (three passes at one pixel per CSS pixel, or per
+//   device pixel with edges on, for the outlines) and lays
 //   it over the canvas as a still image that fades in. The view itself is
 //   not drawn again, and after that nothing is drawn until something changes.
 // - A frame drawn for a change that leaves the parts and the camera where
@@ -75,7 +76,10 @@ export function createLook(container, { renderer, camera, content, parts, reach,
     if (performance.now() - drawnAt < REST_MS) return schedule();
     pending = false;
     if (!parts().size) return;
-    const ratio = renderer.getPixelRatio() >= 2 ? 2 : 1;
+    // The shading is soft, so one pixel per CSS pixel is enough for it.
+    // Outlines are not: with edges on it is worked out at full size, or
+    // they come out in steps two device pixels high.
+    const ratio = !look.edges && renderer.getPixelRatio() >= 2 ? 2 : 1;
     const w = Math.max(1, Math.round(renderer.domElement.width / ratio)), h = Math.max(1, Math.round(renderer.domElement.height / ratio));
     creases.compute(content, camera, w, h, { reach: reach(), outlines: look.edges });
     overlay.width = w;
