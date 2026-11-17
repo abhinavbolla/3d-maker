@@ -94,6 +94,28 @@ function fitDistance(points, target, dir, lens, aspect, fill = 0.9) {
   return Math.max(dist, size * 0.05, 1);
 }
 
+// How far off the middle of the picture the points are, seen from dist
+// along dir: the middle of their extent across (x) and up (y), each as a
+// fraction of the half picture. Perspective makes the near side of a model
+// loom larger, so a box's centre in the middle leaves it sitting low.
+function offCentre(points, target, dir, dist, lens, aspect) {
+  const fov = lensToFov(lens, aspect) * DEG;
+  const tanV = Math.tan(fov / 2), tanH = tanV * aspect;
+  const d = dir.clone().normalize();
+  const forward = d.clone().negate();
+  const right = new THREE.Vector3().crossVectors(forward, upFor(d)).normalize();
+  const up = new THREE.Vector3().crossVectors(right, forward);
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  const rel = new THREE.Vector3();
+  for (const p of points) {
+    rel.subVectors(p, target);
+    const depth = Math.max(dist - rel.dot(d), 1e-6);
+    const x = rel.dot(right) / depth / tanH, y = rel.dot(up) / depth / tanV;
+    x0 = Math.min(x0, x), x1 = Math.max(x1, x), y0 = Math.min(y0, y), y1 = Math.max(y1, y);
+  }
+  return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, right, up, tanH, tanV };
+}
+
 export const toSaved = (cam) => ({ position: cam.position.toArray().map(r2), target: cam.target.toArray().map(r2), up: cam.up.toArray().map(r4), lens_mm: r2(cam.lens) });
 const r2 = (v) => Math.round(v * 100) / 100;
 const r4 = (v) => Math.round(v * 1e4) / 1e4;
@@ -175,7 +197,22 @@ export function resolveCamera(spec, ctx) {
       const { az, el } = angles(dir);
       const steps = sweep ? Math.ceil(sweep / 15) : 0;
       const points = shown?.length ? shown : corners(box);
-      for (let i = 0; i <= steps; i++) d = Math.max(d, fitDistance(points, target, steps ? direction(az + (Math.sign(ctx.sweep) * sweep * i) / steps, el) : dir, lens, ctx.aspect, fill));
+      const dirs = Array.from({ length: steps + 1 }, (_, i) => (steps ? direction(az + (Math.sign(ctx.sweep) * sweep * i) / steps, el) : dir));
+      const fit = () => dirs.reduce((m, v) => Math.max(m, fitDistance(points, target, v, lens, ctx.aspect, fill)), 0);
+      d = fit();
+      // Centre what is framed in the picture, then fit again from there. A
+      // camera that turns round the target is only centred up and down, by
+      // the extent over its whole turn.
+      if (spec.target === undefined) {
+        for (let k = 0; k < 2; k++) {
+          const offs = dirs.map((v) => offCentre(points, target, v, d, lens, ctx.aspect));
+          const o = offs[0];
+          const y = steps ? (Math.min(...offs.map((q) => q.y)) + Math.max(...offs.map((q) => q.y))) / 2 : o.y;
+          if (!steps) target.addScaledVector(o.right, o.x * o.tanH * d);
+          target.addScaledVector(o.up, y * o.tanV * d);
+          d = fit();
+        }
+      }
     }
     position = target.clone().addScaledVector(dir, d * distance);
   } else {
