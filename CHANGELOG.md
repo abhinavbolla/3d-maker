@@ -68,6 +68,9 @@ Notable changes to Draftsman. The format follows
   between grid points, meshes flat plates, discs and blades stretched through their thickness, and
   refines for thin tubes and shells. A wall too thin for any cell the budget allows is drawn a
   little more than a cell thick instead of in shreds.
+- Export meshes no longer have edges shared by four triangles where a part repeats a piece onto
+  itself (a centred bar in `radial(6)`) or has small pieces with the same box: the rotor head's
+  mast now exports closed for slicers.
 - Smoother metal. Small fillets and tight curves are shaded round instead of in facets, and sharp
   edges stay crisp: the view asks the distance function whether each fold in the mesh is a sharp
   edge or a curve, and takes its normals from it.
