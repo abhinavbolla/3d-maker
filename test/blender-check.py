@@ -232,6 +232,9 @@ def run_obj(name, want):
             "%s: \"%s\" (%s) Kd %s metallic %.2f roughness %.2f alpha %.2f; written %s %.2f %.2f %.2f"
             % (file, p["name"], p["look"], fmt(base[:3]), metallic, rough, alpha, fmt(p["color_srgb"]), p["metallic"], p["roughness"], p["alpha"]),
         )
+        # Blender takes Kd as its linear base colour; the glTF's is the same
+        # colour made linear, so the two files differ by this much in Blender.
+        print("     note: \"%s\" base colour from the OBJ %s, from the glTF %s" % (p["name"], fmt(base[:3]), fmt(p["base_color"][:3])))
 
 
 def srgb_of(c):

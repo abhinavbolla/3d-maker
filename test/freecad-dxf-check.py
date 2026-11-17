@@ -64,30 +64,10 @@ def import_dxf(path, doc):
 def read(path):
     doc = FreeCAD.newDocument("dxf")
     errors = []
-
-    class Watch:
-        def __init__(self):
-            self.lines = []
-
-        def OnMessage(self, s):
-            pass
-
-        def OnLog(self, s):
-            pass
-
-        def OnWarning(self, s):
-            self.lines.append("warning: " + s.strip())
-
-        def OnError(self, s):
-            self.lines.append("error: " + s.strip())
-
-    watch = Watch()
-    FreeCAD.Console.AddObserver(watch)
     try:
         import_dxf(path, doc)
-    finally:
-        FreeCAD.Console.RemoveObserver(watch)
-    errors = [l for l in watch.lines if l.startswith("error")]
+    except Exception as e:
+        errors.append("error: %s" % e)
     objs = list(doc.Objects)
     # Layers: groups (or Draft layers) and what is in them.
     groups = []
@@ -98,7 +78,7 @@ def read(path):
             if hasattr(o, "Proxy") and o.Proxy is not None and type(o.Proxy).__name__ == "Layer":
                 name = o.Label
             groups.append((name, list(members)))
-    out = {"objects": len(objs), "types": {}, "by_layer": {}, "circles": [], "texts": 0, "line_edges": 0, "edges_by_layer": {}, "errors": errors, "warnings": [l for l in watch.lines if l.startswith("warning")]}
+    out = {"objects": len(objs), "types": {}, "by_layer": {}, "circles": [], "texts": 0, "line_edges": 0, "edges_by_layer": {}, "errors": errors}
     lo = [math.inf, math.inf]
     hi = [-math.inf, -math.inf]
     for o in objs:
@@ -153,8 +133,6 @@ def run():
         print("     groups: " + ", ".join(got["layers"]))
         print("     by layer: " + json.dumps(got["by_layer"], sort_keys=True))
         print("     straight edges by layer: " + json.dumps(got["edges_by_layer"], sort_keys=True))
-        for w in got["warnings"][:10]:
-            print("     " + w)
         check(not got["errors"], "%s: opens without errors%s" % (name, (": " + "; ".join(got["errors"][:5])) if got["errors"] else ""))
         check(got["objects"] > 0, "%s: %d objects in the document" % (name, got["objects"]))
         n = want["counts"].get("CIRCLE", 0)
