@@ -35,6 +35,7 @@ The Export menu saves:
 - **Picture**: the view as a studio shot on a light backdrop, as a PNG.
 - **3MF**: one named, coloured object per part, for other 3D apps and slicers.
 - **STL**: each part its own closed shell, or all parts joined into one solid.
+- **STEP**: solids for CAD programs such as FreeCAD or Fusion, one named, coloured part each, in an assembly. See below for which parts come out exact.
 - **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
 - **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
 - **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
@@ -44,7 +45,19 @@ Motion goes only into the glTF file; the other files hold the parts where the sc
 
 Every visible part is meshed at the same detail on all cores, so a 60-part rotor head exports in seconds.
 
-### The drawing
+### STEP
+
+A STEP file holds exact surfaces; our kernel holds distance fields, so a part comes out exact only where its script says exactly what it is, without any 3D cut or join:
+
+- a box (with square edges), cylinder (with or without rounded ends), cone, sphere, torus or capsule;
+- an extrusion of an outline made of lines and arcs: rects, circles, polygons, `path()` with `line`, `arc`, `radiusArc` and `tangentArc`, rounded corners, and holes cut wholly inside the outline with `.cut()` (no draft);
+- a revolve of such an outline, all the way round or part of the way;
+- any of these moved, turned, scaled the same in every direction or mirrored, `symmetric()` where the shape lies to one side, and several of them in one part (`union`, `radial`, `array`) where their boxes do not touch.
+
+Those come out as true planes, cylinders, cones, spheres and tori, bounded by lines and circles. Everything else (any `.cut()` or `union` in 3D where shapes meet, smooth blends, rounded boxes, sweeps, lofts, threads, text, twists) comes out as a closed solid of flat faces made from the part's mesh. Neighbouring flat triangles become one face, so flat parts stay light, but a curved faceted part is a few hundred to a few thousand faces. To keep files a sane size, faceted parts are meshed coarser than for STL: 1000 surface cells plus 400 per faceted part, at most 6000, over all of them, shared out by surface area, at least 150 per part. A part that the coarse cells break up (a thin tube whose volume comes out more than 8% short) is meshed again finer, up to about 4000 triangles. The 47-part rotor head (all faceted) comes to about 20 MB, the 21-part helicopter example (8 parts exact) about 13 MB. A visible part that the view itself could not mesh (a plate thinner than its cells) is left out unless it is exact, and named. After an export, the app says how many parts came out exact, and Claude tells you which.
+
+The files are checked by a STEP reader of our own (`node test/check-step.mjs`): every solid closed, every vertex on its curves and surfaces, volumes and sizes matching the model. They have not yet been opened in a CAD program; if one refuses a file, please open an issue with it.
+
 
 ![The rotor head as a drawing: front, top, side and isometric views, a section through the mast, overall sizes and a title block on an A3 sheet](rotor-head-drawing.png)
 
@@ -90,7 +103,7 @@ claude mcp add --scope user draftsman -- node /path/to/draftsman/mcp/server.mjs
 
 ## Limitations
 
-- **No exact CAD surfaces yet.** Export is meshes (STL, 3MF, glTF, OBJ, PLY), not STEP, and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
+- **Exact CAD surfaces only for simple parts.** STEP export writes exact surfaces for boxes, cylinders, cones, spheres, tori, capsules, and extrusions and revolves of line-and-arc outlines; a part with a 3D cut, a join of touching shapes, a smooth blend or a free-form shape is written as flat faces from its mesh. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
 - **Drawings are a first version.** One A3 sheet as SVG: no PDF or DXF, no dashed hidden edges, no centre lines or parts list, and only the overall sizes are dimensioned. Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
 - **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods.
 - **Changes are prompts and sliders.** You can't drag parts around in the view.

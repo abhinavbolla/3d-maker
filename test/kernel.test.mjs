@@ -19,6 +19,10 @@ import { apply } from "../src/kernel/motion.js";
 import { checkGLB, checkOBJ, checkPLY } from "./check-meshfile.mjs";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { exactSolids } from "../src/kernel/brep.js";
+import { facetedSolids } from "../src/kernel/facets.js";
+import { writeSTEP, exactParts } from "../src/kernel/step.js";
+import { checkStep } from "./check-step.mjs";
 
 const mesh = (node, budget = 40000) => {
   const { f, box } = compile(node);
@@ -210,6 +214,119 @@ test("3MF export: a valid zip with one named, coloured, closed object per part",
   assert.deepEqual(r.problems, []);
   assert.equal(r.title, "Test &lt;plate&gt;");
   assert.deepEqual(r.objects.map((o) => [o.name, o.color, o.triangles]), objects.map((o) => [o.name, `${o.color.toUpperCase()}FF`, o.indices.length / 3]));
+});
+
+test("STEP: exact solids have the exact volumes of boxes, cylinders, cones, spheres, tori, capsules, extrusions and revolves", () => {
+  const PI = Math.PI;
+  const holes = { t: "subtract2", a: { t: "rect2", w: 40, h: 30, r: 5 }, b: [{ t: "move2", v: [10, 0], c: { t: "circle2", r: 3 } }, { t: "move2", v: [-10, 0], c: { t: "circle2", r: 3 } }] };
+  const cases = [
+    [{ t: "box", s: [10, 20, 30], r: 0 }, 6000, { plane: 6 }],
+    [{ t: "cylinder", r: 5, h: 10, round: 0 }, PI * 250, { plane: 2, cylinder: 1 }],
+    [{ t: "cone", r1: 5, r2: 2, h: 10 }, ((PI * 10) / 3) * 39, { plane: 2, cone: 1 }],
+    [{ t: "cone", r1: 5, r2: 0, h: 10 }, ((PI * 10) / 3) * 25, { plane: 1, cone: 1 }],
+    [{ t: "sphere", r: 7 }, (4 / 3) * PI * 343, { sphere: 1 }],
+    [{ t: "torus", R: 10, r: 3 }, 2 * PI * PI * 10 * 9, { torus: 1 }],
+    [{ t: "capsule", a: [0, 0, 0], b: [10, 5, 3], r1: 2, r2: 2 }, PI * 4 * Math.hypot(10, 5, 3) + (4 / 3) * PI * 8, { sphere: 2, cylinder: 1 }],
+    [{ t: "rotate", deg: [10, 20, 30], c: { t: "move", v: [5, 0, 0], c: { t: "box", s: [10, 20, 30], r: 0 } } }, 6000, { plane: 6 }],
+    [{ t: "mirror", axis: 0, c: { t: "move", v: [5, 1, 2], c: { t: "cone", r1: 5, r2: 2, h: 10 } } }, ((PI * 10) / 3) * 39, { plane: 2, cone: 1 }],
+    [{ t: "extrude", p: holes, h: 5 }, (40 * 30 - (4 - PI) * 25 - 2 * PI * 9) * 5, { plane: 6, cylinder: 6 }],
+    [{ t: "revolve", p: { t: "move2", v: [7, 0], c: { t: "rect2", w: 4, h: 10 } } }, PI * (81 - 25) * 10, { plane: 2, cylinder: 2 }],
+    [{ t: "revolve", p: { t: "move2", v: [4, 0], c: { t: "rect2", w: 4, h: 6 } }, angle: 90 }, (PI / 4) * 32 * 6, { plane: 4, cylinder: 2 }],
+    [{ t: "revolve", p: { t: "subtract2", a: { t: "move2", v: [10, 0], c: { t: "rect2", w: 8, h: 8 } }, b: [{ t: "move2", v: [10, 0], c: { t: "circle2", r: 2 } }] } }, 2 * PI * 10 * (64 - PI * 4), { plane: 2, cylinder: 2, torus: 1 }],
+    [{ t: "symmetric", axis: 1, c: { t: "move", v: [0, 20, 0], c: { t: "sphere", r: 5 } } }, (8 / 3) * PI * 125, { sphere: 2 }],
+  ];
+  for (const [node, volume, surfaces] of cases) {
+    const solids = exactSolids(node);
+    assert.ok(solids, `${node.t} comes out exact`);
+    const r = checkStep(writeSTEP([{ name: node.t, color: "#4f7cac", solids }], { time: "2026-01-01T00:00:00" }).text, { tol: 1e-7 });
+    assert.deepEqual(r.problems, [], node.t);
+    const p = r.parts[0];
+    assert.deepEqual(p.surfaces, surfaces, `${node.t}: ${JSON.stringify(p.surfaces)}`);
+    assert.ok(Math.abs(p.volume - volume) < 1e-6 * volume, `${node.t}: volume ${p.volume}, exact ${volume}`);
+  }
+});
+
+test("STEP: script shapes come out exact where they can, and match the kernel's meshes", () => {
+  const r = runScript(`
+    part("Plate", extrude(rect(80, 40, 6).cut(circle(6).move(-25, 0), circle(6).move(25, 0)), 8).at(0, -150, 4));
+    part("Slot", extrude(path([0, 0]).line(40, 0).arc([50, 10], [40, 20]).line(0, 20).close(), 5).rotateX(30).at(10, 20, 30));
+    part("Cam", extrude(path([0, 0]).line(40, 0).tangentArc(40, 20).line(0, 20).radiusArc(0, 0, 10).close(), 2));
+    part("Lid", extrude(polygon([[0, 0], [60, 0], [60, 30], [20, 45], [0, 30]], 6), 4).at(100, 0, 0));
+    part("Bearing", revolve(rect(10, 8).cut(circle(2)).move(20, 0)));
+    part("Pin", cylinder(4, 30, 1).rotateY(90).at(0, 0, 50));
+    part("Knob", union(sphere(8).at(0, 0, 100), torus(20, 3).at(0, 0, 80), cone(10, 0, 20).at(50, 50, 50)));
+    part("Rod", capsule([0, 0, 0], [30, 10, 5], 4, 2).at(-50, 0, 0));
+    part("Feet", cylinder(3, 10).at(40, 0, 0).radial(6));
+    part("Block", box(20, 20, 20).cut(cylinder(5, 30)));
+    part("Blend", union(sphere(10), sphere(8).at(12, 0, 0), 4));
+    part("Rounded", box(20, 20, 20, 2));
+  `);
+  const exact = exactParts(r.parts);
+  assert.deepEqual(r.parts.filter((p, i) => !exact[i]).map((p) => p.name), ["Block", "Blend", "Rounded"]);
+  r.parts.forEach((p, i) => {
+    if (!exact[i]) return;
+    const { f, box } = compile(p.node);
+    const m = meshSDF(f, box, { budget: 30000 });
+    const c = checkStep(writeSTEP([{ name: p.name, color: p.color, solids: exact[i] }], { time: "x" }).text, { tol: 1e-6 });
+    assert.deepEqual(c.problems, [], p.name);
+    const q = c.parts[0], mv = meshVolume(m), mb = meshBounds(m);
+    assert.ok(Math.abs(q.volume - mv) < 0.005 * mv, `${p.name}: volume ${q.volume}, mesh ${mv}`);
+    q.bounds.forEach((x, k) => assert.ok(Math.abs(x - mb[k]) < m.cellSize, `${p.name}: box ${q.bounds}, mesh ${mb}`));
+  });
+  // The arcs the script drew are arcs in the file: the slot's end is one
+  // cylinder face, not 90 flat ones.
+  const slot = checkStep(writeSTEP([{ name: "Slot", solids: exact[1] }], { time: "x" }).text).parts[0];
+  assert.deepEqual(slot.surfaces, { plane: 5, cylinder: 1 });
+});
+
+test("STEP: a faceted part is a closed solid with its mesh's volume, and flat faces merge", () => {
+  const cases = [
+    // An L of two boxes that overlap: flat all over, so a few big faces (and
+    // slivers where the mesh rounds its corners a little).
+    ["L", { t: "union", c: [{ t: "box", s: [60, 40, 5], r: 0 }, { t: "move", v: [-27.5, 0, 15], c: { t: "box", s: [5, 40, 30], r: 0 } }] }, 0.04],
+    ["Blend", { t: "union", c: [{ t: "sphere", r: 10 }, { t: "move", v: [12, 0, 0], c: { t: "sphere", r: 8 } }], k: 4 }, null],
+    ["Two pieces", { t: "union", c: [{ t: "subtract", a: { t: "box", s: [10, 10, 10], r: 0 }, b: [{ t: "sphere", r: 6 }] }, { t: "move", v: [30, 0, 0], c: { t: "box", s: [10, 10, 10], r: 1 } }] }, null],
+  ];
+  for (const [name, node, maxFaces] of cases) {
+    const { f, box } = compile(node);
+    const m = meshSDF(f, box, { budget: 6000 });
+    const solids = facetedSolids(m);
+    const r = checkStep(writeSTEP([{ name, color: "#888", solids }], { time: "x" }).text);
+    assert.deepEqual(r.problems, [], name);
+    const p = r.parts[0], mv = meshVolume(m);
+    assert.ok(Math.abs(p.volume - mv) < 1e-6 * mv, `${name}: volume ${p.volume}, mesh ${mv}`);
+    assert.deepEqual(Object.keys(p.surfaces), ["plane"]);
+    if (maxFaces) assert.ok(p.faces <= maxFaces * m.indices.length / 3, `${name}: ${p.faces} faces from ${m.indices.length / 3} triangles`);
+    if (name === "Two pieces") assert.equal(p.solids.length, 2);
+  }
+});
+
+test("STEP: names, colours and the assembly read back, and the checker finds broken files", () => {
+  const parts = [
+    { name: "Base 'A' \\ Größe", color: "#4f7cac", solids: exactSolids({ t: "box", s: [40, 40, 10], r: 0 }) },
+    { name: "Peg", color: "#d9a441", solids: exactSolids({ t: "move", v: [0, 0, 12], c: { t: "cylinder", r: 5, h: 20, round: 0 } }) },
+  ];
+  const { text } = writeSTEP(parts, { title: "Peg & base", time: "2026-01-01T00:00:00" });
+  const r = checkStep(text);
+  assert.deepEqual(r.problems, []);
+  assert.equal(r.assembly, "Peg & base");
+  assert.deepEqual(r.parts.map((p) => p.name), ["Base 'A' \\ Größe", "Peg"]);
+  assert.match(text, /PRODUCT\('part 1','Base ''A'' \\\\ Gr\\X2\\00F600DF\\X0\\e'/);
+  assert.deepEqual(r.parts.map((p) => p.colour.map((c) => Math.round(c * 255))), [[0x4f, 0x7c, 0xac], [0xd9, 0xa4, 0x41]]);
+  // Broken on purpose: each of these must be found.
+  const breaks = [
+    [/ADVANCED_FACE\('',\((#\d+)\),(#\d+),\.T\.\)/, "ADVANCED_FACE('',($1),$2,.F.)", /volume|not positive|right way/],
+    [/ORIENTED_EDGE\('',\*,\*,(#\d+),\.T\.\)/, "ORIENTED_EDGE('',*,*,$1,.F.)", /not closed|once each way/],
+    [/CIRCLE\('',(#\d+),5\.\)/, "CIRCLE('',$1,5.1)", /off/],
+    [/VECTOR\('',(#\d+),([\d.]+)\)/, "VECTOR('',$1)", /arguments/],
+    [/#1=APPLICATION_CONTEXT/, "#1=APPLICATION_CONTEXT_X", /unknown entity/],
+    [/(EDGE_LOOP\('',\()#\d+,/, "$1#999999,", /not defined/],
+  ];
+  for (const [find, put, want] of breaks) {
+    assert.ok(find.test(text), String(find));
+    const b = checkStep(text.replace(find, put));
+    assert.ok(b.problems.some((p) => want.test(p)), `${find}: ${b.problems.slice(0, 3).join("; ") || "no problems found"}`);
+  }
 });
 
 test("small pieces of a big part keep their detail, and the volume stays right", () => {
