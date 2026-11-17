@@ -124,6 +124,9 @@ Notable changes to Draftsman. The format follows
   drawing. The crease shading treats a cut face as the flat face it is, and with edges on it gets
   an outline where it ends. Edge lines are cut by the section, hidden with their parts and move
   with the exploded view, and lines on the back of a part are no longer drawn.
+- A CI workflow opens the glTF, OBJ, PLY and STL exports in Blender and the DXF exports in
+  FreeCAD and compares what they read with the kernel's numbers; FreeCAD showed it dropped the
+  DXF sheet's arrowheads (SOLID entities), so each arrowhead now also has a closed outline.
 
 ### Changed
 

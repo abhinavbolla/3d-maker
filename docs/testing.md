@@ -12,6 +12,7 @@ node test/check-step.mjs model.step       # checks a STEP file: entities, assemb
 node test/step-run.mjs model.js out.step  # loads a script, exports it as STEP and checks the file
 node test/render-step.mjs model.step out.png  # draws a STEP file from its own faces, as read back
 node test/step-samples.mjs out-dir        # writes the STEP samples FreeCAD is asked to open, and what each should hold
+node test/outside-samples.mjs out-dir     # writes the GLB, OBJ, PLY, STL and DXF samples Blender and FreeCAD are asked to open
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
 node test/check-meshfile.mjs model.glb    # checks a GLB, OBJ (with its MTL) or PLY: names, sizes, every part closed
 node test/meshfile-run.mjs model.js [dir]  # exports a script as GLB, OBJ and PLY, times and checks them, and loads the GLB with three.js
@@ -97,3 +98,28 @@ each file out again and reads it back.
 FreeCAD is an outside program in that job. It is not a dependency of Draftsman, and none of its code
 is in this repository. The job runs when the STEP code or its samples change, and by hand from the
 Actions tab.
+
+## Mesh and DXF files in Blender and FreeCAD
+
+The `Files in Blender and FreeCAD` workflow does the same for the other exports.
+`node test/outside-samples.mjs out-dir` writes them as the app does: four models (one part of each
+look with a turning shaft, the STEP cylinder, the angle bracket and the 47-part rotor head) as
+`.glb`, `.obj` with its `.mtl`, `.ply` and `.stl`, the bracket's drawing sheet and a plate's outline
+as `.dxf`, and `expected.json`, what the kernel says each file holds, from its own meshes and
+drawing marks.
+
+- **Blender** (`test/blender-check.py`, in `blender --background`) imports each mesh file with its
+  own importer. For every part: its object and name, triangles, every edge shared by two faces once
+  coincident vertices are merged, vertices, volume (to 0.05% of the kernel's mesh, and to 1% of the
+  volume worked out by hand where there is one), faces pointing out, bounds in mm with Z up (glTF
+  is read in metres and Y up, and turned back), and corner normals that agree with the faces. For
+  glTF also the Principled BSDF material (name, base colour, metallic, roughness, alpha, clear coat,
+  see-through glass) and the animation's length; for OBJ the material from the MTL; for PLY the
+  vertex colours. PLY and STL are one mesh, checked as a whole.
+- **FreeCAD** (`test/freecad-dxf-check.py`) imports each DXF with its own importer, layers as groups:
+  no errors, circles and straight edges by layer, texts, the extents in mm, and every circle's centre
+  and radius.
+
+Neither program is a dependency of Draftsman, and none of their code is in this repository. The
+jobs run when the exporters, the mesher, the drawing code or the samples change, and by hand from
+the Actions tab.

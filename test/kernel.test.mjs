@@ -1517,6 +1517,30 @@ test("drawing: the sheet as DXF has its lines and text on named layers, in paper
   assert.equal(texts.length, sheetMarks(svg).filter((m) => m.kind === "text").length);
 });
 
+test("drawing: the sheet's arrowheads are in the DXF as outlines too, for readers that skip SOLIDs", () => {
+  // FreeCAD's DXF importer skips SOLID entities, so a sheet's arrowheads
+  // were lost there: 948 of the bracket's 1023 straight edges came in.
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block", date: "2026-01-31", hidden: true });
+  const d = readDXF(sheetDXF(svg));
+  assert.deepEqual(d.problems, []);
+  const solids = d.entities.filter((e) => e.type === "SOLID");
+  assert.ok(solids.length >= 6, `${solids.length} arrowheads`);
+  // Each SOLID has a closed polyline on its layer through the same corners.
+  const key = (pts) => [...new Set(Array.from({ length: pts.length / 2 }, (_, i) => `${pts[i * 2].toFixed(3)},${pts[i * 2 + 1].toFixed(3)}`))].sort().join(" ");
+  const outlines = new Map();
+  for (const e of d.entities) if (e.type === "POLYLINE" && e.closed) outlines.set(`${e.layer} ${key(e.pts)}`, (outlines.get(`${e.layer} ${key(e.pts)}`) ?? 0) + 1);
+  const bare = solids.filter((s) => !outlines.get(`${s.layer} ${key(s.pts)}`));
+  assert.equal(bare.length, 0, `${bare.length} of ${solids.length} arrowheads have no outline`);
+  // A reader of lines and polylines only sees every edge of the sheet's marks.
+  let edges = 0, want = 0;
+  for (const e of d.entities) if (e.type === "LINE") edges++;
+  else if (e.type === "POLYLINE") edges += e.pts.length / 2 - (e.closed ? 0 : 1);
+  for (const m of sheetMarks(svg)) if (m.kind === "line") want += m.pts.length / 2 - (m.closed ? 0 : 1);
+  else if (m.kind === "fill") want += m.pts.length / 2;
+  assert.equal(edges, want, `${edges} straight edges without SOLIDs, the marks have ${want}`);
+});
+
 test("drawing: an outline at 1:1 has the plate's size, and its holes as true circles", () => {
   // A 120 x 80 plate, 6 thick, with four 9 mm holes and one 20 mm bore.
   const holes = [[-45, -25], [45, -25], [-45, 25], [45, 25]].map(([x, y]) => ({ t: "move", v: [x, y, 0], c: { t: "cylinder", r: 4.5, h: 20 } }));
