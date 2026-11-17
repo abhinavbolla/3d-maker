@@ -480,7 +480,7 @@ function curveOf(e, G) {
 function checkSolid(brep, entities, tolIn, problems, where) {
   const G = geometry(entities);
   const shell = G.get(brep.args[1].v);
-  const out = { name: brep.args[0].v, faces: 0, surfaces: {}, volume: 0, bounds: [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity], maxOff: 0 };
+  const out = { name: brep.args[0].v, faces: 0, surfaces: {}, volume: 0, bounds: [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity], maxOff: 0, faceData: [] };
   const faces = shell.args[1].v.map((r) => G.get(r.v));
   out.faces = faces.length;
   // Tolerance from the solid's size.
@@ -512,7 +512,7 @@ function checkSolid(brep, entities, tolIn, problems, where) {
     const bounds = face.args[1].v.map((r) => G.get(r.v));
     if (bounds.filter((b) => b.type === "FACE_OUTER_BOUND").length > 1) problems.push(`${where}: face #${face.id} has more than one outer bound`);
     let vecArea = [0, 0, 0], S = 0;
-    const domain = [];
+    const domain = [], loops3 = [];
     for (const b of bounds) {
       const loopSense = b.args[2].v === "T";
       let oes = G.get(b.args[1].v).args[1].v.map((r) => G.get(r.v));
@@ -556,6 +556,7 @@ function checkSolid(brep, entities, tolIn, problems, where) {
       }
       if (prevEnd !== firstStart) problems.push(`${where}: face #${face.id}: loop #${b.args[1].v} does not end where it starts`);
       for (const p of walk) box(p);
+      loops3.push(walk);
       if (surf.type !== "plane") {
         const r = loopIntegral(walk, surf, same, G);
         if (!r.closed) problems.push(`${where}: face #${face.id}: loop #${b.args[1].v} does not close on its surface`);
@@ -574,6 +575,8 @@ function checkSolid(brep, entities, tolIn, problems, where) {
       // The box: points of the face inside its loops, on a grid in (u, v).
       for (const p of facePoints(domain, surf)) box(p);
     }
+    // What the face is, as read, for drawing it (render-step.mjs).
+    out.faceData.push({ surf, same, loops: loops3, uv: domain });
   }
   for (const [id, u] of uses) {
     if (u.length !== 2 || u[0] + u[1] !== 0) problems.push(`${where}: edge #${id} is used ${u.length} times (${u.map((s) => (s > 0 ? "+" : "-")).join("")}), not once each way`);
