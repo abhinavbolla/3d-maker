@@ -45,9 +45,10 @@ export function createInspect({ onChange }) {
   }
 
   function apply() {
+    let i = 0;
     for (const [name, entry] of parts) {
       entry.object.visible = !hidden.has(name);
-      cut(entry, section && !section.uncut.has(name) ? section : null);
+      cut(entry, section && !section.uncut.has(name) ? section : null, i++);
     }
   }
 
@@ -157,7 +158,7 @@ export function createInspect({ onChange }) {
     return lo < 0 && hi > 0;
   }
 
-  function cut(entry, sec) {
+  function cut(entry, sec, index = 0) {
     const m = entry.mesh.material;
     if (!m.userData.capped) capShader(m);
     // Glass is clipped but not filled: its inside should stay clear.
@@ -172,7 +173,9 @@ export function createInspect({ onChange }) {
       m.clippingPlanes = null;
       m.clipShadows = false;
     }
-    if (fill) m.userData.cap.value.set(entry.part.color).lerp(WHITE, 0.12);
+    // Lighter and darker by turns, so the cut faces of neighbouring parts of
+    // one colour (an assembly of grey metal) can be told apart.
+    if (fill) m.userData.cap.value.set(entry.part.color).lerp(index % 2 ? BLACK : WHITE, index % 2 ? 0.14 : 0.12);
     m.userData.cap.on = fill;
     m.side = fill ? THREE.DoubleSide : THREE.FrontSide;
     // The shadow map draws back faces, as it does for any solid part.
@@ -262,7 +265,7 @@ export function createInspect({ onChange }) {
         box.expandByPoint(new THREE.Vector3(b[0], b[1], b[2])).expandByPoint(new THREE.Vector3(b[3], b[4], b[5]));
       }
       const move = box.getCenter(new THREE.Vector3()).sub(middle);
-      if (along) move.copy(along).multiplyScalar(move.dot(along));
+      if (along) move.projectOnVector(along);
       move.multiplyScalar(explode.factor);
       for (const n of names) out.set(n, move.clone());
       low = Math.min(low, box.min.z + move.z);
@@ -313,6 +316,7 @@ export function createInspect({ onChange }) {
 }
 
 const WHITE = new THREE.Color(1, 1, 1);
+const BLACK = new THREE.Color(0, 0, 0);
 
 // The inside of a cut part is drawn as its cut face, flat in the cap colour.
 // It stays at the depth of the far wall it is really on: anything between
