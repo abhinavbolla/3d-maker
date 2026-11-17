@@ -10,6 +10,7 @@ node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, e
 node test/check-step.mjs model.step       # checks a STEP file: entities, assembly, closed solids, geometry, volumes
 node test/step-run.mjs model.js out.step  # loads a script, exports it as STEP and checks the file
 node test/render-step.mjs model.step out.png  # draws a STEP file from its own faces, as read back
+node test/step-samples.mjs out-dir        # writes the STEP samples FreeCAD is asked to open, and what each should hold
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
 node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
 node test/kernel.test.mjs drawing         # only the kernel tests with "drawing" in their name
@@ -53,3 +54,16 @@ Each case runs in three rounds, taking turns, and the middle value is printed, w
 ## Benchmarks
 
 How to run them, and every result so far, are in [benchmarks.md](benchmarks.md).
+
+## STEP files in a real CAD program
+
+Our own reader can only say a STEP file is consistent. Whether a CAD program accepts it is checked on
+GitHub: the `STEP in FreeCAD` workflow writes the samples in `test/models/step` with
+`node test/step-samples.mjs`, installs FreeCAD on the runner and runs `test/freecad-check.py` in it.
+FreeCAD has to read every file, find each solid valid and closed, name the parts as the file does, and
+measure the volumes our reader measured, three of which are also worked out by hand. It then writes
+each file out again and reads it back.
+
+FreeCAD is an outside program in that job. It is not a dependency of Draftsman, and none of its code
+is in this repository. The job runs when the STEP code or its samples change, and by hand from the
+Actions tab.

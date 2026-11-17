@@ -1,0 +1,81 @@
+name: STEP in FreeCAD
+
+# Opens the STEP files Draftsman writes in a real CAD program. FreeCAD is an
+# outside tool here, installed on the runner: it is not a dependency of
+# Draftsman and none of its code is in this repository.
+on:
+  pull_request:
+    paths:
+      - "src/kernel/step.js"
+      - "src/kernel/brep.js"
+      - "src/kernel/facets.js"
+      - "src/kernel/outline2.js"
+      - "src/kernel/script.js"
+      - "src/kernel/sdf.js"
+      - "src/kernel/mesh.js"
+      - "test/step-samples.mjs"
+      - "test/freecad-check.py"
+      - "test/check-step.mjs"
+      - "test/models/step/**"
+      - ".github/workflows/step-freecad.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/kernel/step.js"
+      - "src/kernel/brep.js"
+      - "src/kernel/facets.js"
+      - "src/kernel/outline2.js"
+      - "test/step-samples.mjs"
+      - "test/freecad-check.py"
+      - "test/models/step/**"
+      - ".github/workflows/step-freecad.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: step-freecad-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  freecad:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Write the STEP samples
+        run: node test/step-samples.mjs step-samples
+
+      - name: Install FreeCAD
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends freecad
+
+      - name: Open them in FreeCAD
+        env:
+          STEP_DIR: step-samples
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          freecadcmd test/freecad-check.py < /dev/null 2>&1 | tee freecad.log
+          grep -q "^STEP-FREECAD: PASS" freecad.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: step-samples
+          path: |
+            step-samples/*.step
+            step-samples/expected.json
+            freecad.log
+          retention-days: 14
