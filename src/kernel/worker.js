@@ -46,9 +46,15 @@ self.onmessage = ({ data: job }) => {
         if (job.solid) {
           const { f, box } = compile(job.node);
           m = meshSDF(f, box, { budget, maxCell });
-        } else m = meshPart(job.node, { budget, maxCell });
+        } else m = meshPart(job.node, { budget, maxCell, normals: Boolean(job.normals) });
         if (!m.incomplete && m.indices.length) break;
         if (budget < 1000) throw new Error(m.indices.length ? `${job.what} is too large to export as a closed mesh.` : "There is nothing to export.");
+      }
+      // With normals (glTF, OBJ): vertices split along sharp edges, as drawn in the view.
+      if (job.normals && !job.solid) {
+        const d = displayMesh(m);
+        self.postMessage({ id: job.id, ok: true, result: { ...d, cellSize: m.cellSize } }, [d.positions.buffer, d.indices.buffer, d.normals.buffer]);
+        return;
       }
       const { positions, indices } = m;
       self.postMessage({ id: job.id, ok: true, result: { positions, indices, cellSize: m.cellSize } }, [positions.buffer, indices.buffer]);
