@@ -10,6 +10,7 @@ import { loadAutosave } from "./app/autosave.js";
 import { saveBytes, openText, saveOBJ } from "./app/files.js";
 import { objWithMtl } from "./kernel/obj.js";
 import { makeDrawing } from "./app/sheet.js";
+import { makeFloorPlan } from "./app/floorplan.js";
 import { showExamples, exampleScript, tryText } from "./app/examples.js";
 
 const $ = (id) => document.getElementById(id);
@@ -382,6 +383,18 @@ const actions = {
           where = await saveBytes(r.bytes, `${fileName()}.${kind}`, kind);
         }
         return say(where ? `Exported ${where.split("/").pop()}` : "");
+      } catch (err) {
+        return say(err.message, 8000);
+      }
+    }
+    // A floor plan of a building, saved as an SVG sheet like the drawing.
+    if (kind === "plan") {
+      say("Making the floor plan", 0);
+      try {
+        const plan = await makeFloorPlan({ store, kernel });
+        const where = await saveBytes(plan.result.bytes, `${fileName()}-plan.svg`, "svg");
+        if (where) plan.keep();
+        return say(where ? `Exported ${where.split("/").pop()}. ${plan.result.line}` : "", 20000);
       } catch (err) {
         return say(err.message, 8000);
       }

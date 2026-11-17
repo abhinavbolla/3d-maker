@@ -145,7 +145,7 @@ export function createKernel() {
     );
     // Keep this build's meshes and a few recent ones (slider back-and-forth).
     for (const key of cache.keys()) if (!keep.has(key) && cache.size > keep.size + 60) cache.delete(key);
-    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, motion: r.motion, joints: r.joints, parts, ms: Math.round(performance.now() - t0), quality };
+    return { title: r.title, params: r.params, prints: r.prints, warnings: r.warnings, motion: r.motion, joints: r.joints, building: r.building, parts, ms: Math.round(performance.now() - t0), quality };
   }
 
   function detailFor(parts, quality) {
@@ -314,6 +314,15 @@ export function createKernel() {
     };
   }
 
+  // A floor plan of the building on an A3 sheet (see kernel/floorplan.js),
+  // cut from the walls' distance functions in a worker. result: the build.
+  async function exportFloorPlan(result, { info = {} } = {}) {
+    if (!result?.building) throw new Error("This model has no building to draw a plan of. A floor plan is made from outerWalls(), wall(), door(), window() and room() in the script.");
+    const parts = result.parts.filter((p) => !p.hidden).map((p) => ({ name: p.name, node: p.node }));
+    const r = await job({ type: "floorplan", building: result.building, parts, info: { date: today(), type: "Floor plan", ...info } }, MESH_TIMEOUT_MS, "Making the floor plan took too long.");
+    return { bytes: new TextEncoder().encode(r.svg), scale: r.scale, titles: r.titles, rooms: r.facts.rooms, openings: r.facts.openings.length, cut_height_mm: r.facts.cut_height_mm };
+  }
+
   // Which parts pass into each other, at rest and over the motion loop. With
   // names, only pairs that include one of them; with exactly two names, also
   // how close those two come. Pairs are shared out over the workers.
@@ -356,5 +365,5 @@ export function createKernel() {
     return { pairs: pairs.length, results: found.flat().sort((a, b) => (b.volume_cm3 ?? 0) - (a.volume_cm3 ?? 0)) };
   }
 
-  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, checkFit, exportGLB, exportOBJ, exportPLY };
+  return { build, refine, cancelRefine: () => job.cancelBackground(), exportSTL, export3MF, exportSTEP, exportDrawing, exportFloorPlan, checkFit, exportGLB, exportOBJ, exportPLY };
 }
