@@ -179,7 +179,7 @@ try {
   const holes = await call("export_drawing", { hidden_edges: true });
   const holeSvg = bytesOf(holes).toString();
   const sizes = holes.result?.holes?.holes.map((x) => x.text).sort().join(", ");
-  check(sizes === "2× ⌀6.6, 4× ⌀9, ⌀12" && holes.result.holes.positions === 7 && /Holes .* sized from the script's own values\./.test(holes.result.line) && /<g class="hidden" data-layer="HIDDEN"/.test(holeSvg) && /id="centre-lines"/.test(holeSvg), `the bracket's holes are sized and placed, with centre lines and dashed hidden edges (${sizes}; ${holes.result?.line ?? holes.error})`);
+  check(sizes === "2× ⌀6.6, 4× ⌀9, ⌀12, ⌀20, ⌀28" && holes.result.holes.positions === 8 && holes.result.holes.sizes === 3 && holes.result.section.axis === "y" && holes.result.section.offset_mm === 0 && /Holes .* sized from the script's own values\./.test(holes.result.line) && /<g class="hidden" data-layer="HIDDEN"/.test(holeSvg) && /id="centre-lines"/.test(holeSvg), `the bracket's holes are sized and placed, with centre lines and dashed hidden edges (${sizes}; ${holes.result?.line ?? holes.error})`);
   await call("set_model", { script: 'part("Base", box(40, 40, 10), { color: "#4f7cac" });\npart("Peg", cylinder(5, 20).at(0, 0, 12), { color: "#d9a441" });' });
 
   // The title block with nothing said: honest and complete. A number is
@@ -187,7 +187,7 @@ try {
   // issue is today.
   const f0 = sheet.fields;
   const today = await w('(() => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); })()');
-  check(/^3DM-[0-9A-HJKMNP-TV-Z]{6}$/.test(f0.number) && f0.date === today && f0["document-type"] === "Assembly drawing", `the title block has a made-up number, today's date and the document type (${JSON.stringify(f0)})`);
+  check(/^DFT-[0-9A-HJKMNP-TV-Z]{6}$/.test(f0.number) && f0.date === today && f0["document-type"] === "Assembly drawing", `the title block has a made-up number, today's date and the document type (${JSON.stringify(f0)})`);
   check(!f0["created-by"] && !f0["approved-by"] && !f0.owner && !f0.revision, `and no name, owner, approver or revision that nobody gave (${JSON.stringify(f0)})`);
   check(/Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude, e\.g\. "drawn by …, owner …"\.$/.test(dr.result?.line ?? ""), `the line says what is blank and how to fill it (${dr.result?.line})`);
   check(dr.result?.isometric_view === true, "and says the isometric view was drawn");
@@ -268,7 +268,7 @@ try {
   await undo();
   await undo();
   const back = await numberNow();
-  check(rewritten === "BRK-0042" && /^3DM-/.test(fresh) && back === "BRK-0042", `the number stays through set_model, New starts afresh, and undo brings the old number back (${rewritten}, ${fresh}, ${back})`);
+  check(rewritten === "BRK-0042" && /^DFT-/.test(fresh) && back === "BRK-0042", `the number stays through set_model, New starts afresh, and undo brings the old number back (${rewritten}, ${fresh}, ${back})`);
   // Open a file with a number of its own, then undo and redo across it.
   const file = JSON.stringify({ version: 2, script: 'part("Opened", box(25, 25, 25));', values: {}, drawing: { number: "FILE-0001", revision: "B" } });
   await w(`(() => {
@@ -313,7 +313,7 @@ try {
     for (let i = 0; i < 300 && !/Exported/.test(document.getElementById("status").textContent); i++) await new Promise((r) => setTimeout(r, 100));
     return document.getElementById("status").textContent;
   })()`);
-  check(/^Exported \S+\.svg\. Drawing 3DM-\w{6}, \w+ angle( \(from your region\))?, [\d:]+\. Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude/.test(status), `Export > Drawing says what went on the sheet (${status})`);
+  check(/^Exported \S+\.svg\. Drawing DFT-\w{6}, \w+ angle( \(from your region\))?, [\d:]+\. Created by, legal owner and approved by left blank\. To fill in or change a field, tell Claude/.test(status), `Export > Drawing says what went on the sheet (${status})`);
 
   // Detail: after a change the model is meshed again finely in the
   // background, and Claude's pictures wait for it.

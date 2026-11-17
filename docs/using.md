@@ -50,7 +50,7 @@ The sheet shows the model from the front, from above and from the side, with hid
 
 The views are laid out in first-angle projection (ISO: the top view under the front view, the view from the left on its right) or third-angle projection (the top view above it, the view from the right on its right). Which one follows the region your system's language names: third angle in the US, Canada and Japan, first angle elsewhere, and first angle (ISO's) when no region is named. Say "third angle" or "first angle" to change it.
 
-Holes and turned parts get centre lines. On a drawing of up to three parts, the holes seen end on are dimensioned too: their diameters (equal holes together, as "4× ⌀9"; a tapped hole by its thread, as "M6") and their positions, measured from the part's left and bottom edges on one running dimension line each way. The sizes are the script's own values, not measurements: a `hole(9, 10)` is called out as ⌀9. A round hole the script does not describe as a cylinder (a bore in a revolved or lofted part) is found by fitting a circle to the view, and the app says how close the fit is. A bigger assembly gets centre lines only; its parts' sizes belong on their own drawings. Labels are placed where nothing else is; one that finds no room is left out, and the app says so.
+Holes and turned parts get centre lines. On a drawing of up to three parts, the sheet carries every size needed to make the parts, each once and on the view that shows it best. Holes and bosses seen end on get their diameters (equal holes together, as "4× ⌀9"; a tapped hole by its thread, as "M6"; a blind hole with its depth, as "⌀5, 12 deep") and their positions, measured from the largest part's left and bottom edges on one running dimension line each way. A hole that is not seen end on (under a boss, say) is sized on the section instead, as a length with the diameter sign. The section also gives the heights of steps (a boss above a plate) and the thicknesses of plates and walls. The sizes are the script's own values, not measurements: a `hole(9, 10)` is called out as ⌀9. A round hole the script does not describe as a cylinder (a bore in a revolved or lofted part) is found by fitting a circle to the view, and the app says how close the fit is. A bigger assembly gets centre lines only; its parts' sizes belong on their own drawings. Labels go where nothing else is, on the part's face next to their hole when there is room; a leader never crosses a dimension line or another leader, and a size that finds no room is left out with a word from the app.
 
 The overall width, depth and height are dimensioned in millimetres. The scale is the largest standard one that fits the sheet: 1:1, 1:2, 1:5, 1:10, 1:20, 1:50 and so on, or 2:1, 5:1 and up for small parts. Outlines are 0.5 mm wide and dimensions and hatching 0.25 mm, or thinner where a crowded assembly would run together at that weight.
 
@@ -59,7 +59,7 @@ The sheet follows ISO 5457 (frame, grid reference border, centring marks), and i
 | Field | Where it comes from |
 | --- | --- |
 | Title | The model's title. A title too long for its cell is split near its 30th character, and the rest goes in the supplementary title (or, if you gave one, the title gets smaller letters). A title too long even for that is cut short with … on the sheet, and the app says so. |
-| Identification number | Made up once for the model (such as 3DM-4K7Q2X) and saved with it, until you give your own. |
+| Identification number | Made up once for the model (such as DFT-4K7Q2X) and saved with it, until you give your own. A number saved by an older version of the app is kept as it is. |
 | Date of issue | Today. |
 | Document type | Part drawing, or Assembly drawing for more than one part. |
 | Scale, projection, units, sheet | From the sheet itself. |
@@ -76,7 +76,7 @@ The app remembers what you said once the drawing is saved; a drawing that fails,
 
 After each drawing the app says in one line what went on the sheet: what you said, what was remembered, what is blank, and how to change it.
 
-From the Export menu the section cuts across the model's longest side, at its middle. Ask Claude for a different one: "export a drawing with the section across z, 40 mm up".
+The section goes through the axes of holes, so they show at their full size: on a drawing of a few parts, through the most holes (then the plane that keeps the larger scale, then the biggest bore); otherwise across the longest side, moved onto the axis of a turned part it passes close to (a rotor mast). Ask Claude for a different one: "export a drawing with the section across z, 40 mm up". A section given within a hole's radius of its axis is moved onto the axis, and the app says so.
 
 More you can ask for:
 
@@ -99,7 +99,7 @@ claude mcp add --scope user draftsman -- node /path/to/draftsman/mcp/server.mjs
 ## Limitations
 
 - **No exact CAD surfaces yet.** Export is meshes (STL, 3MF), not STEP, and curved surfaces are fine meshes rather than exact curves. This is the price of a kernel where joining and cutting cannot fail. The [roadmap](roadmap.md) says what we plan to do about it.
-- **Drawings are early.** One sheet per drawing, no parts list, and only the overall sizes and holes are dimensioned (no radii, angles or counterbores). Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
+- **Drawings are early.** One sheet per drawing, no parts list, and besides the overall sizes only holes, bosses, steps and wall thicknesses are dimensioned (no radii, angles, chamfers, counterbores or tolerances). Where a small piece of a part rises out of a bigger piece of the same part (a boss on a curved body), the line where they meet is not drawn yet.
 - **Fine detail on big parts.** A 1 mm engraving on a 10 m fuselage is limited by that part's mesh, and features smaller than a mesh cell come out saw-toothed. The very tip of a sharp trailing edge is a few mm short. Threads on a big model look like smooth rods.
 - **Changes are prompts and sliders.** You can't drag parts around in the view.
 - **Collisions in motion** are checked at up to 120 moments of the loop; a very fast part could pass through something between two of them.

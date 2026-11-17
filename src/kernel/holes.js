@@ -12,7 +12,7 @@
 // accuracy is the fit's largest error, which is reported.
 import { compile, compile2, rotationMatrix } from "./sdf.js";
 import { fitCircle } from "./dxf.js";
-import { VIEWS, viewOutline } from "./drawing.js";
+import { VIEWS, viewOutline, sectionPlane } from "./drawing.js";
 
 const { abs, min, max, hypot, sqrt, round, cos, sin, PI } = Math;
 
@@ -188,9 +188,94 @@ export function checkFeatures(features, f, box) {
       const t = t0 + ((t1 - t0) * (k + 0.5 * (k === 0) - 0.5 * (k === steps))) / steps;
       if (shows(t)) (lo = min(lo, t)), (hi = max(hi, t));
     }
-    if (hi >= lo) out.push({ ...F, t: [max(t0, lo - (t1 - t0) / steps), min(t1, hi + (t1 - t0) / steps)] });
+    if (!(hi >= lo)) continue;
+    const kept = { ...F, t: [max(t0, lo - (t1 - t0) / steps), min(t1, hi + (t1 - t0) / steps)] };
+    if (F.kind === "hole") {
+      // Where the hole's wall ends, to a thousandth of its stretch: from a
+      // sample that shows towards the next that does not.
+      const edge = (inT, outT) => {
+        for (let i = 0; i < 12; i++) {
+          const m = (inT + outT) / 2;
+          if (shows(m)) inT = m;
+          else outT = m;
+        }
+        return inT;
+      };
+      const a = edge(lo, max(t0, lo - (t1 - t0) / steps)), b = edge(hi, min(t1, hi + (t1 - t0) / steps));
+      // A blind hole has material on its axis just past one end.
+      const solidAt = (t) => f(F.c[0] + F.a[0] * t, F.c[1] + F.a[1] * t, F.c[2] + F.a[2] * t) < 0;
+      const past = max(d, (t1 - t0) * 0.01);
+      const ends = [solidAt(a - past), solidAt(b + past)];
+      if (ends[0] !== ends[1]) kept.depth = b - a;
+      kept.wall = [a, b];
+    }
+    out.push(kept);
   }
   return out;
+}
+
+// The key a feature is known by, so one size is dimensioned once.
+export const featureKey = (F) => `${F.part}|${F.kind}|${F.c.map((v) => round(v * 100)).join(",")}|${F.a.map((v) => round(v * 1000)).join(",")}|${round(F.r * 1000)}`;
+
+// What the section shows of the features: those whose axis lies in the
+// cutting plane, in the section view's millimetres:
+// [{ key, kind, r, dim, label, depth, part, u0, v0, u1, v1 }] (the axis on paper, model mm).
+export function sectionMarks(features, { axis, offset }, view) {
+  const a = "xyz".indexOf(axis);
+  const { u, v } = VIEWS[view];
+  const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  const out = [];
+  for (const F of features) {
+    if (abs(F.a[a]) > 1e-6 || abs(F.c[a] - offset) > 1e-6 * (1 + abs(offset))) continue;
+    const [t0, t1] = F.wall ?? F.t;
+    const p0 = [0, 1, 2].map((i) => F.c[i] + F.a[i] * t0), p1 = [0, 1, 2].map((i) => F.c[i] + F.a[i] * t1);
+    out.push({ key: featureKey(F), kind: F.kind, r: F.r, dim: F.dim, label: F.label ?? null, depth: F.depth ?? null, part: F.part, u0: dot(p0, u), v0: dot(p0, v), u1: dot(p1, u), v1: dot(p1, v) });
+  }
+  return out;
+}
+
+// Where to cut when nobody says, for a drawing of a few parts: through the
+// axes of the most holes (then the biggest bore, then the plane that shows
+// most of the model), so a section shows holes at their full size. A plane
+// that is given close to a hole's axis (within its radius) is moved onto
+// it. With no holes, turned parts count instead. Returns { axis, offset,
+// note } (note: a sentence for the user, or ""), or null to keep the
+// usual plane.
+export function featurePlane(features, bounds, given = {}, sheetScale = () => 1) {
+  const size = [0, 1, 2].map((i) => bounds[i + 3] - bounds[i]);
+  const tol = 1e-6 * max(...size);
+  const holes = features.filter((F) => F.kind === "hole" && F.dim);
+  const pool = holes.length ? holes : features.filter((F) => F.kind === "solid" && F.dim);
+  if (!pool.length) return null;
+  const word = holes.length ? "hole" : "turned part";
+  const what = (F) => (F.label ? F.label : `⌀${String(round(F.r * 20) / 10)}`);
+  if (given.axis && given.offset != null) {
+    const a = "xyz".indexOf(given.axis);
+    const near = pool.filter((F) => abs(F.a[a]) < 1e-6 && abs(F.c[a] - given.offset) <= F.r && abs(F.c[a] - given.offset) > tol).sort((p, q) => abs(p.c[a] - given.offset) - abs(q.c[a] - given.offset));
+    if (!near.length) return null;
+    const F = near[0];
+    return { axis: given.axis, offset: F.c[a], note: `The section was moved ${String(round(abs(F.c[a] - given.offset) * 100) / 100)} mm onto the axis of the ${what(F)} ${word}, at ${given.axis} = ${String(round(F.c[a] * 100) / 100)} mm.` };
+  }
+  let best = null;
+  for (let a = 0; a < 3; a++) {
+    if (given.axis && "xyz"[a] !== given.axis) continue;
+    for (const F of pool) {
+      if (abs(F.a[a]) > 1e-6) continue;
+      const offset = F.c[a];
+      if (offset <= bounds[a] || offset >= bounds[a + 3]) continue;
+      const on = pool.filter((G) => abs(G.a[a]) < 1e-6 && abs(G.c[a] - offset) < max(tol, 1e-3));
+      // Holes counted by axis and size: a bore stepped down is two holes.
+      const centres = new Set(on.map((G) => `${G.c.map((v) => round(v * 100)).join(",")}|${round(G.r * 1000)}`));
+      // Most holes; then the plane whose section lets the sheet keep the larger scale; then the biggest bore.
+      const score = [centres.size, sheetScale("xyz"[a]), max(...on.map((G) => G.r)), size[(a + 1) % 3] * size[(a + 2) % 3], -abs(offset - (bounds[a] + bounds[a + 3]) / 2)];
+      const i = best ? score.findIndex((s, k) => abs(s - best.score[k]) > 1e-9) : -1;
+      if (!best || (i >= 0 && score[i] > best.score[i])) best = { score, axis: "xyz"[a], offset, on, F };
+    }
+  }
+  if (!best) return null;
+  const sizes = [...new Set(best.on.map(what))];
+  const n = best.score[0];
+  return { axis: best.axis, offset: best.offset, note: `Section A–A goes through ${n > 1 ? `${n} ${word}s` : `the ${word}`} on their axes (${sizes.join(", ")}), at ${best.axis} = ${String(round(best.offset * 100) / 100)} mm.` };
 }
 
 // Every part's checked features: [{ part, ...feature }]. parts: { name, node,
@@ -250,7 +335,7 @@ export function featuresInView(features, view, parts = []) {
     if (abs(abs(along) - 1) < 1e-6) {
       let hit = 0;
       for (let k = 0; k < 24; k++) if (near(cu + F.r * cos((k * PI) / 12), cv + F.r * sin((k * PI) / 12))) hit++;
-      if (hit >= 18) circles.push({ u: cu, v: cv, r: F.r, kind: F.kind, dim: F.dim, label: F.label ?? null, part: F.part, source: F.source });
+      if (hit >= 18) circles.push({ u: cu, v: cv, r: F.r, kind: F.kind, dim: F.dim, label: F.label ?? null, part: F.part, source: F.source, key: featureKey(F), depth: F.depth ?? null });
     } else if (abs(along) < 1e-6) {
       // The axis on paper, and its two sides r either way.
       const au = dot(F.a, u), av = dot(F.a, v);
@@ -338,4 +423,27 @@ export function markedView(parts, view, opts = {}) {
   const v = viewOutline(parts, view, opts);
   v.marks = featuresInView(partFeatures(parts), v, parts);
   return v;
+}
+
+// The section plane for a drawing: as given, or through holes on a drawing
+// of a few parts (see featurePlane), or across the longest side; then, if it
+// passes close to a hole's or turned part's axis, onto that axis.
+// Returns { plane: { axis, offset }, note }.
+export function choosePlane(features, bounds, section = {}, parts = 1, sheetScale) {
+  const given = { axis: section.axis ?? undefined, offset: section.offset ?? undefined };
+  let plane = null, note = "";
+  if (given.offset == null && parts <= 3) {
+    const p = featurePlane(features, bounds, given, sheetScale);
+    if (p) (plane = { axis: p.axis, offset: p.offset }), (note = p.note);
+  }
+  if (!plane) {
+    plane = sectionPlane(bounds, given);
+    const snap = featurePlane(features, bounds, plane);
+    if (snap) {
+      plane = { axis: snap.axis, offset: snap.offset };
+      // Moving the plane the app chose itself needs no word.
+      if (given.offset != null) note = snap.note;
+    }
+  }
+  return { plane, note };
 }

@@ -63,7 +63,7 @@ On 20 of CADPrompt's 200 parts, every part built, at 0.916 IoGT. Eight complex m
 ## Limitations
 
 - **Meshes only.** Export is STL and 3MF, not STEP, and curved surfaces are fine meshes, not exact curves.
-- **Drawings are early.** One sheet per drawing; holes are the only features dimensioned besides the overall sizes.
+- **Drawings are early.** One sheet per drawing; holes, bosses, steps and wall thicknesses are dimensioned, but not radii, angles, chamfers or tolerances.
 - **No dragging.** You change a model with prompts and sliders.
 - **Fine detail on big parts** is limited by the mesh: a 1 mm engraving on a 10 m fuselage comes out rough.
 - **No installer.** It runs from this folder.

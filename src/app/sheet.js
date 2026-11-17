@@ -68,7 +68,7 @@ function regionProjection() {
 // I, L, O or U to mistake for 1, 0 or V.
 function newNumber() {
   const letters = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-  return `3DM-${Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => letters[b & 31]).join("")}`;
+  return `DFT-${Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => letters[b & 31]).join("")}`;
 }
 
 // The given values, checked. "" means: forget what was remembered.
@@ -190,6 +190,7 @@ export async function makeDrawing({ store, kernel }, args = {}) {
   const parts = [`Drawing ${info.number}${info.revision ? ` rev. ${info.revision}` : ""}, ${projection} angle${fromRegion ? " (from your region)" : ""}, ${r.scale}${r.sheet_size && r.sheet_size !== "A3" ? ` on ${r.sheet_size}` : ""}.`];
   if (r.detail_view) parts.push(`Detail view ${r.detail_view.letter} of the ${r.detail_view.view} view at ${r.detail_view.scale}.`);
   if (titles.shortened) parts.push("The model's title was too long for the title block and is shortened on the sheet.");
+  if (r.section_note) parts.push(r.section_note);
   parts.push(...marksLines(marks));
   if (said.length) parts.push(`${cap(list(said))} as given.`);
   if (kept.length) parts.push(`${cap(list(kept))} as remembered.`);
@@ -216,6 +217,8 @@ function marksLines(m) {
     const fromScript = m.holes.every((h) => h.from === "the script");
     out.push(`Holes ${list(sizes)}${m.positions ? `, with ${m.positions} position${m.positions > 1 ? "s" : ""}` : ""}, sized ${fromScript ? "from the script's own values" : "from the script and from circles fitted to the views"}.`);
   }
+  if (m.sizes) out.push(`Section A–A gives ${m.sizes} step height${m.sizes > 1 ? "s" : ""} and wall thickness${m.sizes > 1 ? "es" : ""}.`);
+  if (m.on_centre) out.push("A hole on the cutting line, in the middle of the part, is placed by the line.");
   for (const f of m.fitted) out.push(`⌀${f.diameter} is a circle fitted to the view, within ${f.within_mm} mm.`);
   if (m.left_out.length) out.push(`Left out: ${list(m.left_out)}.`);
   return out;

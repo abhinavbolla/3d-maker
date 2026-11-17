@@ -40,7 +40,7 @@ What is left:
 
 1. **Views.** The lines where a small piece of a part meets a bigger piece of the same part, which the mesh has no edge for. Views drawn from the distance functions instead of the mesh, so curves are exact here too. Detail views drawn from a finer view instead of an enlarged one.
 2. **Sections.** Planes at any angle, stepped and half sections, several sections on a sheet, and detail views.
-3. **Dimensions.** Radii and angles, counterbore and countersink callouts, hole patterns on a pitch circle, and dimensions in sections.
+3. **Dimensions.** Radii and angles, counterbore and countersink callouts, hole patterns on a pitch circle, chamfers, tolerances and surface finish.
 4. **Sheets.** Several sheets, and a parts list with balloons.
 5. **Drawings by prompt.** "Make a drawing of the bracket with a section through the holes": Claude choosing the views, the sections and what to dimension, and looking at the sheet it made.
 

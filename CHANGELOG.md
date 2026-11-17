@@ -49,8 +49,7 @@ Notable changes to Draftsman. The format follows
   vector, at the sheet's real size; the DXF has layers for visible and hidden edges, centre
   lines, section, hatching, dimensions and frame. Export > Outline, DXF saves one section alone
   at 1:1 for a laser cutter, with round holes as true circles (SVG too, and any view's outline).
-- Drawings show centre lines of holes and turned parts, and the diameters and positions of holes,
-  sized from the script's own values (or from circles fitted to the view, with their accuracy).
+- Drawings show centre lines of holes and turned parts, and on a drawing of a few parts every size needed to make them: the diameters and positions of holes and bosses, blind holes' depths, step heights and wall thicknesses. Sizes come from the script's own values (or from circles fitted to the view, with their accuracy). The section goes through the holes' axes. Drawing numbers begin with DFT-.
   Hidden edges can be drawn dashed, sheets come in A4 to A0, and a detail view shows a crowded
   place at a larger scale.
 - Benchmarks: eight complex moving objects scored by a judge, and CADPrompt scored against its

@@ -2,6 +2,7 @@
 // only parts that changed are meshed again.
 import { worldBox, boxesMeet } from "../kernel/fit.js";
 import { toSTL } from "../kernel/mesh.js";
+import { choosePlane } from "../kernel/holes.js";
 import { to3MF } from "../kernel/threemf.js";
 import { modelBounds, sectionPlane, sideViewOf, sheetSVG, today, documentType, planSheet, outlineBox, joinLines } from "../kernel/drawing.js";
 
@@ -233,15 +234,16 @@ export function createKernel() {
     const shown = visible(parts);
     const meshes = await exportMeshes(parts);
     const bounds = modelBounds(meshes);
-    const plane = sectionPlane(bounds, section);
     const drawn = meshes.map((m, i) => ({ name: m.name, node: shown[i].node, positions: m.positions, indices: m.indices }));
     const draw = (what) => job({ type: "drawing", parts: drawn, ...what }, MESH_TIMEOUT_MS, "Making the drawing took too long.");
+    // Holes and turned parts decide where the section goes (see choosePlane).
+    const { plane, note } = choosePlane(await draw({ features: true }), bounds, section, shown.length, (axis) => planSheet({ bounds, axis, projection, size, roomy: shown.length <= 3 }).scale);
     // The isometric view only where the sheet has room for it.
-    const roomForIso = planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(meshes, "iso"), size }).iso;
+    const roomForIso = planSheet({ bounds, axis: plane.axis, projection, isoBox: outlineBox(meshes, "iso"), size, roomy: shown.length <= 3 }).iso;
     const flat = { opts: { hidden, marks: true } };
     const [front, top, side, iso, cut] = await Promise.all([draw({ view: "front", ...flat }), draw({ view: "top", ...flat }), draw({ view: sideViewOf(projection), ...flat }), roomForIso ? draw({ view: "iso" }) : null, draw({ section: plane })]);
     const views = iso ? { front, top, side, iso } : { front, top, side };
-    const sheet = sheetSVG({ info: { date: today(), type: documentType(shown.length), ...info }, bounds, views, section: cut, projection, size, detail });
+    const sheet = sheetSVG({ info: { date: today(), type: documentType(shown.length), ...info }, bounds, views, section: cut, projection, size, detail, roomy: shown.length <= 3 });
     const { svg, scale } = sheet;
     const count = (v) => v.reduce((s, p) => s + p.lines.length, 0);
     return {
@@ -252,6 +254,7 @@ export function createKernel() {
       marks: sheet.marks,
       sheet_size: size,
       detail_view: sheet.detail,
+      section_note: note,
       section: { axis: cut.axis, offset_mm: Math.round(cut.offset * 100) / 100, cut_area_mm2: Math.round(cut.area * 10) / 10, parts_cut: cut.parts.map((p) => p.name) },
       lines: count(front.parts) + count(top.parts) + count(side.parts) + count(cut.beyond),
     };
