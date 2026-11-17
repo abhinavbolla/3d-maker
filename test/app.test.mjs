@@ -567,7 +567,6 @@ joint("Rod", "Piston", top);` });
   // without Claude, loaded only then, with a clean undo history and two
   // prompts to try. They go when a model is there, or as soon as you type.
   const { EXAMPLES } = await import("../src/examples/list.js");
-  const { sleep } = await import("./harness.mjs");
   const e = await h.openWindow({ preload: `localStorage.removeItem("draftsman:autosave")` });
   const startShown = async () => !(await e('document.getElementById("start").hidden'));
   const offered = await e(`[...document.querySelectorAll("#ideas [data-example]")].map((b) => b.dataset.example)`);
