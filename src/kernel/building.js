@@ -547,9 +547,8 @@ export function makeBuilding({ part, fail, num }) {
         // Extrude along Z, then lay it down: profile y up, the extrusion along the ridge.
         const ang = atan2(along.dir[1], along.dir[0]) / DEG;
         // After rotateX(90) the extrusion runs along -Y and profile x along +X;
-        // turning by ang - 90 puts the extrusion along the ridge, and profile
-        // x along across.dir only if that is the ridge turned a quarter
-        // clockwise; otherwise mirror the section (it is symmetric anyway).
+        // turning by ang - 90 lays the extrusion along the ridge and profile x
+        // square across it (which way round does not matter: it is symmetric).
         const lay = (p, h, shift) => ({ t: "move", v: [R5(c[0] + along.dir[0] * shift), R5(c[1] + along.dir[1] * shift), 0], c: { t: "rotate", deg: [90, 0, R5(ang - 90)], c: { t: "extrude", p, h: R5(h) } } });
         roofNode = lay(poly(section), L + 2 * ov, 0);
         const gable = poly([[-W / 2, topZ], [W / 2, topZ], [0, zr]]);
@@ -560,7 +559,9 @@ export function makeBuilding({ part, fail, num }) {
 
     // The parts, in the order a builder puts them up.
     if (S.slab > 0) part("Floor slab", { t: "move", v: [0, 0, 0], c: prism(poly(P), 0, S.slab) }, { color: COLORS.slab[0], material: COLORS.slab[1] });
-    const outerSolid = unionOf([prism(outerProfile, floorZ, topZ), ...extra.outer]);
+    // The gable ends are meshed with the walls under them (a blend far too
+    // small to see keeps them one piece), so no seam shows along the wall top.
+    const outerSolid = extra.outer.length ? { t: "union", c: [prism(outerProfile, floorZ, topZ), ...extra.outer], k: 0.01 } : prism(outerProfile, floorZ, topZ);
     part("Outer walls", cuts.outer.length ? { t: "subtract", a: outerSolid, b: cuts.outer, k: 0 } : outerSolid, { color: COLORS.outer[0], material: COLORS.outer[1] });
     if (innerProfile) {
       const solid = prism(innerProfile, floorZ, topZ);
@@ -603,7 +604,7 @@ export function makeBuilding({ part, fail, num }) {
       openings: openingInfo,
       rooms: roomInfo,
       stairs: stairInfo,
-      roof: roofSpec ? { type: roofSpec.type, pitch: roofSpec.pitch, overhang: roofSpec.overhang, ...(roofSpec.facts ?? {}) } : null,
+      roof: roofSpec ? { name: roofSpec.name, type: roofSpec.type, pitch: roofSpec.pitch, overhang: roofSpec.overhang, ...(roofSpec.facts ?? {}) } : null,
       warnings,
     };
   }

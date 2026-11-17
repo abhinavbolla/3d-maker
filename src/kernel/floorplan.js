@@ -94,7 +94,7 @@ export function floorPlanSVG({ building: B, parts, info = {} }) {
   if (!B) throw new Error("This model has no building to draw a plan of. Floor plans are made from outerWalls(), wall(), door(), window() and room() in the script.");
   const zc = B.cut_z;
   const pieces = new Set(["Floor slab", "Outer walls", "Inner walls", ...B.openings.flatMap((o) => o.parts), ...B.stairs.map((s) => s.name)]);
-  const roofName = parts.find((p) => !pieces.has(p.name) && B.roof && p.name === (B.roof.name ?? "Roof"))?.name ?? "Roof";
+  const roofName = B.roof?.name ?? "Roof";
   const wallParts = parts.filter((p) => p.name === "Outer walls" || p.name === "Inner walls");
   if (!wallParts.length) throw new Error("The walls are hidden, so there is no plan to draw.");
   const cut = cutWalls(wallParts, zc);
