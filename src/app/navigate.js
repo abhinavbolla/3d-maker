@@ -146,7 +146,7 @@ export function createNavigation(camera, dom, { surfaceAt, size, floor, onChange
   // have one. Elsewhere we wait for proof: a wheel scrolls one way at a time,
   // so the first scroll that goes both ways at once tells us there is a
   // trackpad, and that is remembered. Until then only a sideways scroll counts.
-  const TRACKPAD = "3d-maker:trackpad";
+  const TRACKPAD = "draftsman:trackpad";
   let trackpad = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? "");
   try {
     trackpad ||= Boolean(localStorage.getItem(TRACKPAD));

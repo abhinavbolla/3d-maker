@@ -16,7 +16,7 @@ export async function startHarness({ port = 5178 } = {}) {
   port = Number(process.env.TEST_PORT) || port;
   const vite = await createServer({ root, configFile: join(root, "vite.config.js"), server: { port, strictPort: true, hmr: false, watch: null }, logLevel: "warn" });
   await vite.listen();
-  const profile = mkdtempSync(join(tmpdir(), "3d-maker-test-"));
+  const profile = mkdtempSync(join(tmpdir(), "draftsman-test-"));
   const chrome = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--window-size=1280,800", "about:blank"], { stdio: "ignore" });
   process.on("exit", () => chrome.kill());
 
@@ -63,7 +63,7 @@ export async function startHarness({ port = 5178 } = {}) {
       return r.result.value;
     };
     for (let i = 0; i < 200; i++) {
-      if (await evaluate("Boolean(window.__3dmaker)").catch(() => false)) return evaluate;
+      if (await evaluate("Boolean(window.__draftsman)").catch(() => false)) return evaluate;
       await sleep(100);
     }
     throw new Error("The app did not start in Chrome.");
@@ -74,22 +74,22 @@ export async function startHarness({ port = 5178 } = {}) {
     await win(`document.getElementById("input").value = ${JSON.stringify(text)}; document.getElementById("prompt").requestSubmit(); true`);
     const end = Date.now() + timeoutMs;
     await sleep(500);
-    while (await win("window.__3dmaker.busy()")) {
+    while (await win("window.__draftsman.busy()")) {
       if (Date.now() > end) throw new Error(`Claude did not finish within ${Math.round(timeoutMs / 60000)} minutes.`);
       await onTick?.();
       await sleep(1000);
     }
-    return win("window.__3dmaker.reply()");
+    return win("window.__draftsman.reply()");
   }
 
   // Calls an app command in a window, as the MCP server would. Returns
   // { result } or { error }.
   const command = (win, name, args = {}) =>
-    win(`Promise.resolve().then(() => window.__3dmaker.call(${JSON.stringify(name)}, ${JSON.stringify(args)})).then((result) => ({ result }), (e) => ({ error: String(e.message ?? e) }))`);
+    win(`Promise.resolve().then(() => window.__draftsman.call(${JSON.stringify(name)}, ${JSON.stringify(args)})).then((result) => ({ result }), (e) => ({ error: String(e.message ?? e) }))`);
 
   // Writes the window's STL and returns whether test/check-stl.mjs calls it closed.
   async function stlIsClosed(win) {
-    const stl = await win("window.__3dmaker.exportSTL()");
+    const stl = await win("window.__draftsman.exportSTL()");
     const path = join(profile, `check-${Date.now()}.stl`);
     writeFileSync(path, Buffer.from(stl.base64, "base64"));
     try {

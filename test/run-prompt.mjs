@@ -29,14 +29,14 @@ try {
     },
   });
   if (!reply.receipt) throw new Error("The window has no record of this run (it reloaded, or Claude never started).");
-  const summary = await w("window.__3dmaker.summary()");
+  const summary = await w("window.__draftsman.summary()");
   for (const view of ["iso", "front", "top"]) {
     const shot = await h.command(w, "screenshot", { view, width: 1400, height: 1000 });
     if (shot.result) writeFileSync(join(out, `${view}.png`), Buffer.from(shot.result.png, "base64"));
   }
   // The script first, so a failed export or fit check loses nothing.
   writeFileSync(join(out, "model.js"), summary.script);
-  const mesh = await w("window.__3dmaker.exportSTL()").catch(() => null);
+  const mesh = await w("window.__draftsman.exportSTL()").catch(() => null);
   if (mesh?.base64) writeFileSync(join(out, "model.stl"), Buffer.from(mesh.base64, "base64"));
   const stl = await h.stlIsClosed(w).catch((e) => ({ closed: false, triangles: 0, error: String(e.message ?? e) }));
   const fit = (await h.command(w, "check_fit")).result ?? null;
