@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 const modelFile = process.argv[2] ?? new URL("./models/helicopter.js", import.meta.url).pathname;
 const out = process.argv[3] ?? tmpdir();
-const client = new Client({ name: "3d-maker-test", version: "1" });
+const client = new Client({ name: "draftsman-test", version: "1" });
 await client.connect(new StdioClientTransport({ command: process.execPath, args: [new URL("../mcp/server.mjs", import.meta.url).pathname] }));
 const call = async (name, args = {}) => {
   const r = await client.callTool({ name, arguments: args });

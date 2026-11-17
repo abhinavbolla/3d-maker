@@ -1,4 +1,4 @@
-// 3D Maker: type what you want, Claude builds it, click a part to tweak it.
+// Draftsman: type what you want, Claude builds it, click a part to tweak it.
 import { createViewport } from "./app/viewport.js";
 import { createViewCube } from "./app/viewcube.js";
 import { createKernel } from "./app/kernel.js";
@@ -251,7 +251,7 @@ function renderAll() {
   }
   viewport.select(selected);
   const title = result?.title || "";
-  $("title").textContent = title || "3D Maker";
+  $("title").textContent = title || "Draftsman";
   const size = viewport.size();
   const count = result?.parts.length ?? 0;
   $("facts").textContent = size ? `${count} ${count === 1 ? "part" : "parts"}, ${size.map((v) => Math.round(v)).join(" × ")} mm` : "";
@@ -259,7 +259,7 @@ function renderAll() {
   $("viewcube").hidden = !count;
   $("start").hidden = Boolean(count) || Boolean(working) || !$("reply").hidden;
   if (count) moveHint();
-  document.title = title ? `${title} · 3D Maker` : "3D Maker";
+  document.title = title ? `${title} · Draftsman` : "Draftsman";
   $("chip").hidden = !selected;
   $("chip-name").textContent = selected ?? "";
   $("input").placeholder = selected ? `Change ${selected}` : result?.parts.length ? "Describe a change" : "Describe what to make";
@@ -276,8 +276,8 @@ store.subscribe(renderAll);
 // Said once, the first time a model is on screen.
 function moveHint() {
   try {
-    if (localStorage.getItem("3d-maker:move-hint") === "2") return;
-    localStorage.setItem("3d-maker:move-hint", "2");
+    if (localStorage.getItem("draftsman:move-hint") === "2") return;
+    localStorage.setItem("draftsman:move-hint", "2");
   } catch {
     return;
   }
@@ -318,7 +318,7 @@ const actions = {
       doc = JSON.parse(file.text);
       if (doc.version !== 2 || typeof doc.script !== "string") throw new Error();
     } catch {
-      return say("That file is not a 3D Maker model.", 6000);
+      return say("That file is not a Draftsman model.", 6000);
     }
     viewport.resetFit();
     viewport.inspect.clear();
@@ -407,7 +407,7 @@ $("input").focus();
 
 // Lets the end-to-end test (test/e2e.test.mjs) read what the window shows.
 if (import.meta.env.DEV) {
-  window.__3dmaker = {
+  window.__draftsman = {
     windowId: bridge.windowId,
     busy: () => Boolean(working),
     plan: () => store.state.doc.plan,

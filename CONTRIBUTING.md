@@ -1,4 +1,4 @@
-# Contributing to 3D Maker
+# Contributing to Draftsman
 
 Thanks for helping.
 
@@ -44,6 +44,6 @@ Thanks for helping.
 
 ## The rest
 
-- **License.** 3D Maker is [MIT licensed](LICENSE), and your contributions are licensed under it too.
+- **License.** Draftsman is [MIT licensed](LICENSE), and your contributions are licensed under it too.
 - **Security.** Report security problems privately: see [SECURITY.md](SECURITY.md).
 - **Conduct.** Everyone taking part follows our [code of conduct](CODE_OF_CONDUCT.md).
