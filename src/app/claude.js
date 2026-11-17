@@ -1,5 +1,5 @@
 // Runs the user's own Claude Code (the `claude` command they already have and
-// are logged in to) for each prompt, with 3D Maker's MCP server attached, and
+// are logged in to) for each prompt, with Draftsman's MCP server attached, and
 // streams what it does. Nothing here holds or sees Claude credentials.
 //
 // The desktop app starts the process from Rust; the browser dev build goes
@@ -9,16 +9,16 @@ import { REFERENCE } from "../../mcp/reference.mjs";
 
 const isTauri = () => Boolean(window.__TAURI_INTERNALS__);
 
-const TOOLS = ["get_model", "set_model", "edit_model", "append_to_model", "set_plan", "finish_step", "check_fit", "screenshot", "export_stl", "export_3mf", "export_drawing", "set_look", "reference"].map((t) => `mcp__3d-maker__${t}`);
+const TOOLS = ["get_model", "set_model", "edit_model", "append_to_model", "set_plan", "finish_step", "check_fit", "screenshot", "export_stl", "export_3mf", "export_drawing", "set_look", "reference"].map((t) => `mcp__draftsman__${t}`);
 
-const APP_PROMPT = `You are the modelling assistant inside the 3D Maker app. The user types requests into the app and watches the 3D view while you work. Use only the 3d-maker tools: call get_model before changing an existing model, follow HOW TO WORK below (big or mechanical models are built step by step with set_plan and finish_step; put the plan up within a minute and work out each step's details when you reach it), check your work with screenshots and check_fit, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.
+const APP_PROMPT = `You are the modelling assistant inside the Draftsman app. The user types requests into the app and watches the 3D view while you work. Use only the draftsman tools: call get_model before changing an existing model, follow HOW TO WORK below (big or mechanical models are built step by step with set_plan and finish_step; put the plan up within a minute and work out each step's details when you reach it), check your work with screenshots and check_fit, and fix what looks wrong before you finish. Keep your final reply to one or two short sentences about what you made or changed, in plain words. Never paste the script.
 
-The 3D Maker modelling language follows. It is the same text the reference tool returns, so you do not need to call that tool.
+The Draftsman modelling language follows. It is the same text the reference tool returns, so you do not need to call that tool.
 
 ${REFERENCE}`;
 
 export function args(prompt, { session, model, windowId }) {
-  const mcp = { mcpServers: { "3d-maker": { command: __NODE_PATH__, args: [__MCP_SERVER_PATH__, ...(windowId ? ["--app", windowId] : [])] } } };
+  const mcp = { mcpServers: { "draftsman": { command: __NODE_PATH__, args: [__MCP_SERVER_PATH__, ...(windowId ? ["--app", windowId] : [])] } } };
   const a = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--mcp-config", JSON.stringify(mcp), "--strict-mcp-config", "--allowedTools", TOOLS.join(","), "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task", "--append-system-prompt", APP_PROMPT];
   if (model) a.push("--model", model);
   if (session) a.push("--resume", session);
@@ -58,7 +58,7 @@ export function createClaude({ onEvent }) {
       for (const c of ev.message?.content ?? []) {
         if (c.type === "text" && c.text.trim()) run.texts.push(c.text.trim());
         if (c.type === "tool_use") {
-          const name = String(c.name).replace(/^mcp__3d-maker__/, "");
+          const name = String(c.name).replace(/^mcp__draftsman__/, "");
           onEvent({ kind: "status", text: TOOL_STATUS[name] ?? "Working" });
         }
       }

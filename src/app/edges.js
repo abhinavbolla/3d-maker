@@ -102,7 +102,7 @@ export function edgeLines(mesh) {
 }
 
 // The look, remembered for this user: { edges: boolean }.
-const KEY = "3d-maker:look";
+const KEY = "draftsman:look";
 export function loadLook() {
   try {
     return { edges: false, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") };

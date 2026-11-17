@@ -492,17 +492,17 @@ joint("Rod", "Piston", top);` });
   // meets the plate, and the same as without it on the open plate, on the
   // block's top, on the floor beside the plate and on the background.
   await call("set_model", { script: 'part("Plate", box(200, 200, 20).at(0, 0, 10), { color: "#9aa3ad", material: "plastic" }); part("Block", box(50, 50, 60).at(50, 50, 50), { color: "#9aa3ad", material: "plastic" });' });
-  await w('window.__3dmaker.fit("top")');
+  await w('window.__draftsman.fit("top")');
   const shade = await w(`(() => {
     const read = (creases) => {
-      const c = window.__3dmaker.frame({ creases });
+      const c = window.__draftsman.frame({ creases });
       const x = Object.assign(document.createElement("canvas"), { width: c.width, height: c.height }).getContext("2d");
       x.drawImage(c, 0, 0);
       return x.getImageData(0, 0, c.width, c.height);
     };
     const plain = read(false), shaded = read(true);
     const k = plain.width / document.querySelector("#viewport canvas").clientWidth;
-    const P = window.__3dmaker.screenPosition("Plate"), B = window.__3dmaker.screenPosition("Block");
+    const P = window.__draftsman.screenPosition("Plate"), B = window.__draftsman.screenPosition("Block");
     const dark = (x, y) => { const i = (Math.round(y * k) * plain.width + Math.round(x * k)) * 4; return [0, 1, 2].reduce((m, c) => Math.max(m, plain.data[i + c] - shaded.data[i + c]), -255); };
     const patch = (x, y) => { let m = 0; for (let dx = -6; dx <= 6; dx++) for (let dy = -6; dy <= 6; dy++) m = Math.max(m, Math.abs(dark(x + dx, y + dy))); return m; };
     // From the block's middle towards the plate's, across the corner.
@@ -581,22 +581,22 @@ joint("Rod", "Piston", top);` });
   check(quiet.draws === 0 && rested.frames === 1 && rested.passes === 3 && shownAfter, `once the view rests, the crease shading is worked out in one step of 3 passes (${(rested.samples / rested.canvas).toFixed(2)} samples per window pixel, ${Math.round(rested.triangles / 1000)} thousand triangles), not before (${quiet.draws} draws)`);
   const restAfter = await cost(`window.__frames.step(120); await new Promise((r) => setTimeout(r, 2000))`);
   check(restAfter.draws === 0, `after that a still view draws nothing (${JSON.stringify(restAfter)})`);
-  const picked2 = await cost(`window.__3dmaker.select(window.__3dmaker.state().parts[0]); window.__frames.step(2)`);
+  const picked2 = await cost(`window.__draftsman.select(window.__draftsman.state().parts[0]); window.__frames.step(2)`);
   check(picked2.frames >= 1 && picked2.passes === 2 * picked2.frames && (await overlay()), `a selection draws the view once and keeps the shading (${picked2.passes} passes in ${picked2.frames} frames)`);
-  await g(`window.__3dmaker.select(null); window.__frames.step(2)`);
+  await g(`window.__draftsman.select(null); window.__frames.step(2)`);
   // Turning the view with the shading on and with it off costs the same.
-  const turnFrom = (js) => cost(`window.__3dmaker.fit(); ${js}; window.__frames.step(1); window.__gl.take(); const c = document.querySelector("#viewport canvas"); const ev = (t, x) => c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: 300, button: 0, buttons: 1, pointerId: 9, bubbles: true })); ev("pointerdown", 300); for (let i = 1; i <= 6; i++) { ev("pointermove", 300 + i * 10); window.__frames.step(1); } ev("pointerup", 360); window.__frames.step(1)`);
-  const turnOff = await turnFrom(`window.__3dmaker.look({ creases: false })`);
-  const turnOn = await turnFrom(`window.__3dmaker.look({ creases: true })`);
+  const turnFrom = (js) => cost(`window.__draftsman.fit(); ${js}; window.__frames.step(1); window.__gl.take(); const c = document.querySelector("#viewport canvas"); const ev = (t, x) => c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: 300, button: 0, buttons: 1, pointerId: 9, bubbles: true })); ev("pointerdown", 300); for (let i = 1; i <= 6; i++) { ev("pointermove", 300 + i * 10); window.__frames.step(1); } ev("pointerup", 360); window.__frames.step(1)`);
+  const turnOff = await turnFrom(`window.__draftsman.look({ creases: false })`);
+  const turnOn = await turnFrom(`window.__draftsman.look({ creases: true })`);
   const sameCost = (a, b) => ["frames", "passes", "draws", "pixels", "samples", "triangles"].every((k) => a[k] === b[k]);
   check(turnOn.frames === 7 && sameCost(turnOff, turnOn) && !(await overlay()), `turning the view costs the same with the shading as without, and hides it (${JSON.stringify(turnOn)})`);
   // Edges: lines beside each part, a few draws more, no pass, sample or triangle more.
-  const turnEdges = await turnFrom(`await window.__3dmaker.call("set_look", { edges: true })`);
-  const remembered = await g(`localStorage.getItem("3d-maker:look")`);
-  const turnPlain = await turnFrom(`await window.__3dmaker.call("set_look", { edges: false })`);
-  const partCount = (await g("window.__3dmaker.state().parts")).length;
+  const turnEdges = await turnFrom(`await window.__draftsman.call("set_look", { edges: true })`);
+  const remembered = await g(`localStorage.getItem("draftsman:look")`);
+  const turnPlain = await turnFrom(`await window.__draftsman.call("set_look", { edges: false })`);
+  const partCount = (await g("window.__draftsman.state().parts")).length;
   check(turnEdges.passes === turnOn.passes && turnEdges.samples === turnOn.samples && turnEdges.triangles === turnOn.triangles && turnEdges.draws > turnOn.draws && turnEdges.draws <= turnOn.draws + turnOn.frames * partCount, `edges on adds lines (${turnEdges.draws - turnOn.draws} draws more in ${turnOn.frames} frames) and no pass, sample or triangle`);
-  check(sameCost(turnPlain, turnOn) && /"edges":false/.test(await g(`localStorage.getItem("3d-maker:look")`)) && /"edges":true/.test(remembered), `edges off takes them away again, and the choice is remembered (${remembered})`);
+  check(sameCost(turnPlain, turnOn) && /"edges":false/.test(await g(`localStorage.getItem("draftsman:look")`)) && /"edges":true/.test(remembered), `edges off takes them away again, and the choice is remembered (${remembered})`);
 } catch (err) {
   fail(String(err.message ?? err));
   console.error(err);
