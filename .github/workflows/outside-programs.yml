@@ -1,0 +1,136 @@
+name: Files in Blender and FreeCAD
+
+# Opens the glTF, OBJ, PLY, STL and DXF files Draftsman writes in real
+# programs: the mesh files in Blender, the DXF files in FreeCAD. Both are
+# outside tools here, installed on the runner: they are not dependencies of
+# Draftsman and none of their code is in this repository.
+on:
+  pull_request:
+    paths:
+      - "src/kernel/gltf.js"
+      - "src/kernel/obj.js"
+      - "src/kernel/ply.js"
+      - "src/kernel/mesh.js"
+      - "src/kernel/pieces.js"
+      - "src/kernel/dxf.js"
+      - "src/kernel/svgread.js"
+      - "src/kernel/drawing.js"
+      - "src/kernel/script.js"
+      - "src/kernel/sdf.js"
+      - "test/outside-samples.mjs"
+      - "test/blender-check.py"
+      - "test/freecad-dxf-check.py"
+      - "test/models/*.js"
+      - "test/models/step/simple-cylinder.js"
+      - ".github/workflows/outside-programs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/kernel/gltf.js"
+      - "src/kernel/obj.js"
+      - "src/kernel/ply.js"
+      - "src/kernel/mesh.js"
+      - "src/kernel/dxf.js"
+      - "src/kernel/svgread.js"
+      - "test/outside-samples.mjs"
+      - "test/blender-check.py"
+      - "test/freecad-dxf-check.py"
+      - ".github/workflows/outside-programs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: outside-programs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  blender:
+    name: glTF, OBJ, PLY and STL in Blender
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Write the samples
+        run: node test/outside-samples.mjs outside-samples
+
+      # The snap is Blender's own build.
+      - name: Install Blender
+        run: |
+          sudo snap install blender --classic
+          snap list blender
+
+      - name: Open them in Blender
+        env:
+          SAMPLE_DIR: outside-samples
+        run: |
+          blender --background --factory-startup --python test/blender-check.py < /dev/null 2>&1 | tee blender.log
+          grep -q "^MESH-BLENDER: PASS" blender.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: blender-samples
+          path: |
+            outside-samples/*.glb
+            outside-samples/*.obj
+            outside-samples/*.mtl
+            outside-samples/*.ply
+            outside-samples/*.stl
+            outside-samples/expected.json
+            blender.log
+          retention-days: 14
+
+  freecad:
+    name: DXF in FreeCAD
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Write the samples
+        run: node test/outside-samples.mjs outside-samples
+
+      # Ubuntu 24.04 has no freecad package; the snap is FreeCAD's own build.
+      - name: Install FreeCAD
+        run: |
+          sudo snap install freecad
+          snap list freecad
+
+      - name: Open the DXF files in FreeCAD
+        env:
+          SAMPLE_DIR: outside-samples
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          freecad.cmd test/freecad-dxf-check.py < /dev/null 2>&1 | tee freecad-dxf.log
+          grep -q "^DXF-FREECAD: PASS" freecad-dxf.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dxf-samples
+          path: |
+            outside-samples/*.dxf
+            outside-samples/expected.json
+            freecad-dxf.log
+          retention-days: 14
