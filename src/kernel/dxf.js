@@ -268,7 +268,7 @@ export function outlineSVG(shape, { title = "" } = {}) {
     return `<path d="${d.join("")}${closed ? "Z" : ""}"/>`;
   };
   const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
-  const out = [`<?xml version="1.0" encoding="UTF-8"?>\n<!-- Made with 3D Maker. True size: 1 unit = 1 mm. -->\n<svg xmlns="http://www.w3.org/2000/svg" width="${c(W)}mm" height="${c(H)}mm" viewBox="0 0 ${c(W)} ${c(H)}">\n`];
+  const out = [`<?xml version="1.0" encoding="UTF-8"?>\n<!-- Made with Draftsman. True size: 1 unit = 1 mm. -->\n<svg xmlns="http://www.w3.org/2000/svg" width="${c(W)}mm" height="${c(H)}mm" viewBox="0 0 ${c(W)} ${c(H)}">\n`];
   if (title) out.push(`<title>${esc(title)}</title>\n`);
   out.push(`<g fill="none" stroke="#000" stroke-width="0.1" stroke-linejoin="round">\n`);
   for (const k of circles) out.push(`<circle cx="${c(k.cx - x0)}" cy="${c(y1 - k.cy)}" r="${c(k.r)}"/>\n`);

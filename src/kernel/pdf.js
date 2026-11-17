@@ -109,7 +109,7 @@ export async function sheetPDF(svg, { title = "", subject = "", date = "" } = {}
   const stream = packed && packed.length < raw.length ? packed : raw;
   const W = n(sheet.w * PT), H = n(sheet.h * PT);
   const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  const info = [`/Producer ${infoText("3D Maker")}`, `/Creator ${infoText("3D Maker")}`];
+  const info = [`/Producer ${infoText("Draftsman")}`, `/Creator ${infoText("Draftsman")}`];
   if (title) info.push(`/Title ${infoText(title)}`);
   if (subject) info.push(`/Subject ${infoText(subject)}`);
   if (d) info.push(`/CreationDate (D:${d[1]}${d[2]}${d[3]})`);
