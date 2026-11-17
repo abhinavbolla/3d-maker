@@ -1,16 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- Draftsman's app icon: a solid seen from a corner, on a dark tile.
+  <!-- Draftsman's app icon: a draughtsman's set square on a dark tile.
        The icon set in this folder is made from it with `npx tauri icon src-tauri/icons/icon.svg`. -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#2b3647"/>
       <stop offset="1" stop-color="#141a24"/>
     </linearGradient>
+    <linearGradient id="square" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7aa5f5"/>
+      <stop offset="1" stop-color="#2f6fde"/>
+    </linearGradient>
   </defs>
   <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
-  <g stroke-linejoin="round" stroke-width="28">
-    <path d="M512 520 L742 387 L742 652 L512 785 Z" fill="#2f6fde" stroke="#2f6fde"/>
-    <path d="M512 520 L282 387 L282 652 L512 785 Z" fill="#6d9bf2" stroke="#6d9bf2"/>
-    <path d="M512 520 L742 387 L512 254 L282 387 Z" fill="#f2f5f9" stroke="#f2f5f9"/>
+  <!-- The set square: a right-angled triangle with a triangle cut out of it. -->
+  <path fill="url(#square)" fill-rule="evenodd" stroke="url(#square)" stroke-width="36" stroke-linejoin="round"
+        d="M268 252 L268 772 L788 772 Z M392 452 L392 648 L588 648 Z"/>
+  <!-- Its scale along the upright edge. -->
+  <g stroke="#f2f5f9" stroke-width="14" stroke-linecap="round">
+    <path d="M268 330 h46 M268 400 h28 M268 470 h46 M268 540 h28 M268 610 h46 M268 680 h28"/>
   </g>
 </svg>
