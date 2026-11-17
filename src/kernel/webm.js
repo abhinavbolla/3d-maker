@@ -56,7 +56,7 @@ export function writeWebM({ frames, codec, width, height, fps }) {
   const ms = (us) => Math.round(us / 1000);
   const header = master(0x1a45dfa3, [uint(0x4286, 1), uint(0x42f7, 1), uint(0x42f2, 4), uint(0x42f3, 8), str(0x4282, "webm"), uint(0x4287, 4), uint(0x4285, 2)]);
   const durationMs = (frames.length * 1000) / fps;
-  const info = master(0x1549a966, [uint(0x2ad7b1, 1000000), float(0x4489, durationMs), str(0x4d80, "3D Maker"), str(0x5741, "3D Maker")]);
+  const info = master(0x1549a966, [uint(0x2ad7b1, 1000000), float(0x4489, durationMs), str(0x4d80, "Draftsman"), str(0x5741, "Draftsman")]);
   const tracks = master(0x1654ae6b, [
     master(0xae, [uint(0xd7, 1), uint(0x73c5, 1), uint(0x83, 1), str(0x86, codec === "vp8" ? "V_VP8" : "V_VP9"), uint(0x23e383, Math.round(1e9 / fps)), master(0xe0, [uint(0xb0, width), uint(0xba, height)])]),
   ]);

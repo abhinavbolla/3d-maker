@@ -146,7 +146,7 @@ export function writeMP4({ frames, config, width, height, fps }) {
     o.zeros(6).u16(1); // reserved, data reference 1
     o.zeros(16).u16(width).u16(height);
     o.u32(0x00480000).u32(0x00480000).u32(0).u16(1); // 72 dpi, one frame per sample
-    const name = enc.encode("3D Maker H.264").subarray(0, 31);
+    const name = enc.encode("Draftsman H.264").subarray(0, 31);
     o.u8(name.length).bytes(name).zeros(31 - name.length);
     o.u16(0x0018).u16(0xffff);
     o.bytes(box("avcC", (c) => c.bytes(config)));
