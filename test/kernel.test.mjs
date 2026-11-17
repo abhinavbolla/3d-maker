@@ -12,6 +12,12 @@ import { meshPart, splitPieces } from "../src/kernel/pieces.js";
 import { convexHullPlanes } from "../src/kernel/hull.js";
 import { viewOutline, sectionCut, sectionView, sectionPlane, modelBounds, drawingSVG, titleLines, textWidth, LIMITS } from "../src/kernel/drawing.js";
 import { check3MF } from "./check-3mf.mjs";
+import { readDXF } from "./check-dxf.mjs";
+import { sheetPDF } from "../src/kernel/pdf.js";
+import { sheetDXF, outlineDXF, outlineSVG, fitCircle } from "../src/kernel/dxf.js";
+import { readSheet } from "../src/kernel/svgread.js";
+import { partFeatures, featuresInView } from "../src/kernel/holes.js";
+import { inflateSync } from "node:zlib";
 import { toGLB, lookOf } from "../src/kernel/gltf.js";
 import { toOBJ, objWithMtl, mtlFileName } from "../src/kernel/obj.js";
 import { toPLY } from "../src/kernel/ply.js";
@@ -1287,7 +1293,7 @@ const sheetText = (svg, id) => {
 
 test("drawing: the title block has every field ISO 7200 asks for, and fills only what it was given", () => {
   const block = [drawn("Block", { t: "box", s: [100, 60, 40] }, 4000)];
-  const d = drawingSVG(block, { title: "Block & hole", date: "2026-01-31", info: { number: "3DM-4K7Q2X" } }).svg;
+  const d = drawingSVG(block, { title: "Block & hole", date: "2026-01-31", info: { number: "DFT-4K7Q2X" } }).svg;
   const tb = d.match(/<g id="title-block"[\s\S]*?\n<\/g>/)[0];
   // The eight mandatory fields, each with its cell.
   for (const l of ["Legal owner", "Identification number", "Date of issue", "Sheet", "Title", "Approved by", "Created by", "Document type"]) assert.ok(tb.includes(`>${l}</text>`), `no ${l} field`);
@@ -1295,7 +1301,7 @@ test("drawing: the title block has every field ISO 7200 asks for, and fills only
   assert.equal(sheetText(d, "title").size, 5);
   assert.equal(sheetText(d, "date").s, "2026-01-31");
   assert.equal(sheetText(d, "sheet").s, "1/1");
-  assert.equal(sheetText(d, "number").s, "3DM-4K7Q2X");
+  assert.equal(sheetText(d, "number").s, "DFT-4K7Q2X");
   assert.equal(sheetText(d, "number").size, 5);
   assert.equal(sheetText(d, "document-type").s, "Part drawing");
   assert.equal(sheetText(d, "scale").s, "1:1");
@@ -1309,7 +1315,7 @@ test("drawing: the title block has every field ISO 7200 asks for, and fills only
   // The credit is outside the frame, and in the metadata only as a comment.
   const credit = sheetText(d, "credit");
   assert.ok(credit && credit.x < 20 && !tb.includes("Draftsman"), "the credit is in the title block");
-  assert.match(d, /<dc:identifier>3DM-4K7Q2X<\/dc:identifier>/);
+  assert.match(d, /<dc:identifier>DFT-4K7Q2X<\/dc:identifier>/);
   assert.ok(!/<dc:creator>/.test(d));
   // The projection symbol at its ISO 5456-2 size for 3.5 mm lettering:
   // circles 3.5 and 7 across, a cone 7 long, lines 0.35.
@@ -1427,6 +1433,299 @@ test("drawing: Claude's rotor head draws, with its mast, hub and gearbox cut by 
   // the hub does not fill in; the block above is drawn in the 0.5 group.
   assert.match(d.svg, /<g id="view-top"[^>]*stroke-width="0.25"/);
   assert.equal(d.svg.match(/<text [^>]*id="document-type"[^>]*>([^<]*)</)[1], "Assembly drawing");
+});
+
+// The sheet's marks, read back from its SVG: lines, circles, fills and text.
+const sheetMarks = (svg) => readSheet(svg).marks;
+
+test("drawing: the sheet as PDF draws what the SVG does, at the sheet's size", async () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block & hole (Ø20)", date: "2026-01-31" });
+  const bytes = await sheetPDF(svg, { title: "Block & hole", date: "2026-01-31" });
+  const pdf = Buffer.from(bytes).toString("latin1");
+  assert.match(pdf, /^%PDF-1\.4\n/);
+  assert.match(pdf, /\/MediaBox \[0 0 1190\.551 841\.89\]/, "A3 is 420 x 297 mm, 1190.55 x 841.89 points");
+  assert.match(pdf, /\/BaseFont \/Helvetica \/Encoding \/WinAnsiEncoding/);
+  // Every object is where the cross-reference table says.
+  const xref = Number(pdf.match(/startxref\n(\d+)\n%%EOF\n$/)[1]);
+  const offsets = pdf.slice(xref).match(/^\d{10} 00000 n $/gm).map((l) => Number(l.slice(0, 10)));
+  offsets.forEach((o, i) => assert.equal(pdf.slice(o, o + `${i + 1} 0 obj`.length), `${i + 1} 0 obj`));
+  // The content: one stroke per line and circle of the SVG, one fill per arrowhead, one text per text.
+  const at = pdf.indexOf("stream\n") + 7, len = Number(pdf.match(/\/Length (\d+)/)[1]);
+  const ops = inflateSync(Buffer.from(bytes.subarray(at, at + len))).toString("latin1");
+  const marks = sheetMarks(svg);
+  const count = (k) => marks.filter((m) => m.kind === k).length;
+  assert.equal(ops.match(/ S$/gm).length, count("line") + count("circle"));
+  assert.equal(ops.match(/ f$/gm).length, count("fill") + count("disc"));
+  assert.equal(ops.match(/ Tj ET$/gm).length, count("text"));
+  // The widths and dashes the SVG uses, and the text in the font's own bytes.
+  for (const w of ["0.5 w", "0.25 w", "0.7 w"]) assert.ok(ops.includes(`\n${w}\n`), `no ${w}`);
+  assert.ok(ops.includes("[8 1.5 0.5 1.5] 0 d"), "the cutting line is not long-dash-dot");
+  assert.ok(ops.includes("(Block & hole \\(\\33020\\)) Tj"), "the title is not set in WinAnsi");
+  assert.ok(bytes.length < svg.length / 2, `the PDF is ${bytes.length} bytes, the SVG ${svg.length}`);
+});
+
+test("drawing: the sheet as DXF has its lines and text on named layers, in paper millimetres", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const { svg } = drawingSVG(block, { title: "Block", date: "2026-01-31", hidden: true });
+  const d = readDXF(sheetDXF(svg));
+  assert.deepEqual(d.problems, []);
+  assert.equal(d.version, "AC1009");
+  assert.equal(d.units, 4, "millimetres");
+  for (const l of ["VISIBLE", "HIDDEN", "SECTION", "HATCH", "DIMENSIONS", "FRAME", "TITLE"]) assert.ok(d.byLayer[l] > 0, `nothing on layer ${l}`);
+  assert.ok(d.bounds[0] >= 0 && d.bounds[1] >= 0 && d.bounds[2] <= 420 && d.bounds[3] <= 297, `bounds ${d.bounds}`);
+  // The frame is 390 x 277 mm, 20 mm in from the left and 10 from the bottom (y up).
+  const frame = d.entities.find((e) => e.type === "POLYLINE" && e.layer === "FRAME" && e.closed && Math.abs(e.pts[0] - 20) < 1e-6 && Math.abs(e.pts[1] - 287) < 1e-6);
+  assert.ok(frame, "no closed frame from (20, 287)");
+  const fb = extent(Array.from({ length: frame.pts.length / 2 }, (_, i) => [frame.pts[i * 2], frame.pts[i * 2 + 1]]));
+  assert.deepEqual(fb, [20, 10, 410, 287]);
+  // The section's cut face is closed; hidden edges are dashed by their layer.
+  const cuts = d.entities.filter((e) => e.layer === "SECTION" && e.type === "POLYLINE" && e.closed);
+  assert.ok(cuts.length >= 2, `${cuts.length} closed cut outlines`);
+  assert.equal(d.layers.HIDDEN.ltype, "HIDDEN");
+  assert.ok(d.ltypes.HIDDEN.length === 2 && d.ltypes.HIDDEN[0] > 0 && d.ltypes.HIDDEN[1] < 0);
+  const texts = d.entities.filter((e) => e.type === "TEXT").map((e) => e.text);
+  for (const t of ["100", "60", "40", "Block", "A\\U+2013A", "1:1"]) assert.ok(texts.includes(t), `no text ${t}`);
+  assert.equal(texts.length, sheetMarks(svg).filter((m) => m.kind === "text").length);
+});
+
+test("drawing: an outline at 1:1 has the plate's size, and its holes as true circles", () => {
+  // A 120 x 80 plate, 6 thick, with four 9 mm holes and one 20 mm bore.
+  const holes = [[-45, -25], [45, -25], [-45, 25], [45, 25]].map(([x, y]) => ({ t: "move", v: [x, y, 0], c: { t: "cylinder", r: 4.5, h: 20 } }));
+  const plate = [drawn("Plate", { t: "subtract", a: { t: "box", s: [120, 80, 6] }, b: [...holes, { t: "cylinder", r: 10, h: 20 }] })];
+  const cut = sectionCut(plate, { axis: "z", offset: 0 });
+  const shape = { loops: cut.parts.flatMap((p) => p.loops) };
+  const dxf = outlineDXF(shape);
+  const d = readDXF(dxf.text);
+  assert.deepEqual(d.problems, []);
+  assert.deepEqual(d.counts, { CIRCLE: 5, POLYLINE: 1 });
+  const radii = d.entities.filter((e) => e.type === "CIRCLE").map((e) => e.r).sort((a, b) => a - b);
+  radii.forEach((r, i) => assert.ok(Math.abs(r - [4.5, 4.5, 4.5, 4.5, 10][i]) < 0.005, `radius ${r}`));
+  const outer = d.entities.find((e) => e.type === "POLYLINE");
+  assert.ok(outer.closed && outer.pts.length === 8, "the plate is not one closed four-cornered outline");
+  assert.deepEqual(d.bounds.map((v) => Math.round(v * 1000) / 1000), [-60, -40, 60, 40]);
+  const svg = outlineSVG(shape).text;
+  assert.match(svg, /width="122mm" height="82mm" viewBox="0 0 122 82"/, "the SVG is not at true size (with 1 mm round it)");
+  assert.equal(svg.match(/<circle /g).length, 5);
+  // A loop that is nearly round but is not a circle stays a polyline.
+  assert.equal(fitCircle(Array.from({ length: 64 }, (_, i) => [Math.cos(i / 10) * (10 + (i % 2) * 0.3), Math.sin(i / 10) * 10]).flat()), null);
+});
+
+test("drawing: hidden edges can be drawn dashed, and never over a visible line", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] })];
+  const plain = viewOutline(block, "front");
+  assert.ok(!plain.parts[0].hidden, "hidden edges without being asked");
+  const v = viewOutline(block, "front", { hidden: true });
+  const hid = v.parts[0].hidden.flatMap((L) => Array.from({ length: L.length / 2 }, (_, i) => [L[i * 2], L[i * 2 + 1]]));
+  // From the front, the hole is two vertical lines at x = ±10, the block's height.
+  assert.ok(hid.length >= 4 && hid.every(([x]) => Math.abs(Math.abs(x) - 10) < 0.15), `hidden points off the hole's sides: ${JSON.stringify(hid.filter(([x]) => Math.abs(Math.abs(x) - 10) >= 0.15).slice(0, 3))}`);
+  for (const s of [-1, 1]) {
+    const ys = hid.filter(([x]) => Math.sign(x) === s).map(([, y]) => y);
+    assert.ok(Math.max(...ys) - Math.min(...ys) > 39, `the hidden side at x = ${s * 10} runs ${Math.min(...ys)} to ${Math.max(...ys)}`);
+  }
+  // Each side is one line, not overlapping pieces: dashes laid on dashes
+  // (or restarted on every short piece) would look like a solid line.
+  const sides = v.parts[0].hidden.filter((L) => Math.hypot(L[0] - L[L.length - 2], L[1] - L[L.length - 1]) > 1);
+  assert.equal(sides.length, 2, `the hole's hidden sides come in ${sides.length} pieces`);
+  // On the sheet: narrow and dashed, on their own layer.
+  const { svg } = drawingSVG(block, { hidden: true });
+  assert.match(svg, /<g class="hidden" data-layer="HIDDEN" stroke-width="0\.25" stroke-dasharray="3 0\.75"/);
+});
+
+// Text on a sheet, outside the title block and the frame's border, as
+// rectangles: [x0, y0, x1, y1, text].
+const textBoxes = (svg) =>
+  sheetMarks(svg)
+    .filter((m) => m.kind === "text" && m.layer !== "TITLE" && m.layer !== "FRAME")
+    .map((m) => {
+      const w = textWidth(m.str, m.size), h = m.size * 0.72;
+      const x0 = m.anchor === "middle" ? -w / 2 : m.anchor === "end" ? -w : 0;
+      // Corners along and up from the baseline, turned as the text is.
+      const t = (m.angle * Math.PI) / 180, c = Math.cos(t), s = Math.sin(t);
+      const pts = [[x0, 0], [x0 + w, 0], [x0, -h], [x0 + w, -h]].map(([a, b]) => [m.x + a * c - b * s, m.y + a * s + b * c]);
+      return [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1])), m.str];
+    });
+const overlapping = (boxes) => {
+  const out = [];
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) if (boxes[i][0] < boxes[j][2] - 0.1 && boxes[j][0] < boxes[i][2] - 0.1 && boxes[i][1] < boxes[j][3] - 0.1 && boxes[j][1] < boxes[i][3] - 0.1) out.push(`${boxes[i][4]} / ${boxes[j][4]}`);
+  return out;
+};
+const bracketParts = (budget = 30000) => {
+  const r = runScript(readFileSync(new URL("./models/bracket.js", import.meta.url), "utf8"), {});
+  return r.parts.map((p) => {
+    const m = meshPart(p.node, { budget });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+};
+
+test("drawing: holes and turned parts are found in the script, and checked against the shape", () => {
+  const parts = bracketParts(8000);
+  const found = partFeatures(parts);
+  const of = (part, kind) => found.filter((f) => f.part === part && f.kind === kind).map((f) => Math.round(f.r * 2 * 100) / 100).sort((a, b) => a - b);
+  assert.deepEqual(of("Bracket", "hole"), [6.6, 6.6, 9, 9, 9, 9, 20]);
+  assert.deepEqual(of("Bush", "hole"), [12]);
+  assert.deepEqual(of("Bush", "solid"), [28]);
+  // A hole filled in again is not a hole; a pin buried inside a block is not a turned part.
+  const filled = { t: "union", c: [{ t: "subtract", a: { t: "box", s: [40, 40, 10] }, b: [{ t: "cylinder", r: 5, h: 20 }] }, { t: "cylinder", r: 6, h: 20 }] };
+  const buried = { t: "union", c: [{ t: "box", s: [40, 40, 10] }, { t: "cylinder", r: 3, h: 6 }] };
+  assert.deepEqual(partFeatures([{ name: "F", node: filled }]).map((f) => `${f.kind} ${f.r}`), ["solid 6"]);
+  assert.deepEqual(partFeatures([{ name: "B", node: buried }]), []);
+  // A tapped hole is called out by its thread.
+  const tapped = runScript('part("P", box(30, 30, 10).at(0, 0, 5).cut(hole("M6", 8, { tapped: true }).at(0, 0, 10)));', {}).parts[0];
+  assert.ok(partFeatures([{ name: "P", node: tapped.node }]).some((f) => f.kind === "hole" && f.label === "M6"));
+});
+
+test("drawing: a bore the script does not describe is found by fitting a circle, with its accuracy", () => {
+  // A ring turned from a profile: the script says "revolve", not "a 10 mm hole".
+  const node = { t: "revolve", p: { t: "move2", v: [12.5, 0], c: { t: "rect2", w: 15, h: 6 } } };
+  const ring = [{ ...drawn("Ring", node, 20000), node }];
+  const top = viewOutline(ring, "top");
+  const { circles } = featuresInView(partFeatures(ring), top, ring);
+  const bore = circles.find((c) => c.source === "fitted");
+  assert.ok(bore && bore.kind === "hole" && Math.abs(bore.r - 5) < 0.05 && bore.error < 0.05, `the bore: ${JSON.stringify(bore)}`);
+  assert.ok(circles.some((c) => c.source === "script" && c.kind === "solid" && Math.abs(c.r - 20) < 1e-9), "the ring's outside, from the script");
+});
+
+// Leaders and dimension lines on a sheet, as segments on paper, and how
+// many times a leader crosses a dimension line or another leader.
+const leaderCrossings = (svg) => {
+  const segsOf = (cls) => [...svg.matchAll(new RegExp(`<path class="${cls}" d="([^"]*)"`, "g"))].map((m) => m[1].match(/[\d.]+/g).map(Number));
+  const leaders = segsOf("leader").map((n) => [n[0], n[1], n[2], n[3]]);
+  const lines = segsOf("dim-line").map((n) => [n[0], n[1], n[2], n[3]]);
+  const side = (a, b, c) => Math.sign((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+  const cross = (p, q) => side([p[0], p[1]], [p[2], p[3]], [q[0], q[1]]) * side([p[0], p[1]], [p[2], p[3]], [q[2], q[3]]) < 0 && side([q[0], q[1]], [q[2], q[3]], [p[0], p[1]]) * side([q[0], q[1]], [q[2], q[3]], [p[2], p[3]]) < 0;
+  let n = 0;
+  leaders.forEach((l, i) => {
+    for (const d of lines) if (cross(l, d)) n++;
+    for (const m of leaders.slice(i + 1)) if (cross(l, m)) n++;
+  });
+  return { n, leaders: leaders.length, lines: lines.length };
+};
+
+test("drawing: the bracket's sheet is cut through its bore and sized to be made, with no text on other text", () => {
+  const parts = bracketParts();
+  const d = drawingSVG(parts, { title: "Angle bracket", date: "2026-01-31" });
+  // The section goes through the bore's axis, so the bore shows at its full 20 mm.
+  assert.equal(d.section.axis, "y");
+  assert.equal(d.section.offset, 0);
+  assert.match(d.section.note, /through 2 holes on their axes \(⌀20, ⌀12\)/);
+  const cut = sectionCut(parts, d.section);
+  const walls = cut.parts.find((p) => p.name === "Bracket").loops.flatMap((L) => Array.from({ length: L.length / 2 }, (_, i) => L[i * 2])).filter((u) => u > -6 && u < 16);
+  const bore = Math.max(...walls) - Math.min(...walls);
+  assert.ok(Math.abs(bore - 20) < 0.01, `the bore is ${bore} mm wide in the section`);
+  assert.match(d.svg, /<g id="centre-lines" data-layer="CENTRE"/);
+  const said = (kind) => [...d.svg.matchAll(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`, "g"))].map((m) => m[1]).sort();
+  // Every hole and the boss, once: the bore on the section (it is under the boss on the top view).
+  assert.deepEqual(said("diameter"), ["2× ⌀6.6", "4× ⌀9", "⌀12", "⌀28"]);
+  assert.deepEqual(said("size"), ["10", "10", "26", "⌀20"], "the plate and upright thicknesses, the boss's top and the bore on the section");
+  // From the bracket's left and bottom edges: 45, 65 and 105 across, 15 and 65 up (the
+  // bore is on the cutting line, in the middle); 20, 60 and 50 on the upright.
+  assert.deepEqual(said("position"), ["105", "15", "20", "45", "50", "60", "65", "65"]);
+  assert.equal(d.marks.left_out.length, 0, d.marks.left_out.join("; "));
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+  const c = leaderCrossings(d.svg);
+  assert.ok(c.leaders === 4 && c.lines > 5, JSON.stringify(c));
+  assert.equal(c.n, 0, "a leader crosses a dimension line or another leader");
+  // In the DXF, centre lines are on their own layer, long-dash-dot.
+  const x = readDXF(sheetDXF(d.svg));
+  assert.ok(x.byLayer.CENTRE > 8 && !x.problems.length);
+});
+
+test("drawing: a plate is cut through its holes' axes, and a section given beside a hole moves onto it", () => {
+  // The plate Claude made in the prompt run: 120 x 80 x 10, four 9 mm holes 15 mm in, a 20 mm hole in the middle.
+  const script = 'title("Steel plate"); let prof = rect(120, 80); for (const sx of [-1, 1]) for (const sy of [-1, 1]) prof = prof.cut(circle(4.5).move(sx * 45, sy * 25)); prof = prof.cut(circle(10)); part("Plate", extrude(prof, 10).at(0, 0, 5));';
+  const parts = runScript(script, {}).parts.map((p) => {
+    const m = meshPart(p.node, { budget: 20000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const gaps = (plane) => {
+    // The widths of the gaps between the cut faces, along the cut.
+    const xs = sectionCut(parts, plane).parts[0].loops.map((L) => { const u = Array.from({ length: L.length / 2 }, (_, i) => L[i * 2]); return [Math.min(...u), Math.max(...u)]; }).sort((a, b) => a[0] - b[0]);
+    return xs.slice(1).map((x, i) => Math.round((x[0] - xs[i][1]) * 1000) / 1000);
+  };
+  const d = drawingSVG(parts, { title: "Steel plate", size: "A4" });
+  assert.equal(d.scale, "1:2", "the section was chosen so the sheet keeps 1:2");
+  assert.ok(Math.abs(Math.abs(d.section.offset) - 45) < 1e-9 && d.section.axis === "x", JSON.stringify(d.section));
+  assert.deepEqual(gaps(d.section), [9, 9], "both holes at their full 9 mm");
+  // Given 3 mm beside the 20 mm hole's axis: moved onto it, and said.
+  const moved = drawingSVG(parts, { section: { axis: "x", offset: 3 }, size: "A4" });
+  assert.equal(moved.section.offset, 0);
+  assert.match(moved.section.note, /moved 3 mm onto the axis of the ⌀20 hole, at x = 0 mm/);
+  assert.deepEqual(gaps(moved.section), [20]);
+  assert.equal(leaderCrossings(d.svg).n, 0);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
+test("drawing: a boss plate reads its true sizes, and a chamfer's edge is not taken for a hole", () => {
+  // The part Claude made in the second prompt run: a rounded 100 x 60 x 8 plate, a ⌀24 boss
+  // turned from a profile with a 1 mm chamfer, a ⌀10 bore and two ⌀6.6 holes.
+  const script = 'title("Boss plate"); const L = 100, W = 60, T = 8, D = 24, H = 30; const plate = extrude(rect(L, W, 3), T).at(0, 0, T / 2); const boss = revolve(path([0, T / 2]).line(D / 2, T / 2).line(D / 2, T + H - 1).line(D / 2 - 1, T + H).line(0, T + H).close()); let body = union(plate, boss, 2).common(box(L + 10, W + 10, T + H).at(0, 0, (T + H) / 2)); body = body.cut(cylinder(5, 100).at(0, 0, 20), hole(6.6, T).at(-L / 2 + 15, 0, T), hole(6.6, T).at(L / 2 - 15, 0, T)); part("Plate", body);';
+  const parts = runScript(script, {}).parts.map((p) => {
+    const m = meshPart(p.node, { budget: 30000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: "Boss plate", projection: "third" });
+  const said = (kind) => [...d.svg.matchAll(new RegExp(`data-dimension="${kind}"[^>]*>([^<]*)<`, "g"))].map((m) => m[1]).sort();
+  // The meshes' boxes are a few hundredths proud or short; the sheet reads the surfaces.
+  assert.deepEqual([said("width"), said("depth"), said("height")].flat(), ["100", "60", "38"]);
+  assert.deepEqual(said("diameter"), ["2× ⌀6.6", "⌀10", "⌀24"]);
+  assert.deepEqual(d.marks.fitted, []);
+  assert.equal(leaderCrossings(d.svg).n, 0);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
+test("drawing: a big assembly gets centre lines but no hole sizes, and no text on other text", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
+  const parts = r.parts.map((p) => {
+    const m = meshPart(p.node, { budget: 3000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 } });
+  assert.ok(d.marks.centre_lines > 5, `${d.marks.centre_lines} centre lines`);
+  assert.equal(d.marks.holes.length, 0);
+  assert.match(d.marks.left_out.join(), /an assembly of 47 parts gets centre lines only/);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+});
+
+test("drawing: sheets come in A4 to A0, with the frame and grid to match", () => {
+  const block = [drawn("Block", { t: "subtract", a: { t: "box", s: [100, 60, 40] }, b: [{ t: "cylinder", r: 10, h: 60 }] }, 8000)];
+  const got = {};
+  for (const size of ["A4", "A3", "A2", "A1", "A0"]) {
+    const d = drawingSVG(block, { size });
+    const [, w, h] = d.svg.match(/width="(\d+)mm" height="(\d+)mm"/);
+    const border = d.svg.match(/<rect id="border" x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/).slice(1).map(Number);
+    const label = d.svg.match(/id="sheet-size"[^>]*>([^<]*)</)[1];
+    // Grid numbers along the top: none in a field narrower than 25 mm.
+    got[size] = `${w}x${h} ${border.join(",")} ${label} ${d.scale}`;
+    assert.deepEqual(overlapping(textBoxes(d.svg)), [], size);
+  }
+  assert.deepEqual(got, { A4: "210x297 20,10,180,277 A4 1:2", A3: "420x297 20,10,390,277 A3 1:1", A2: "594x420 20,10,564,400 A2 2:1", A1: "841x594 20,10,811,574 A1 2:1", A0: "1189x841 20,10,1159,821 A0 5:1" });
+  assert.throws(() => drawingSVG(block, { size: "B4" }), /A4, A3, A2, A1, A0/);
+});
+
+test("drawing: a detail view shows a crowded place at a larger scale, marked on its view", () => {
+  const r = runScript(readFileSync(new URL("./models/claude-rotor-head.js", import.meta.url), "utf8"), {});
+  const parts = r.parts.map((p) => {
+    const m = meshPart(p.node, { budget: 3000 });
+    return { name: p.name, node: p.node, ...compile(p.node), positions: m.positions, indices: m.indices };
+  });
+  const d = drawingSVG(parts, { title: r.title, section: { axis: "y", offset: 0 }, detail: true });
+  // A standard scale at least twice the sheet's (1:50): 1:20 or 1:10, whichever has room.
+  assert.ok(d.detail?.view === "top" && ["1:20", "1:10"].includes(d.detail.scale) && d.detail.letter === "B", JSON.stringify(d.detail));
+  const k = 50 / Number(d.detail.scale.slice(2));
+  assert.ok(d.svg.includes(`<g id="detail-B" class="detail" data-view="top" data-scale="${d.detail.scale}">`));
+  assert.ok(d.svg.includes(`>B (${d.detail.scale})<`));
+  // Every detail line lies inside its circle.
+  const g = d.svg.slice(d.svg.indexOf('<g id="detail-B"'), d.svg.indexOf('id="detail-name"'));
+  const circles = [...g.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g)].map((m) => m.slice(1).map(Number));
+  const [cx, cy, R] = circles[1];
+  const pts = [...g.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  assert.ok(pts.length > 500 && pts.every(([x, y]) => Math.hypot(x - cx, y - cy) <= R + 0.02), `${pts.length} points, the furthest ${Math.max(...pts.map(([x, y]) => Math.hypot(x - cx, y - cy))).toFixed(2)} from the middle (radius ${R})`);
+  assert.ok(Math.abs(R / circles[0][2] - k) < 1e-6, `the detail is not ${k} times its circle on the view`);
+  assert.deepEqual(overlapping(textBoxes(d.svg)), []);
+  // At a given place too.
+  const at = drawingSVG(parts, { section: { axis: "y", offset: 0 }, detail: { view: "front", at: [0, 0, 800], radius: 300 } });
+  assert.equal(at.detail?.view, "front");
 });
 
 // ---- glTF, OBJ and PLY ----

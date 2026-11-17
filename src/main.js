@@ -363,8 +363,8 @@ const actions = {
     if (where) say(`Saved ${where.split("/").pop()}`);
   },
   // kind: "stl" (each part its own shell), "solid" (one joined solid), "3mf",
-  // "step", "svg" (a drawing sheet), "png" (a studio picture of the view), "glb",
-  // "obj" or "ply".
+  // "step", "svg", "pdf" or "dxf" (a drawing sheet), "outline" (a section
+  // alone at 1:1, DXF), "png" (a studio picture of the view), "glb", "obj" or "ply".
   async export(kind = "stl") {
     if (!store.state.result?.parts.length) return say("There is nothing to export yet.");
     if (kind === "png") {
@@ -391,13 +391,15 @@ const actions = {
         return say(err.message, 8000);
       }
     }
-    say(kind === "solid" ? "Joining the parts into one solid" : kind === "svg" ? "Making the drawing" : "Exporting", 0);
+    // Drawings: the sheet as SVG, PDF or DXF, or the section alone at 1:1 for cutting.
+    const sheet = { svg: {}, pdf: { format: "pdf" }, dxf: { format: "dxf" }, outline: { format: "dxf", outline: "section" } }[kind];
+    say(kind === "solid" ? "Joining the parts into one solid" : sheet ? "Making the drawing" : "Exporting", 0);
     try {
       const { parts, title } = store.state.result;
-      const drawing = kind === "svg" ? await makeDrawing({ store, kernel }) : null;
+      const drawing = sheet ? await makeDrawing({ store, kernel }, sheet) : null;
       const r = drawing ? drawing.result : kind === "3mf" ? await kernel.export3MF(parts, title) : kind === "step" ? await kernel.exportSTEP(parts, title) : await kernel.exportSTL(parts, { solid: kind === "solid" });
-      const ext = kind === "svg" || kind === "3mf" || kind === "step" ? kind : "stl";
-      const where = await saveBytes(r.bytes, `${fileName()}.${ext}`, ext);
+      const ext = sheet ? r.format : kind === "3mf" || kind === "step" ? kind : "stl";
+      const where = await saveBytes(r.bytes, `${fileName()}${kind === "outline" ? "-outline" : ""}.${ext}`, ext);
       // A drawing whose save was cancelled leaves nothing remembered.
       if (where) drawing?.keep();
       // A drawing also says what went in its title block and how to change it.
