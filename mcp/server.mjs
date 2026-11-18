@@ -11,11 +11,18 @@ import { homedir } from "node:os";
 import { dirname, resolve, extname, basename, join } from "node:path";
 import { REFERENCE } from "./reference.mjs";
 import { DENSITIES } from "../src/app/inspect-tools.js";
+// Started with this flag, this file is a kernel process of the server's own
+// model (kernel-process.mjs runs it), not the server.
+import { KERNEL_FLAG } from "./kernel-process.mjs";
 
 // The materials measure knows a density for, so a name it would refuse cannot be sent.
 const MATERIALS = Object.keys(DENSITIES);
 
-const PORTS = Array.from({ length: 10 }, (_, i) => 7457 + i);
+// DRAFTSMAN_BRIDGE_PORT puts the bridge on one port of its own (0: any free
+// one), outside the ports app windows look on, so a test's server can never
+// reach a window a person has open.
+const OWN_PORT = process.env.DRAFTSMAN_BRIDGE_PORT;
+const PORTS = OWN_PORT ? [Number(OWN_PORT)] : Array.from({ length: 10 }, (_, i) => 7457 + i);
 // Only the app itself may connect: the desktop app, or the dev server in a browser.
 const TAURI_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]);
 const isAppOrigin = (o = "") => TAURI_ORIGINS.has(o) || /^http:\/\/(localhost|127\.0\.0\.1):51[78]\d$/.test(o);
@@ -32,11 +39,21 @@ const APP_ID = argAt > 0 ? process.argv[argAt + 1] : null;
 let app = null; // the app socket tool calls go to
 const pending = new Map();
 let seq = 0;
+// With no window open, the model lives here (mcp/headless.mjs), made on the
+// first call that needs it. An open window finds a new server within about 5 s
+// (src/app/bridge.js), so calls wait for one only in the 8 s after the bridge
+// starts listening, or after a window goes away (it may be reloading); after
+// that they go to this model at once, and still to a window as soon as one
+// connects.
+const WINDOW_WAIT_MS = 8000;
+let headless = null;
+let listeningAt = 0;
+let lostAt = 0;
 
 async function listen() {
   for (const port of PORTS) {
     try {
-      await new Promise((ok, fail) => {
+      const listening = await new Promise((ok, fail) => {
         const wss = new WebSocketServer({ host: "127.0.0.1", port, verifyClient: ({ origin }) => isAppOrigin(origin) });
         wss.once("listening", () => ok(wss));
         wss.once("error", fail);
@@ -51,7 +68,10 @@ async function listen() {
             if (msg?.type === "hello") {
               if (APP_ID && msg.window !== APP_ID) return ws.close(4001, "Not the window that started this Claude run");
               app = ws;
-              return log(`app window ${msg.window ?? "?"} connected on port ${port}`);
+              // The window's own model wins: the server's is dropped, never pushed into it.
+              if (headless) log("the model built without the app is dropped: the window has its own");
+              headless = null;
+              return log(`app window ${msg.window ?? "?"} connected on port ${wss.address().port}`);
             }
             if (ws !== app) return;
             const p = pending.get(msg.id);
@@ -61,12 +81,16 @@ async function listen() {
             msg.error ? p.reject(new Error(msg.error)) : p.resolve(msg.result);
           });
           ws.on("close", () => {
-            if (app === ws) app = null;
+            if (app !== ws) return;
+            app = null;
+            lostAt = Date.now();
           });
         });
       });
-      log(`bridge listening on 127.0.0.1:${port}${APP_ID ? ` for window ${APP_ID}` : ""}`);
-      return port;
+      const at = listening.address().port;
+      log(`bridge listening on 127.0.0.1:${at}${APP_ID ? ` for window ${APP_ID}` : ""}`);
+      listeningAt = Date.now();
+      return at;
     } catch {
       // Port taken (another Claude client runs its own copy); try the next one.
     }
@@ -80,8 +104,24 @@ async function waitForApp(ms) {
   return app;
 }
 
+// A tool that draws, asked with no window open.
+const needsWindow = (method) =>
+  `${method} needs the Draftsman app open, as it draws in the app's window and none is connected: ask the user to open Draftsman, then send the script again with set_model (an app window keeps its own model), or carry on without pictures, since modelling, measure, check_fit and the exports work without the app.`;
+
+async function withoutWindow(method, params) {
+  const { createHeadless, VIEW_ONLY } = await import("./headless.mjs");
+  if (VIEW_ONLY.has(method)) throw new Error(needsWindow(method));
+  // Its kernel processes run this file, bundled (see kernel-process.mjs).
+  headless ??= createHeadless(new URL(import.meta.url), { log });
+  if (headless.refused) throw new Error(`Without the Draftsman app open, models cannot be built here: ${headless.refused} Ask the user to open the app, or to update Node.js.`);
+  if (!headless.has(method)) throw new Error(needsWindow(method));
+  return headless.run(method, params);
+}
+
 async function call(method, params = {}, timeoutMs = CALL_TIMEOUT_MS) {
-  if (!(await waitForApp(8000))) throw new Error(APP_ID ? "The Draftsman window that asked is no longer connected. Ask the user to try again." : "The Draftsman app is not open. Ask the user to start it, then try again.");
+  // A run the app started (--app) only ever drives that window.
+  if (APP_ID && !(await waitForApp(WINDOW_WAIT_MS))) throw new Error("The Draftsman window that asked is no longer connected. Ask the user to try again.");
+  if (!app && !(await waitForApp((lostAt || listeningAt) + WINDOW_WAIT_MS - Date.now()))) return withoutWindow(method, params);
   const id = ++seq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -159,7 +199,8 @@ tool(
   { step: z.string().describe("The step's name, exactly as in set_plan") },
   async (a) => {
     const { png, ...rest } = await call("finish_step", a);
-    return { content: [{ type: "text", text: JSON.stringify(rest, null, 1) }, { type: "image", data: png, mimeType: "image/png" }] };
+    // No picture when no app window is open.
+    return { content: [{ type: "text", text: JSON.stringify(rest, null, 1) }, png ? { type: "image", data: png, mimeType: "image/png" } : { type: "text", text: "No picture: the Draftsman app is not open." }] };
   },
 );
 
@@ -509,6 +550,8 @@ tool(
   },
 );
 
-await listen();
-await server.connect(new StdioServerTransport());
-log("ready");
+if (!process.argv.includes(KERNEL_FLAG)) {
+  await listen();
+  await server.connect(new StdioServerTransport());
+  log("ready");
+}

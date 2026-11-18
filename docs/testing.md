@@ -6,6 +6,7 @@
 npm test                                  # kernel, window routing, plan tools (needs Chrome); CI runs this
 npm run licenses                          # every npm package carries an accepted license; CI runs this
 node test/tools.test.mjs [--list]         # the MCP tool list follows its rules and stays within its size budget (in npm test)
+node test/headless.test.mjs [server.mjs]  # the MCP server with no window: builds, measures and exports itself; drawing tools say they need the app; scripts that try to read, write, run commands or connect get nothing (in npm test)
 node test/check-stl.mjs model.stl         # checks an STL is well formed and closed
 node test/check-3mf.mjs model.3mf         # checks a 3MF: zip, names, colours, every part closed
 node test/check-step.mjs model.step       # checks a STEP file: entities, assembly, closed solids, geometry, volumes
@@ -26,7 +27,7 @@ node test/kernel.test.mjs drawing         # only the kernel tests with "drawing"
 cd src-tauri && cargo test                # the desktop app's Rust side
 ```
 
-`npm test` checks the kernel's volumes and sizes against exact answers, drawings by measuring their views and sections, window routing over the bridge, the tool list, and the app's commands in headless Chrome.
+`npm test` checks the kernel's volumes and sizes against exact answers, drawings by measuring their views and sections, window routing over the bridge, the MCP server's own model with no window (its numbers against the kernel's, its STL and STEP read back), the tool list, and the app's commands in headless Chrome.
 
 ### The tool list
 
