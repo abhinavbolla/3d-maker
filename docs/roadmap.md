@@ -137,7 +137,7 @@ What is left:
 
 Changes to what Claude makes are checked against the [benchmarks](benchmarks.md): eight complex moving objects scored by a judge, and CADPrompt scored against its ground-truth meshes. A change that claims to improve the look or the shapes should move those numbers.
 
-The benchmarks last ran on 10 November 2026: 6.4 out of 10 on the eight objects, and 20 of CADPrompt's 200 parts. The mesher, the look and what Claude is told have all changed since, so the next run is due now, and after it all 200 CADPrompt parts.
+The eight objects last ran on 18 November 2026: 5.9 out of 10, against 6.3 for the 10 November models drawn and judged the same way. Each object was built once, so that is a sign and not a proof, but the models have not improved while the exports, drawings and films were added. The judge's repeated complaints are ragged thin blades and sails, moving parts that are hidden or could not work, and bodies that are still tubes and slabs. CADPrompt last ran on 10 November, on 20 of its 200 parts; all 200 are still to run.
 
 Not measured yet:
 
