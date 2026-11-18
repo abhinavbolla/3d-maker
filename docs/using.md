@@ -55,22 +55,26 @@ To run it from the source instead, see the [README](../README.md#run-it).
 
 ## Getting it out
 
-The Export menu saves:
+The Export menu asks what you want the model for, and then, where there is a choice, which file. **3D print**, **Drawing**, **Floor plan** and **CAD and 3D apps** open their formats in place (the arrow at the top goes back); **Picture**, **Video** and **Web page** save at once. The keys work too: the up and down arrows move, Enter or the right arrow opens, the left arrow or Escape goes back a step, and Escape shuts the menu. ⌘E (Ctrl+E) saves an STL without opening the menu, and Claude can make any of these files when you ask.
 
+- **3D print**
+  - **STL**: each part its own closed shell.
+  - **STL, one solid**: all parts joined into one solid, to print in one piece.
+  - **3MF**: one named, coloured object per part, for slicers and other 3D apps.
+- **Drawing**: an A3 sheet with the views, a section and the sizes.
+  - **PDF**: the sheet at its real size, to print or send.
+  - **SVG**: the same sheet, which browsers, Inkscape and Illustrator open and print.
+  - **DXF**: the same sheet for 2D CAD programs, on layers: VISIBLE, HIDDEN, CENTRE, SECTION, HATCH, DIMENSIONS, DETAIL, FRAME and TITLE.
+  - **Outline, DXF**: one section alone at true size (1:1, in mm, no sheet), for a laser or water-jet cutter.
+- **Floor plan**, only when the model is a building: an A3 sheet at 1:50 or 1:100 with the walls cut 1200 mm above the floor and filled dark, windows in their openings, doors open with their swing, each room's name, area and inside sizes, dimension chains outside every wall (to each opening, and overall), the roof's edge dashed, a north arrow, a scale bar and the same title block as the drawing. As **PDF**, **SVG**, or **DXF** for 2D CAD on layers WALLS, OPENINGS, DIMENSIONS, TEXT, ROOF, FRAME and TITLE.
+- **CAD and 3D apps**
+  - **STEP**: solids for CAD programs such as FreeCAD or Fusion, one named, coloured part each, in an assembly. See below for which parts come out exact.
+  - **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
+  - **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
+  - **PLY**: one mesh, each vertex coloured with its part's colour, in millimetres with Z up, like the STL. The part names are in comment lines in its header.
 - **Picture**: the view as a studio shot on a light backdrop, as a PNG.
-- **3MF**: one named, coloured object per part, for other 3D apps and slicers.
-- **STL**: each part its own closed shell, or all parts joined into one solid.
-- **STEP**: solids for CAD programs such as FreeCAD or Fusion, one named, coloured part each, in an assembly. See below for which parts come out exact.
-- **Drawing**: an A3 sheet as an SVG, which browsers, Inkscape and Illustrator open and print.
-- **Drawing, PDF**: the same sheet as a PDF at its real size, to print or send.
-- **Drawing, DXF**: the same sheet as a DXF for 2D CAD programs, on layers: VISIBLE, HIDDEN, CENTRE, SECTION, HATCH, DIMENSIONS, DETAIL, FRAME and TITLE.
-- **Outline, DXF**: one section alone at true size (1:1, in mm, no sheet), for a laser or water-jet cutter.
-- **Floor plan**: for a building, an A3 sheet as an SVG at 1:50 or 1:100: the walls cut 1200 mm above the floor and filled dark, windows in their openings, doors open with their swing, each room's name, area and inside sizes, dimension chains outside every wall (to each opening, and overall), the roof's edge dashed, a north arrow, a scale bar and the same title block as the drawing. **Floor plan, PDF** and **Floor plan, DXF** give the same sheet to print or for 2D CAD, the DXF on layers WALLS, OPENINGS, DIMENSIONS, TEXT, ROOF, FRAME and TITLE. These appear only when the model is a building.
-- **glTF**: a .glb file for Blender, game engines and web viewers. Each part is a named node with its colour and material (metal, paint, plastic, rubber or glass), and the model's motion is an animation that loops, so a mechanism plays there as it does here. glTF is in metres with Y up, so the file is too; apps that read it put the model the right way up and the right size.
+- **Video**: one turn round the model from where you are looking, with its motion playing, at 1920 x 1080 and 30 frames a second, as an MP4. A model whose motion repeats every few seconds gets a whole number of its loops, so the video plays round without a jump.
 - **Web page**: one .html file to send to someone with nothing installed. It opens in any browser, from the file, with no network: drag to turn the model, scroll or pinch to zoom, right-drag or two fingers to move it, double-click to start again. It shows each part in its colour and material, the model's title and overall size, and its motion playing, on a light or dark background as the computer is set. The meshes are packed small (positions to within 1/65535 of the model's size), so the file is a little over half the size of the glTF.
-- **OBJ**: one object per part, with normals, in millimetres with Y up, as most apps expect an OBJ. Its colours and materials go in an MTL file of the same name beside it; keep the two together.
-- **PLY**: one mesh, each vertex coloured with its part's colour, in millimetres with Z up, like the STL. The part names are in comment lines in its header.
-- **Video (turntable)**: one turn round the model from where you are looking, with its motion playing, at 1920 x 1080 and 30 frames a second. A model whose motion repeats every few seconds gets a whole number of its loops, so the video plays round without a jump.
 
 Motion goes only into the glTF file, the web page and the video; the other files hold the parts where the script puts them.
 

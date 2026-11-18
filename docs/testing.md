@@ -22,6 +22,7 @@ node test/meshfile-run.mjs model.js [dir]  # exports a script as GLB, OBJ and PL
 node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
 node test/drawing-run.mjs model.js out.pdf "" "" '{"format":"pdf"}'  # the same as PDF (or DXF)
 node test/check-dxf.mjs file.dxf [look.svg]  # reads a DXF on its own, checks it, draws what it holds
+node test/export-menu-run.mjs             # pictures of the Export menu shut, open and one step in, wide and narrow, light and dark, in runs/export-menu
 node test/example-pictures.mjs            # draws the examples' small pictures again (src/examples/*.webp)
 node test/video-run.mjs model.js out.mp4 [shots.json]  # loads a script and records a video (a turntable by default)
 HARNESS_GL=metal node test/video-run.mjs ...  # the same on the Mac's GPU, for full-size videos

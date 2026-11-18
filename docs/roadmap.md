@@ -130,7 +130,7 @@ What is left:
 4. **A first release**, and the plugin and the other clients tried for real. The Claude Code plugin has not been installed from the marketplace yet, and the setup written for Claude Desktop, Cursor and VS Code has not been tried.
 5. **Building with no window open.** Claude Code makes a model and writes its files without the app running.
 6. **Trying it in the browser** in one click, with the examples, sliders and exports working without Claude.
-7. **A shorter Export menu.** It has grown to 13 entries, 16 for a building.
+7. **A shorter Export menu.** Done: it opens on six choices (seven for a building) instead of 14 (17): 3D print, Drawing, Floor plan, and CAD and 3D apps open their formats in place, and Picture, Video and Web page save at once, with the arrow keys, Enter and Escape working throughout. Left: it has been tried in Chrome only, not yet in the desktop window or with a screen reader.
 8. **Starter issues** taken from this page, for people who want to help.
 
 ## How we measure progress

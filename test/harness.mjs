@@ -67,6 +67,35 @@ export async function startHarness({ port = 5178 } = {}) {
       if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
       return r.result.value;
     };
+    // As a person would: a click in the middle of an element, which must be
+    // on screen and on top there; a key press; a picture of the window; and
+    // the window's size and light or dark scheme.
+    evaluate.click = async (selector) => {
+      const at = await evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return "no element";
+        const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+        if (!r.width || !r.height) return "not shown";
+        if (r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) return "off the window";
+        return el.contains(document.elementFromPoint(x, y)) ? [x, y] : "covered";
+      })()`);
+      if (!Array.isArray(at)) throw new Error(`Cannot click ${selector}: ${at}`);
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x: at[0], y: at[1], button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 }, sessionId);
+    };
+    const KEYS = { Enter: [13, "\r"], Escape: [27], Tab: [9], ArrowDown: [40], ArrowUp: [38], ArrowLeft: [37], ArrowRight: [39], Home: [36], End: [35] };
+    evaluate.key = async (key) => {
+      const [code, text] = KEYS[key];
+      await send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code: key, windowsVirtualKeyCode: code, text }, sessionId);
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: code }, sessionId);
+    };
+    // Makes this the window in front, so Chrome does not slow its timers
+    // as it does for a tab behind others (a long film needs that).
+    evaluate.front = () => send("Page.bringToFront", {}, sessionId);
+    evaluate.screenshot = async () => Buffer.from((await send("Page.captureScreenshot", { format: "png" }, sessionId)).data, "base64");
+    evaluate.emulate = async ({ width = 1280, height = 800, dark = false } = {}) => {
+      await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale ?? 1, mobile: false }, sessionId);
+      await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
+    };
     for (let i = 0; i < 200; i++) {
       if (await evaluate("Boolean(window.__draftsman)").catch(() => false)) return evaluate;
       await sleep(100);
