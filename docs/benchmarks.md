@@ -19,6 +19,40 @@ node test/render-run.mjs runs/x/model.js runs/x "Part A,Part B"   # pictures and
   - **Two scores:** "as built" starts the alignment from the model's own orientation, as the paper does. "Any turn" also tries the other right-angle turns.
   - **Caveats:** the paper ships no scoring code, so this is our reading of it. The paper's best is 0.127 point-cloud distance and 0.944 IoGT (GPT-4 with CADCodeVerify, all 200 parts); a 20-part subset is not directly comparable.
 
+## Rerun after the exports, drawings, films and faster mesher, 18 November 2026 (commit 8a1b6ee)
+
+Only the eight objects were run. Nothing since 10 November was aimed at what Claude builds, so this run asks whether the models held up while everything else changed.
+
+**How it was compared:** the 10 November models were drawn again by today's app and scored again by today's judge, so both columns come from the same pictures and the same judge. Scored that way the old models get 6.3; on the day they got 6.4, so the judge and the pictures have hardly moved.
+
+| Object | Overall, 10 Nov models | Overall, today | Form, 10 Nov models | Form, today | Mechanism, 10 Nov models | Mechanism, today | Time (s), today |
+|---|---|---|---|---|---|---|---|
+| helicopter | 5.8 | 5.3 | 5.7 | 4.7 | 6.0 | 5.3 | 2143 |
+| drone | 6.0 | 5.7 | 5.0 | 5.0 | 5.7 | 4.3 | 1269 |
+| robot arm | 7.1 | 6.3 | 6.7 | 5.7 | 7.0 | 6.7 | 1266 |
+| race car | 6.7 | 6.5 | 7.0 | 6.3 | 5.7 | 6.0 | 2611 |
+| watch | 6.3 | 5.7 | 5.0 | 5.0 | 6.0 | 4.0 | 1185 |
+| yacht | 6.1 | 6.6 | 4.3 | 6.0 | 6.0 | 5.7 | 2497 |
+| office chair | 6.4 | 6.1 | 5.3 | 4.0 | 6.0 | 6.0 | 1648 |
+| engine | 5.7 | 5.3 | 4.3 | 5.0 | 5.7 | 4.3 | 710 |
+| **mean** | **6.3** | **5.9** | **5.4** | **5.2** | **6.0** | **5.3** | |
+
+**Results:**
+- Today's models score 5.9 against 6.3: seven of the eight are lower, by 0.2 to 0.8, and the yacht is higher by 0.5.
+- Mechanism fell most, from 6.0 to 5.3, then detail, from 5.9 to 5.4. Recognisability (8.0 to 7.8) and proportions (6.0 both) held.
+- Every run finished its plan, every model has no overlaps, and seven of eight STL files are closed. The yacht's is not, as on 10 November.
+
+**How far to trust it:** each object was built once on each date, and two builds of the same prompt differ, so a gap of 0.4 over eight objects is a sign and not a proof. Three looks at one model differ by 0.2 to 1.0. What it does show is that the models have not improved since 10 November.
+
+**What the judge named, that we can fix:**
+- Thin blades and sails have sawtooth edges in the pictures: the drone's propellers, the yacht's sails. The 10 November drone shows the same when drawn again, so this is the mesher, not the model.
+- Moving parts that cannot be seen or could not work: the engine's crank and piston are shut inside a closed crankcase, and the watch's hands sit on two pivots.
+- Bodies that are still tubes and slabs: the helicopter's cabin, the chair's back and seat, the car's body.
+
+**Costs and side effects:**
+- Times are about double. Two runs shared a Mac whose load average reached 60 from other work, so they say nothing about the app.
+- What changed between the two dates, any of which could move the score: the tool list grew from 11 to 28 tools, the reference grew by a quarter (25 to 32 thousand characters), and Claude Code itself was updated. This run does not say which.
+
 ## Rounded bodies and flat views, 10 November 2026 (commit d78c876)
 
 **What changed:**
