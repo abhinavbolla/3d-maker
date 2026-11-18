@@ -135,6 +135,10 @@ Notable changes to Draftsman. The format follows
 
 ### Changed
 
+- A shorter Export menu. It opens on what the model is for (3D print, Drawing, Floor plan for a
+  building, CAD and 3D apps) and offers the file formats one step in, in place; Picture, Video and
+  Web page save at once. Six choices instead of 14 entries, seven instead of 17 for a building,
+  with every export still there. The arrow keys, Enter and Escape move through it.
 - The project is now called Draftsman; it was formerly 3D Maker. The MCP server and its tools are
   named `draftsman`, formerly `3d-maker`, so re-add the server if you registered it yourself
   (see [docs/using.md](docs/using.md)). A model autosaved under the old name still opens.

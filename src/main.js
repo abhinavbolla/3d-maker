@@ -447,11 +447,13 @@ const actions = {
 };
 // Export > Video (turntable): one turn round the model, saved as MP4 (or
 // WebM where the browser cannot encode H.264, which it then says).
+// The app test films small (see window.__draftsman.filmSize below).
+let testFilmSize;
 async function exportVideo() {
   if (director.isRecording()) return;
   let film;
   try {
-    film = await director.turntable();
+    film = await director.turntable(testFilmSize);
   } catch (err) {
     return say(/cancelled/.test(err.message) ? "Recording cancelled. Nothing was saved." : err.message, 8000);
   }
@@ -460,30 +462,55 @@ async function exportVideo() {
 }
 document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("click", () => actions[b.dataset.action]().catch((err) => say(err.message, 8000))));
 
-// Export menu: a picture, STL, STL as one solid, 3MF, or a drawing.
+// Export menu: what people want (3D print, a drawing, a floor plan, CAD and
+// 3D apps), each opening its formats in place, and a picture, a video and a
+// web page at once.
 const exportMenu = $("export-menu");
+const levels = exportMenu.querySelectorAll(".level");
+// Shows one level of the menu (top, or a group's formats) and focuses `focus`
+// in it, or its first item.
+const showLevel = (name, focus) => {
+  levels.forEach((l) => (l.hidden = l.dataset.level !== name));
+  const level = exportMenu.querySelector(`[data-level="${name}"]`);
+  (focus ?? level.querySelector("[data-export]") ?? level.querySelector("button:not([hidden])")).focus();
+};
 const showExportMenu = (open) => {
   exportMenu.hidden = !open;
   // Floor plans only for a model with a building in it.
-  exportMenu.querySelectorAll('[data-export^="plan"]').forEach((b) => (b.hidden = !store.state.result?.building));
+  exportMenu.querySelector('[data-group="plan"]').hidden = !store.state.result?.building;
   $("export-button").setAttribute("aria-expanded", String(open));
-  if (open) exportMenu.querySelector("button").focus();
+  if (open) showLevel("top", exportMenu.querySelector("[data-level=top] button:not([hidden])"));
 };
+const backToTop = () => showLevel("top", exportMenu.querySelector(`[data-group="${exportMenu.querySelector(".level:not([hidden])").dataset.level}"]`));
 $("export-button").addEventListener("click", () => showExportMenu(exportMenu.hidden));
+exportMenu.querySelectorAll("[data-group]").forEach((b) => b.addEventListener("click", () => showLevel(b.dataset.group)));
+exportMenu.querySelectorAll(".back").forEach((b) => b.addEventListener("click", backToTop));
 exportMenu.querySelectorAll("[data-export]").forEach((b) =>
   b.addEventListener("click", () => {
     showExportMenu(false);
     actions.export(b.dataset.export);
   }),
 );
+// The pointer moves the highlight, so the keys carry on from where it is.
+exportMenu.addEventListener("pointermove", (e) => {
+  const b = e.target.closest("button");
+  if (b && b !== document.activeElement) b.focus({ preventScroll: true });
+});
 document.addEventListener("pointerdown", (e) => {
   if (!exportMenu.hidden && !e.target.closest(".menu")) showExportMenu(false);
 });
 exportMenu.addEventListener("keydown", (e) => {
-  const items = [...exportMenu.querySelectorAll("button:not([hidden])")];
+  const level = exportMenu.querySelector(".level:not([hidden])");
+  const top = level.dataset.level === "top";
+  const items = [...level.querySelectorAll("button:not([hidden])")];
   const at = items.indexOf(document.activeElement);
-  if (e.key === "Escape") e.stopPropagation(), showExportMenu(false), $("export-button").focus();
-  else if (e.key === "ArrowDown" || e.key === "ArrowUp") e.preventDefault(), items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+  const step = { ArrowDown: 1, ArrowUp: items.length - 1 }[e.key];
+  if (step) e.preventDefault(), items[(Math.max(at, 0) + (at < 0 && step === 1 ? 0 : step)) % items.length].focus();
+  else if (e.key === "Home" || e.key === "End") e.preventDefault(), items.at(e.key === "Home" ? 0 : -1).focus();
+  else if (e.key === "ArrowRight" && document.activeElement.dataset.group) e.preventDefault(), document.activeElement.click();
+  else if ((e.key === "ArrowLeft" || e.key === "Escape") && !top) e.preventDefault(), e.stopPropagation(), backToTop();
+  else if (e.key === "Escape") e.stopPropagation(), showExportMenu(false), $("export-button").focus();
+  else if (e.key === "Tab") showExportMenu(false);
 });
 
 addEventListener("keydown", (e) => {
@@ -537,6 +564,7 @@ if (import.meta.env.DEV) {
     partMatrix: (name, t) => viewport.partsAt(t).get(name)?.matrix.elements,
     views: () => store.state.doc.views ?? {},
     exportVideo: () => exportVideo(),
+    filmSize: (size) => (testFilmSize = size),
     history: () => ({ undo: store.state.past.length, redo: store.state.future.length }),
     reply: () => ({ shown: !$("reply").hidden, prompt: $("reply-prompt").textContent, text: $("reply-text").textContent, receipt: lastReceipt }),
   };

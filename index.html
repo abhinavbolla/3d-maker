@@ -20,24 +20,44 @@
         <button data-action="save" title="Save (⌘S)">Save</button>
         <div class="menu">
           <button id="export-button" type="button" title="Export a picture, a drawing or a file for other apps (⌘E exports an STL)" aria-haspopup="menu" aria-expanded="false">Export</button>
-          <div id="export-menu" role="menu" hidden>
-            <button type="button" role="menuitem" data-export="png"><span>Picture</span><small>This view as a studio shot, PNG</small></button>
-            <button type="button" role="menuitem" data-export="stl"><span>STL</span><small>Each part a closed shell</small></button>
-            <button type="button" role="menuitem" data-export="solid"><span>STL, one solid</span><small>All parts joined, to print in one piece</small></button>
-            <button type="button" role="menuitem" data-export="3mf"><span>3MF</span><small>Named, coloured parts</small></button>
-            <button type="button" role="menuitem" data-export="step"><span>STEP</span><small>Solids for other CAD programs</small></button>
-            <button type="button" role="menuitem" data-export="svg"><span>Drawing</span><small>Three views, a section and sizes on an A3 sheet, SVG</small></button>
-            <button type="button" role="menuitem" data-export="pdf"><span>Drawing, PDF</span><small>The same sheet, to print or send</small></button>
-            <button type="button" role="menuitem" data-export="dxf"><span>Drawing, DXF</span><small>The same sheet, for 2D CAD</small></button>
-            <button type="button" role="menuitem" data-export="outline"><span>Outline, DXF</span><small>A section at true size, for a laser cutter</small></button>
-            <button type="button" role="menuitem" data-export="plan"><span>Floor plan</span><small>A building's plan with rooms, areas and sizes, SVG</small></button>
-            <button type="button" role="menuitem" data-export="plan-pdf"><span>Floor plan, PDF</span><small>The same plan, to print or send</small></button>
-            <button type="button" role="menuitem" data-export="plan-dxf"><span>Floor plan, DXF</span><small>The same plan, for 2D CAD</small></button>
-            <button type="button" role="menuitem" data-export="glb"><span>glTF</span><small>Parts, materials and motion, for Blender and the web</small></button>
-            <button type="button" role="menuitem" data-export="html"><span>Web page</span><small>One file to turn in any browser, nothing to install</small></button>
-            <button type="button" role="menuitem" data-export="obj"><span>OBJ</span><small>One object per part, with an MTL of its colours</small></button>
-            <button type="button" role="menuitem" data-export="ply"><span>PLY</span><small>One mesh, coloured by part</small></button>
-            <button type="button" role="menuitem" data-export="video"><span>Video (turntable)</span><small>One turn round the model, with its motion, MP4</small></button>
+          <!-- What people want first; the file format one step in, in place. -->
+          <div id="export-menu" role="menu" aria-label="Export" hidden>
+            <div class="level" data-level="top">
+              <button type="button" role="menuitem" data-group="print" aria-haspopup="true"><span>3D print</span><small>STL or 3MF</small></button>
+              <button type="button" role="menuitem" data-group="drawing" aria-haspopup="true"><span>Drawing</span><small>Views, a section and sizes on a sheet</small></button>
+              <button type="button" role="menuitem" data-group="plan" aria-haspopup="true"><span>Floor plan</span><small>Rooms, areas and sizes on a sheet</small></button>
+              <button type="button" role="menuitem" data-group="apps" aria-haspopup="true"><span>CAD and 3D apps</span><small>STEP, glTF, OBJ or PLY</small></button>
+              <div class="rule" role="separator"></div>
+              <button type="button" role="menuitem" data-export="png"><span>Picture</span><small>This view as a studio shot, PNG</small></button>
+              <button type="button" role="menuitem" data-export="video"><span>Video</span><small>One turn round the model, MP4</small></button>
+              <button type="button" role="menuitem" data-export="html"><span>Web page</span><small>One file to turn in any browser</small></button>
+            </div>
+            <div class="level" data-level="print" role="group" aria-label="3D print" hidden>
+              <button type="button" role="menuitem" class="back"><span>3D print</span></button>
+              <button type="button" role="menuitem" data-export="stl"><span>STL</span><small>Each part a closed shell</small></button>
+              <button type="button" role="menuitem" data-export="solid"><span>STL, one solid</span><small>All parts joined, to print in one piece</small></button>
+              <button type="button" role="menuitem" data-export="3mf"><span>3MF</span><small>Named, coloured parts, for slicers</small></button>
+            </div>
+            <div class="level" data-level="drawing" role="group" aria-label="Drawing" hidden>
+              <button type="button" role="menuitem" class="back"><span>Drawing</span></button>
+              <button type="button" role="menuitem" data-export="pdf"><span>PDF</span><small>The A3 sheet, to print or send</small></button>
+              <button type="button" role="menuitem" data-export="svg"><span>SVG</span><small>The same sheet, to open in a browser</small></button>
+              <button type="button" role="menuitem" data-export="dxf"><span>DXF</span><small>The same sheet, for 2D CAD</small></button>
+              <button type="button" role="menuitem" data-export="outline"><span>Outline, DXF</span><small>A section at true size, for a laser cutter</small></button>
+            </div>
+            <div class="level" data-level="plan" role="group" aria-label="Floor plan" hidden>
+              <button type="button" role="menuitem" class="back"><span>Floor plan</span></button>
+              <button type="button" role="menuitem" data-export="plan-pdf"><span>PDF</span><small>The plan, to print or send</small></button>
+              <button type="button" role="menuitem" data-export="plan"><span>SVG</span><small>The same plan, to open in a browser</small></button>
+              <button type="button" role="menuitem" data-export="plan-dxf"><span>DXF</span><small>The same plan, for 2D CAD</small></button>
+            </div>
+            <div class="level" data-level="apps" role="group" aria-label="CAD and 3D apps" hidden>
+              <button type="button" role="menuitem" class="back"><span>CAD and 3D apps</span></button>
+              <button type="button" role="menuitem" data-export="step"><span>STEP</span><small>Solids for FreeCAD, Fusion and other CAD</small></button>
+              <button type="button" role="menuitem" data-export="glb"><span>glTF</span><small>Parts, materials and motion, for Blender</small></button>
+              <button type="button" role="menuitem" data-export="obj"><span>OBJ</span><small>One object per part, with an MTL</small></button>
+              <button type="button" role="menuitem" data-export="ply"><span>PLY</span><small>One mesh, coloured by part</small></button>
+            </div>
           </div>
         </div>
       </nav>

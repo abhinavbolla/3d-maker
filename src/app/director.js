@@ -144,14 +144,15 @@ export function createDirector({ store, viewport, kernel, onRecording = () => {}
     // the view looks now, with the motion playing. A model whose motion
     // repeats every few seconds gets a whole number of its loops, so the
     // film plays round seamlessly too.
-    async turntable() {
+    // size: { width, height, fps } for the app test only; a person's film is 1920 x 1080 at 30.
+    async turntable(size = {}) {
       const live = viewport.liveCamera();
       const off = live.position.clone().sub(live.target);
       const el = Math.max(5, Math.min(45, (Math.atan2(off.z, Math.hypot(off.x, off.y)) * 180) / Math.PI));
       const az = (Math.atan2(off.x, -off.y) * 180) / Math.PI;
       const loop = viewport.hasMotion() ? store.state.result?.motion?.loop : 0;
       const seconds = loop > 0 && loop <= 12 ? loop * Math.max(1, Math.round(10 / loop)) : 10;
-      const result = await makeFilm({ shots: [{ seconds, move: "turntable", camera: { azimuth: az, elevation: el } }] });
+      const result = await makeFilm({ ...size, shots: [{ seconds, move: "turntable", camera: { azimuth: az, elevation: el } }] });
       return { ...result, name: title(), label: LABELS[result.codec] };
     },
     commands: {

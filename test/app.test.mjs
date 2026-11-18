@@ -1,6 +1,6 @@
 // The app's commands in a real app window (headless Chrome), without Claude:
 // plans, step checks, appending code, ghosted screenshots, exports, the run receipt.
-// Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179)
+// Usage: node test/app.test.mjs   (needs Google Chrome; uses port 5179, or TEST_PORT)
 import { startHarness, checks, STEPPED_FRAMES, GL_COUNTER, sleep } from "./harness.mjs";
 import { writeFileSync, rmSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -154,15 +154,120 @@ try {
     for (const view of [wide, phone]) for (const k of ["first", "right", "left"]) check(placed(view[k]), `at ${view.size.join("x")}, ${k === "first" ? "the first view" : `after a drag ${k}`} keeps clear of the title and hint, near the middle (${describe(view[k])})`);
     check(!v.requests.length && !v.errors.length, `and nothing is fetched and nothing goes wrong (${[...v.requests, ...v.errors].slice(0, 3).join("; ") || "none"})`);
   }
-  // The same from the Export menu: each saves its file (an OBJ also its MTL).
-  await w(`(() => { window.__saved = []; HTMLAnchorElement.prototype.click = function () { window.__saved.push(this.download); }; return true; })()`);
-  for (const kind of ["glb", "html", "obj", "ply"]) {
-    await w(`document.querySelector('#export-menu [data-export="${kind}"]').click(), true`);
-    for (let i = 0; i < 100 && !/^Exported/.test(await w('document.getElementById("status").textContent')); i++) await sleep(100);
-    await w(`document.getElementById("status").textContent = "", true`);
-  }
-  const saved = await w("window.__saved");
-  check(saved.join(", ") === "model.glb, model.html, model.obj, model.mtl, model.ply", `the Export menu saves glTF, the HTML file, OBJ with its MTL, and PLY (${saved.join(", ")})`);
+  // Every export from the Export menu, as a person uses it: a click on
+  // Export, on what they want, on a format (or the same with the keys), and
+  // each file that comes out read back. Saving keeps the file's bytes.
+  // Saving keeps the file's bytes, for the test to read back.
+  const menuTools = async (win) => {
+    await win(`(() => { window.__saved = []; HTMLAnchorElement.prototype.click = function () { const name = this.download; window.__saved.push(fetch(this.href).then((r) => r.arrayBuffer()).then((b) => { const u = new Uint8Array(b); let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return { name, base64: btoa(s) }; })); }; return true; })()`);
+    const takeSaved = async (seconds = 30) => {
+      for (let i = 0; i < seconds * 10 && !/^(Exported|Saved) /.test(await win('document.getElementById("status").textContent')); i++) await sleep(100);
+      const files = await win("Promise.all(window.__saved.splice(0))");
+      await win('document.getElementById("status").textContent = "", true');
+      return Object.fromEntries(files.map((f) => [f.name, Buffer.from(f.base64, "base64")]));
+    };
+    const byMenu = async (group, kind, seconds) => {
+      await win("window.__saved.length = 0");
+      await win.click("#export-button");
+      if (group) await win.click(`#export-menu [data-group="${group}"]`);
+      await win.click(`#export-menu [data-export="${kind}"]`);
+      return takeSaved(seconds);
+    };
+    return { takeSaved, byMenu };
+  };
+  const { takeSaved, byMenu } = await menuTools(w);
+  const menuRows = () => w(`[...document.querySelectorAll("#export-menu .level:not([hidden]) [role=menuitem]")].filter((b) => !b.hidden).map((b) => b.querySelector("span").textContent).join(", ")`);
+  const focused = () => w(`document.activeElement.querySelector("span")?.textContent ?? document.activeElement.id`);
+  const names = (files) => Object.keys(files).join(", ");
+  const exported = [];
+  const pdfOK = (b) => { const t = b?.toString("latin1") ?? ""; return t.startsWith("%PDF-1.4") && t.trimEnd().endsWith("%%EOF") && /\/MediaBox \[0 0 1190\.551 841\.89\]/.test(t); };
+  const dxfOK = (b) => { const d = b ? (readDXFFile(b.toString("utf8"))) : { problems: ["no file"], entities: [] }; return { ok: !d.problems.length && d.entities.length > 0, n: d.entities.length, problems: d.problems.slice(0, 2) }; };
+  const { readDXF: readDXFFile } = await import("./check-dxf.mjs");
+
+  // Shut, the menu is one word; open, a few things people want.
+  await w.click("#export-button");
+  const topRows = await menuRows();
+  check(topRows === "3D print, Drawing, CAD and 3D apps, Picture, Video, Web page", `the Export menu opens on six choices, no floor plan for a part (${topRows})`);
+  await w.key("Escape");
+  check((await w('document.getElementById("export-menu").hidden')) && (await focused()) === "export-button", "Escape shuts it and gives the focus back to Export");
+
+  // 3D print: STL as shells, STL as one solid, 3MF.
+  const stlOut = (b) => (b ? stlClosed({ base64: b.toString("base64") }) : null);
+  const shellsM = await byMenu("print", "stl");
+  const shellsMOut = stlOut(shellsM["model.stl"]);
+  check(/valid, closed mesh/.test(shellsMOut ?? "") && /size 40 x 40 x 27 mm/.test(shellsMOut), `3D print > STL saves model.stl, closed, 40 x 40 x 27 mm (${names(shellsM)}; ${shellsMOut?.match(/triangles \d+/)?.[0]})`);
+  exported.push("stl");
+  const solidM = await byMenu("print", "solid");
+  const solidMOut = stlOut(solidM["model.stl"]);
+  const tri = (out) => Number(out?.match(/triangles (\d+)/)?.[1]);
+  check(/valid, closed mesh/.test(solidMOut ?? "") && tri(solidMOut) < tri(shellsMOut), `3D print > STL, one solid saves one closed solid with fewer triangles (${tri(solidMOut)}, ${tri(shellsMOut)} as shells)`);
+  exported.push("solid");
+  const m3M = await byMenu("print", "3mf");
+  const r3M = m3M["model.3mf"] ? check3MF(m3M["model.3mf"]) : { problems: ["no file"], objects: [] };
+  check(!r3M.problems.length && r3M.objects.map((o) => o.name).join(", ") === "Base, Peg", `3D print > 3MF saves both parts, named and closed (${names(m3M)}; ${r3M.problems.slice(0, 2).join("; ") || r3M.objects.map((o) => o.name).join(", ")})`);
+  exported.push("3mf");
+
+  // CAD and 3D apps: STEP, glTF, OBJ with its MTL, PLY.
+  const stM = await byMenu("apps", "step");
+  const rsM = stM["model.step"] ? checkStep(stM["model.step"].toString("latin1")) : { problems: ["no file"], parts: [] };
+  check(!rsM.problems.length && rsM.parts.map((p) => p.name).join(", ") === "Base, Peg", `CAD and 3D apps > STEP saves both parts as solids (${names(stM)}; ${rsM.problems.slice(0, 2).join("; ") || rsM.parts.map((p) => p.name).join(", ")})`);
+  exported.push("step");
+  const glbM = await byMenu("apps", "glb");
+  const rgM = glbM["model.glb"] ? checkGLB(glbM["model.glb"]) : { problems: ["no file"], parts: [] };
+  check(!rgM.problems.length && rgM.parts.map((p) => p.name).join(", ") === "Base, Peg", `CAD and 3D apps > glTF saves both parts, closed (${names(glbM)}; ${rgM.problems.slice(0, 2).join("; ") || rgM.parts.map((p) => p.triangles).join(", ")} triangles)`);
+  exported.push("glb");
+  const objM = await byMenu("apps", "obj");
+  const roM = objM["model.obj"] && objM["model.mtl"] ? checkOBJ(objM["model.obj"].toString(), objM["model.mtl"].toString()) : { problems: ["no OBJ and MTL"], parts: [] };
+  check(!roM.problems.length && roM.mtllib === "model.mtl" && roM.parts.map((p) => p.name).join(", ") === "Base, Peg", `CAD and 3D apps > OBJ saves model.obj and the model.mtl it names (${names(objM)}; ${roM.problems.slice(0, 2).join("; ") || roM.parts.map((p) => p.material?.name).join(", ")})`);
+  exported.push("obj");
+  const plyM = await byMenu("apps", "ply");
+  const rpM = plyM["model.ply"] ? checkPLY(plyM["model.ply"]) : { problems: ["no file"], parts: [] };
+  check(!rpM.problems.length && rpM.parts.map((p) => `${p.name} ${p.colors}`).join(", ") === "Base #4f7cac, Peg #d9a441", `CAD and 3D apps > PLY saves both parts coloured (${names(plyM)}; ${rpM.problems.slice(0, 2).join("; ") || rpM.parts.length})`);
+  exported.push("ply");
+
+  // Drawing, by the keys: Enter on Export, down to Drawing, right into its
+  // formats (PDF first), Enter. Escape in the formats goes back a step.
+  await w('document.getElementById("export-button").focus(), true');
+  await w.key("Enter");
+  const firstFocus = await focused();
+  await w.key("ArrowUp");
+  const wrapped = await focused();
+  await w.key("Home");
+  await w.key("ArrowDown");
+  await w.key("Enter");
+  const inDrawing = [await menuRows(), await focused()];
+  await w.key("Escape");
+  const backOut = [await menuRows(), await focused(), await w('document.getElementById("export-menu").hidden')];
+  await w.key("ArrowRight");
+  const inAgain = await focused();
+  await w.key("ArrowLeft");
+  const leftBack = await focused();
+  check(firstFocus === "3D print" && wrapped === "Web page" && inDrawing[0] === "Drawing, PDF, SVG, DXF, Outline, DXF" && inDrawing[1] === "PDF", `the keys move through the menu, round from the top to the bottom, and Enter opens Drawing on its formats with PDF ready (${firstFocus}, ${wrapped}; ${inDrawing.join("; ")})`);
+  check(backOut[1] === "Drawing" && backOut[0] === topRows && !backOut[2] && inAgain === "PDF" && leftBack === "Drawing", `Escape and the left arrow step back to the choices on Drawing, the right arrow goes in again (${backOut[1]}, ${inAgain}, ${leftBack})`);
+  await w.key("ArrowRight");
+  await w.key("Enter");
+  const pdfM = await takeSaved();
+  check(pdfOK(pdfM["model.pdf"]), `Drawing > PDF saves an A3 PDF (${names(pdfM)}, ${pdfM["model.pdf"]?.length} bytes)`);
+  exported.push("pdf");
+  const svgM = await byMenu("drawing", "svg");
+  const svgText = svgM["model.svg"]?.toString() ?? "";
+  check(/^<\?xml[^>]*>[\s\S]*?<svg [^>]*width="420mm" height="297mm"/.test(svgText) && /id="view-front"/.test(svgText), `Drawing > SVG saves the A3 sheet (${names(svgM)}, ${svgText.length} bytes)`);
+  exported.push("svg");
+  const dxfM = dxfOK((await byMenu("drawing", "dxf"))["model.dxf"]);
+  check(dxfM.ok, `Drawing > DXF saves a well-formed DXF (${dxfM.n} entities${dxfM.problems.length ? `; ${dxfM.problems}` : ""})`);
+  exported.push("dxf");
+  const outM = dxfOK((await byMenu("drawing", "outline"))["model-outline.dxf"]);
+  check(outM.ok, `Drawing > Outline, DXF saves model-outline.dxf (${outM.n} entities${outM.problems.length ? `; ${outM.problems}` : ""})`);
+  exported.push("outline");
+
+  // One click each: a picture and a web page (the video is below, on a lighter model).
+  const pngM = (await byMenu(null, "png"))["model.png"];
+  check(pngM?.subarray(1, 4).toString() === "PNG" && pngM.readUInt32BE(16) > 0, `Picture saves model.png (${pngM?.readUInt32BE(16)} x ${pngM?.readUInt32BE(20)})`);
+  exported.push("png");
+  const htmlM = (await byMenu(null, "html"))["model.html"];
+  const rhM = htmlM ? checkHTML(htmlM.toString()) : { problems: ["no file"], size: [] };
+  check(!rhM.problems.length && rhM.size.join(" x ") === "40 x 40 x 27", `Web page saves model.html, 40 x 40 x 27 mm (${rhM.problems.slice(0, 2).join("; ") || `${htmlM.length} bytes`})`);
+  exported.push("html");
 
   // The same model as a drawing: a well-formed SVG sheet with three views,
   // a section through both parts, and the overall sizes (40 x 40, and 27
@@ -184,7 +289,7 @@ try {
       title: doc.querySelector("#title-block #scale")?.textContent,
       side: doc.querySelector("#view-left") ? "left" : "right",
       fields: Object.fromEntries(["created-by", "approved-by", "owner", "number", "revision", "date", "document-type", "title", "projection"].map((id) => [id, doc.querySelector("#title-block #" + id)?.textContent ?? ""])),
-      menu: document.querySelector('#export-menu [data-export="svg"] span')?.textContent,
+      menu: document.querySelector('#export-menu [data-group="drawing"] span')?.textContent,
     };
   })()`);
   const dr = await call("export_drawing");
@@ -218,7 +323,7 @@ try {
   check(baseOut.counts.POLYLINE === 1 && loop.closed && baseOut.bounds.map((v) => Math.round(v * 100) / 100).join() === "-20,-20,20,20", `and through the base: one closed 40 x 40 mm outline (${baseOut.bounds})`);
   const svgOut = await call("export_drawing", { outline: "top" });
   check(svgOut.result?.format === "svg" && /width="4[12](\.\d+)?mm"/.test(bytesOf(svgOut).toString()) && svgOut.result.circles === 1 && svgOut.result.closed_outlines === 1 && /PDF/.test((await call("export_drawing", { outline: "top", format: "pdf" })).error ?? ""), `a view's outline as SVG at true size, and no PDF of an outline (${svgOut.result?.line ?? svgOut.error})`);
-  check((await w('[...document.querySelectorAll("#export-menu [data-export]")].map((b) => b.dataset.export).join()')).includes("svg,pdf,dxf,outline"), "the Export menu offers the drawing as SVG, PDF and DXF, and the outline");
+  check((await w('[...document.querySelectorAll("#export-menu [data-level=drawing] [data-export]")].map((b) => b.dataset.export).join()')) === "pdf,svg,dxf,outline", "the Export menu's Drawing offers the sheet as PDF, SVG and DXF, and the outline");
   // Holes, sized from the script by the app's workers, and hidden edges on request.
   await call("set_model", { script: readFileSync(new URL("./models/bracket.js", import.meta.url), "utf8") });
   const holes = await call("export_drawing", { hidden_edges: true });
@@ -314,12 +419,25 @@ try {
       rooms: [...doc.querySelectorAll("#rooms .room")].map((g) => g.getAttribute("data-room") + " " + g.getAttribute("data-area")).join(", "),
       walls: (doc.querySelector("#walls .cut-walls")?.getAttribute("d") ?? "").split("M").length - 1,
       fields: ["created-by", "number", "document-type", "scale"].map((id) => doc.querySelector("#" + id)?.textContent ?? "").join(" | "),
-      menu: document.querySelector('#export-menu [data-export="plan"] span')?.textContent,
+      menu: document.querySelector('#export-menu [data-group="plan"] span')?.textContent,
     };
   })()`);
   check(houseSet.result?.building?.rooms.length === 6 && fp.result && !planSheet.error && planSheet.size === "420mm x 297mm" && fp.result.scale === "1:50", `the house's floor plan is an A3 sheet at 1:50 (${fp.error ?? planSheet.error ?? `${planSheet.size}, ${fp.result.scale}`})`);
   check(planSheet.rooms === "Living room 12.59, Bedroom 2 10.40, Hall 6.58, Bathroom 2.24, Kitchen 11.03, Bedroom 1 8.82" && planSheet.walls === 9, `with every room and its area, and the cut walls in nine pieces (the nine openings at 1200 split the outer ring; each inner wall joins one) (${planSheet.rooms}; ${planSheet.walls} wall outlines)`);
   check(/^Ana Ruiz \| [\w-]+ \| Floor plan \| 1:50$/.test(planSheet.fields) && planSheet.menu === "Floor plan" && !/angle/.test(fp.result?.line ?? "angle"), `the title block is filled in as for a drawing, the line says no projection, and the Export menu offers it (${planSheet.fields}; ${fp.result?.line})`);
+  // For a building the menu has Floor plan too, and its three formats save.
+  await w.click("#export-button");
+  const houseRows = await menuRows();
+  await w.key("Escape");
+  check(houseRows === "3D print, Drawing, Floor plan, CAD and 3D apps, Picture, Video, Web page", `for a building the Export menu has seven choices, Floor plan among them (${houseRows})`);
+  const planFile = (files, ext) => Object.entries(files).find(([n]) => n.endsWith(`-plan.${ext}`))?.[1];
+  const planPdf = await byMenu("plan", "plan-pdf");
+  check(pdfOK(planFile(planPdf, "pdf")), `Floor plan > PDF saves an A3 PDF (${names(planPdf)})`);
+  const planSvg = await byMenu("plan", "plan");
+  check(/<svg[^>]*width="420mm" height="297mm"/.test(planFile(planSvg, "svg")?.toString() ?? "") && /data-room="Kitchen"/.test(planFile(planSvg, "svg")?.toString()), `Floor plan > SVG saves the plan with its rooms (${names(planSvg)})`);
+  const planDxf = dxfOK(planFile(await byMenu("plan", "plan-dxf"), "dxf"));
+  check(planDxf.ok, `Floor plan > DXF saves a well-formed DXF (${planDxf.n} entities${planDxf.problems.length ? `; ${planDxf.problems}` : ""})`);
+  exported.push("plan-pdf", "plan", "plan-dxf");
 
   // The number belongs to the document: kept through Claude rewriting the
   // script, a new one for New, and each document's own back through undo.
@@ -1069,7 +1187,22 @@ joint("Rod", "Piston", top);` });
   check(/cancelled/.test(cancelled.error ?? "") && /^Recording video/.test(showing || ""), `cancel stops the recording with no film (${cancelled.error}; the line said "${showing}")`);
   check((await v('document.getElementById("recording").hidden')) && JSON.stringify(await canvasSize()) === JSON.stringify(sizeBefore), "the progress line goes and the view is back at the window's size");
   check(/no longer here/.test((await vc("video_part", { id: (slow.result.id ?? 0) + 3, index: 0 })).error ?? ""), "nothing is left to fetch after a cancel");
-  check(await v('Boolean(document.querySelector("[data-export=video]"))'), "the Export menu has Video (turntable)");
+  // Export > Video from the menu: one turn, three of the arm's 4 s loops, so
+  // 12 s. Small and at 6 frames a second, so software drawing films it in
+  // time; a person's film is 1920 x 1080 at 30.
+  const vMenu = await menuTools(v);
+  await v("window.__draftsman.filmSize({ width: 160, height: 90, fps: 6 })");
+  const filmStart = Date.now();
+  const videoM = await vMenu.byMenu(null, "video", 300);
+  await v("window.__draftsman.filmSize(undefined)");
+  const mp4M = videoM["Spinner.mp4"];
+  const stsdAt = mp4M ? mp4M.indexOf("stsd") : -1, avc1At = stsdAt >= 0 ? mp4M.indexOf("avc1", stsdAt) : -1, mdhdAt = mp4M ? mp4M.indexOf("mdhd") : -1;
+  const filmSize = avc1At >= 0 ? `${mp4M.readUInt16BE(avc1At + 28)} x ${mp4M.readUInt16BE(avc1At + 30)}` : "?";
+  const filmSeconds = mdhdAt >= 0 ? mp4M.readUInt32BE(mdhdAt + 20) / mp4M.readUInt32BE(mdhdAt + 16) : NaN;
+  check(mp4M?.toString("latin1", 4, 8) === "ftyp" && filmSize === "160 x 90" && filmSeconds === 12, `Video saves the turn as an MP4 of whole loops (${Object.keys(videoM).join(", ")}, ${filmSize}, ${filmSeconds} s, ${mp4M?.length} bytes; recorded in ${Math.round((Date.now() - filmStart) / 1000)} s)`);
+  exported.push("video");
+  const inMenu = await v(`[...document.querySelectorAll("#export-menu [data-export]")].map((b) => b.dataset.export).sort().join()`);
+  check(inMenu === [...exported].sort().join(), `every one of the menu's ${inMenu.split(",").length} exports was made from it and its file checked (${exported.length})`);
   // A film shows the view as it is: with the arm hidden, or the model cut,
   // its frames differ from the whole model's, and the view keeps that state.
   const oneFrame = async () => (await vc("record_video", { shots: [{ seconds: 0.1, camera: { view: "iso" }, motion: false }], width: 160, height: 90, test: { hashes: true } })).result?.hashes?.[0];
