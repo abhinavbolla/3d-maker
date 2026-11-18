@@ -19,14 +19,18 @@ const FIT_TIMEOUT_MS = 60000;
 // Moments of the motion loop checked for parts hitting each other.
 const FIT_FRAMES = 120;
 
-function createPool() {
+// spawn: makes one worker. The app uses web workers; the MCP server, with no
+// app window open, passes one that makes Node worker threads (mcp/headless.mjs).
+const webWorker = () => new Worker(new URL("../kernel/worker.js", import.meta.url), { type: "module" });
+
+function createPool(spawnWorker) {
   const workers = [];
   const queue = [];
   const low = []; // background jobs: run only when nothing else waits
   let seq = 0;
 
   function spawn(w = { job: null }) {
-    w.worker = new Worker(new URL("../kernel/worker.js", import.meta.url), { type: "module" });
+    w.worker = spawnWorker();
     w.job = null;
     w.worker.onmessage = ({ data }) => {
       const job = w.job;
@@ -120,8 +124,8 @@ export function exportDetail(parts, budget = EXPORT_BUDGET) {
   return { cell, budgets: est.map((e) => Math.max(2000, Math.round(e / cell ** 2))) };
 }
 
-export function createKernel() {
-  const job = createPool();
+export function createKernel({ spawn = webWorker } = {}) {
+  const job = createPool(spawn);
   const cache = new Map(); // quality|budget|maxCell|hash -> mesh
   let fineCache = new Map(); // the latest fine meshes only (they are big)
 
