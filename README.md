@@ -25,7 +25,7 @@
 | Mechanisms that move, with joint and collision checks | ✅ |
 | A studio view with materials and shading in the creases, and CAD-style navigation | ✅ |
 | Looking inside: hide parts, cut the model open, explode it, and measure sizes, mass and distances | ✅ |
-| Export: PNG pictures; STL, 3MF, glTF, OBJ, PLY and STEP files | ✅ |
+| Export: PNG pictures; STL, 3MF, glTF, OBJ, PLY and STEP files; one HTML file to send to anyone | ✅ |
 | 2D drawings: views, a section, a detail, centre lines, overall sizes and hole dimensions, on A4 to A0, as SVG, PDF or DXF | ✅ |
 | Installers for macOS, Windows and Linux (unsigned), and examples to start from | ✅ |
 | Films: a camera Claude directs, turntables and shot lists, recorded frame by frame | ✅ |
@@ -58,7 +58,7 @@ npm start          # or in your browser, at http://localhost:5173
 - **Change a part.** Click it, then move its sliders or type "make this longer".
 - **Look around.** Drag to turn, right-drag or two fingers to slide, scroll or pinch to zoom. The view cube looks from any side.
 - **Undo.** ⌘Z undoes every change, Claude's included.
-- **Export** a PNG picture, a drawing sheet (SVG, PDF or DXF), an outline to cut, or an STL, 3MF, STEP, glTF, OBJ or PLY file.
+- **Export** a PNG picture, a drawing sheet (SVG, PDF or DXF), an outline to cut, or an STL, 3MF, STEP, glTF, OBJ or PLY file, or one HTML file that anyone can open and turn in a browser.
 
 The [guide](docs/using.md) has every gesture and key, and what Claude can draw.
 

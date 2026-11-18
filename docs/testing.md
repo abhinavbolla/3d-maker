@@ -16,6 +16,8 @@ node test/step-samples.mjs out-dir        # writes the STEP samples FreeCAD is a
 node test/outside-samples.mjs out-dir     # writes the GLB, OBJ, PLY, STL and DXF samples Blender and FreeCAD are asked to open
 node test/export-run.mjs runs/x/model.js  # loads a saved script and times its STL export
 node test/check-meshfile.mjs model.glb    # checks a GLB, OBJ (with its MTL) or PLY: names, sizes, every part closed
+node test/check-meshfile.mjs model.html   # checks an exported HTML file: nothing fetched, its packed meshes closed
+node test/htmlfile-run.mjs model.js [dir]  # exports a script as one HTML file, opens it from disk in Chrome (960x640 and 390x844), drags it both ways, checks the model stays centred and clear of the words, saves screenshots
 node test/meshfile-run.mjs model.js [dir]  # exports a script as GLB, OBJ and PLY, times and checks them, and loads the GLB with three.js
 node test/drawing-run.mjs model.js out.svg  # loads a script and saves its drawing sheet
 node test/drawing-run.mjs model.js out.pdf "" "" '{"format":"pdf"}'  # the same as PDF (or DXF)

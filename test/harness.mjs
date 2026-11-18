@@ -34,8 +34,10 @@ export async function startHarness({ port = 5178 } = {}) {
   await new Promise((ok, fail) => ((cdp.onopen = ok), (cdp.onerror = fail)));
   let seq = 0;
   const waiting = new Map();
+  const listeners = new Map(); // sessionId -> (method, params) => void
   cdp.onmessage = (e) => {
     const m = JSON.parse(e.data);
+    if (m.method) return listeners.get(m.sessionId)?.(m.method, m.params);
     const w = waiting.get(m.id);
     if (!w) return;
     waiting.delete(m.id);
@@ -70,6 +72,48 @@ export async function startHarness({ port = 5178 } = {}) {
       await sleep(100);
     }
     throw new Error("The app did not start in Chrome.");
+  }
+
+  // Opens any page (a file:// one, say) in a window of its own, watching it:
+  // requests holds every URL it asked for, errors every console error and
+  // uncaught exception. dark: prefer the dark colour scheme.
+  async function openPage(url, { width = 960, height = 640, dark = false } = {}) {
+    const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+    const requests = [], errors = [];
+    listeners.set(sessionId, (method, p) => {
+      if (method === "Network.requestWillBeSent") requests.push(p.request.url);
+      else if (method === "Runtime.consoleAPICalled" && p.type === "error") errors.push(p.args.map((a) => a.value ?? a.description).join(" "));
+      else if (method === "Runtime.exceptionThrown") errors.push(p.exceptionDetails.exception?.description ?? p.exceptionDetails.text);
+      else if (method === "Log.entryAdded" && p.entry.level === "error") errors.push(p.entry.text);
+    });
+    for (const domain of ["Network", "Runtime", "Log", "Page"]) await send(domain + ".enable", {}, sessionId);
+    await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
+    await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
+    await send("Page.navigate", { url }, sessionId);
+    const evaluate = async (expression) => {
+      const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
+      return r.result.value;
+    };
+    const mouse = (type, x, y, extra = {}) => send("Input.dispatchMouseEvent", { type, x, y, ...extra }, sessionId);
+    return {
+      evaluate,
+      requests,
+      errors,
+      // A PNG of the page, in base64.
+      screenshot: async () => (await send("Page.captureScreenshot", { format: "png" }, sessionId)).data,
+      // Presses a mouse button at from, moves to to in steps, and lets go.
+      async drag(from, to, { button = "left", steps = 12 } = {}) {
+        const buttons = { left: 1, right: 2, middle: 4 }[button];
+        await mouse("mouseMoved", ...from);
+        await mouse("mousePressed", ...from, { button, buttons, clickCount: 1 });
+        for (let i = 1; i <= steps; i++) await mouse("mouseMoved", from[0] + ((to[0] - from[0]) * i) / steps, from[1] + ((to[1] - from[1]) * i) / steps, { button, buttons });
+        await mouse("mouseReleased", ...to, { button, buttons: 0, clickCount: 1 });
+      },
+      wheel: (x, y, deltaY) => mouse("mouseWheel", x, y, { deltaX: 0, deltaY }),
+      close: () => (listeners.delete(sessionId), send("Target.closeTarget", { targetId })),
+    };
   }
 
   // Types a prompt into a window's prompt box and waits for Claude to finish.
@@ -118,7 +162,7 @@ export async function startHarness({ port = 5178 } = {}) {
     }
   }
 
-  return { openWindow, prompt, command, stlIsClosed, close };
+  return { openWindow, openPage, prompt, command, stlIsClosed, close };
 }
 
 // Collects named checks and prints them as they run.

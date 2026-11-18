@@ -1,10 +1,12 @@
-// Validates a glTF binary (.glb), OBJ (with its MTL) or binary PLY file,
+// Validates a glTF binary (.glb), OBJ (with its MTL), binary PLY or
+// self-contained HTML file,
 // reading it with code of its own, not the writers'. For every part: its
 // name, triangles, bounds in our millimetres with Z up, and that its mesh is
 // closed (every edge, by vertex position, met once each way). For a GLB
 // also the chunks, accessors, materials and animation; for an OBJ its MTL;
-// for a PLY each vertex's colour.
-// Usage: node test/check-meshfile.mjs model.glb|model.obj|model.ply
+// for a PLY each vertex's colour; for an HTML file that nothing in it reaches
+// outside the file, and its packed meshes, looks and motion.
+// Usage: node test/check-meshfile.mjs model.glb|model.obj|model.ply|model.html
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -279,10 +281,79 @@ export function checkPLY(buf) {
   return { format: "ply", vertices: V.length, faces: F.length, parts, problems };
 }
 
+// ---- HTML ----
+// What a browser could fetch: a URL with a scheme or protocol-relative, an
+// attribute that loads something, CSS that does, or a script that asks.
+const REACHES_OUT = /https?:|\/\/|\bsrc\s*=|\bhref\s*=|url\(|@import|\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|\bimport\s*\(|<link|<iframe|<img|<object|<embed/i;
+
+export function checkHTML(text) {
+  const problems = [];
+  if (!/^<!doctype html>/i.test(text) || !/<\/html>\s*$/.test(text)) problems.push("not a whole HTML document");
+  if (!/<meta http-equiv="Content-Security-Policy" content="default-src 'none';/.test(text)) problems.push("no content security policy that blocks the network");
+  const data = /<script type="application\/json" id="model">([\s\S]*?)<\/script>/.exec(text);
+  if (!data) throw new Error("no model data in the HTML file");
+  // The page without its data (base64 has slashes of its own).
+  const page = text.slice(0, data.index) + text.slice(data.index + data[0].length);
+  const out = REACHES_OUT.exec(page);
+  if (out) problems.push(`the page reaches outside the file: "${page.slice(Math.max(0, out.index - 30), out.index + 30)}"`);
+  const scripts = [...page.matchAll(/<script\b([^>]*)>/g)];
+  if (scripts.length !== 1 || scripts[0][1].trim()) problems.push(`${scripts.length} scripts besides the data; expected one, inline`);
+  const model = JSON.parse(data[1]);
+  const typed = (s, T) => {
+    const b = Buffer.from(s, "base64");
+    if (b.length % T.BYTES_PER_ELEMENT) problems.push("packed data of a broken length");
+    const copy = new Uint8Array(b.length - (b.length % T.BYTES_PER_ELEMENT));
+    copy.set(b.subarray(0, copy.length));
+    return new T(copy.buffer);
+  };
+  let frameCount = null;
+  const parts = model.parts.map((p) => {
+    // A part's pieces, joined into one mesh.
+    const qs = [], ns = [], ts = [];
+    let base = 0;
+    for (const m of p.meshes) {
+      const q = typed(m.pos, Uint16Array), nb = typed(m.nrm, Int8Array), t = typed(m.idx, Uint16Array);
+      if (q.length % 3 || nb.length !== q.length) problems.push(`${p.name}: positions and normals do not match`);
+      if (t.length % 3) problems.push(`${p.name}: indices are not whole triangles`);
+      if (t.some((v) => v >= q.length / 3)) problems.push(`${p.name}: a triangle points past its piece's vertices`);
+      for (let i = 0; i < q.length; i++) qs.push(q[i]), ns.push(nb[i]);
+      for (const v of t) ts.push(v + base);
+      base += q.length / 3;
+    }
+    const q = qs, nb = ns, tris = ts;
+    const pos = new Float64Array(q.length), normals = new Float64Array(q.length);
+    for (let i = 0; i < q.length; i++) pos[i] = model.lo[i % 3] + q[i] * model.step[i % 3];
+    for (let i = 0; i < q.length; i += 3) {
+      const l = Math.hypot(nb[i], nb[i + 1], nb[i + 2]);
+      if (l < 100) problems.push(`${p.name}: a normal of length ${(l / 127).toFixed(2)}`);
+      for (let k = 0; k < 3; k++) normals[i + k] = nb[i + k] / (l || 1);
+    }
+    const part = checkPart(p.name, pos, Array.from(tris), problems);
+    let volume = 0;
+    for (let t = 0; t < tris.length; t += 3) {
+      const [a, b, c] = [tris[t] * 3, tris[t + 1] * 3, tris[t + 2] * 3];
+      volume += (pos[a] * (pos[b + 1] * pos[c + 2] - pos[b + 2] * pos[c + 1]) - pos[a + 1] * (pos[b] * pos[c + 2] - pos[b + 2] * pos[c]) + pos[a + 2] * (pos[b] * pos[c + 1] - pos[b + 1] * pos[c])) / 6;
+    }
+    if (!(p.color?.length === 3 && p.color.every((c) => c >= 0 && c <= 1))) problems.push(`${p.name}: no colour`);
+    if (![p.metal, p.rough, p.alpha].every((v) => v >= 0 && v <= 1)) problems.push(`${p.name}: no look`);
+    let frames = null;
+    if (p.frames) {
+      frames = typed(p.frames, Float32Array);
+      if (frames.length % 12) problems.push(`${p.name}: poses are not whole`);
+      if (frameCount !== null && frames.length / 12 !== frameCount) problems.push(`${p.name}: ${frames.length / 12} poses, others ${frameCount}`);
+      frameCount = frames.length / 12;
+    }
+    return { ...part, pieces: p.meshes.length, volume, look: p.look, color: p.color, alpha: p.alpha, positions: pos, normals, indices: tris, frames };
+  });
+  if (frameCount && !(model.loop > 0)) problems.push("poses without a loop time");
+  return { format: "html", title: model.title, size: model.size, step: model.step, loop: model.loop, frames: frameCount ?? 0, parts, problems };
+}
+
 export function checkFile(file) {
   const ext = extname(file).toLowerCase();
   if (ext === ".glb") return checkGLB(readFileSync(file));
   if (ext === ".ply") return checkPLY(readFileSync(file));
+  if (ext === ".html") return checkHTML(readFileSync(file, "utf8"));
   if (ext === ".obj") {
     const text = readFileSync(file, "utf8");
     const lib = /^mtllib (.+)$/m.exec(text)?.[1];
@@ -297,7 +368,7 @@ export function checkFile(file) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const file = process.argv[2];
   if (!file) {
-    console.error("Usage: node test/check-meshfile.mjs model.glb|model.obj|model.ply");
+    console.error("Usage: node test/check-meshfile.mjs model.glb|model.obj|model.ply|model.html");
     process.exit(2);
   }
   const r = checkFile(file);

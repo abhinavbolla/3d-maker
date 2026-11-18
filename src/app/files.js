@@ -23,6 +23,7 @@ const FILTERS = {
   glb: { name: "glTF binary", extensions: ["glb"] },
   obj: { name: "OBJ mesh", extensions: ["obj"] },
   ply: { name: "PLY mesh", extensions: ["ply"] },
+  html: { name: "Web page", extensions: ["html"] },
 };
 // Files this big go to the desktop app as raw bytes, not as a list of
 // numbers in JSON, which for a video of tens of megabytes would be a few

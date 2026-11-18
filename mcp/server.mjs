@@ -381,6 +381,13 @@ tool(
 );
 
 tool(
+  "export_html",
+  "Export the model as one HTML file that opens in any browser with nothing installed and no network, to turn and zoom: its parts, colours, materials and motion. path defaults to ~/Downloads/<title>.html. Only do this when the user asks.",
+  { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },
+  async ({ path }) => save(await call("export_html"), path, "html"),
+);
+
+tool(
   "export_obj",
   "Export all visible parts as an OBJ file, one object per part with normals, in millimetres with Y up, and its colours and materials in an MTL file of the same name beside it. Parts are at rest, without motion. path defaults to ~/Downloads/<title>.obj. Only do this when the user asks.",
   { path: z.string().optional().describe("Absolute path, or relative to the home folder.") },

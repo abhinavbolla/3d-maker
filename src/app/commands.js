@@ -187,6 +187,7 @@ export function createCommands({ store, viewport, kernel }) {
     },
     export_floor_plan: async (args = {}) => (({ result, keep }) => (keep(), exported(result)))(await makeFloorPlan({ store, kernel }, args)),
     export_glb: async () => exported(await kernel.exportGLB(store.state.result ?? { parts: [] })),
+    export_html: async () => exported(await kernel.exportHTML(store.state.result ?? { parts: [] })),
     // mtl: the name of the MTL file the OBJ refers to; the MCP server writes
     // both files.
     export_obj: async ({ mtl } = {}) => {

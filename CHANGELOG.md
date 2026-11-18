@@ -48,6 +48,8 @@ Notable changes to Draftsman. The format follows
 - Export as glTF (.glb) with a named node, colour and material per part and the motion as an
   animation; OBJ with an MTL; and binary PLY coloured per vertex. From the Export menu, and for
   Claude as `export_glb`, `export_obj` and `export_ply`.
+- Export a model as one HTML file that opens in any browser with nothing installed and no network,
+  to turn, zoom and watch its motion: from the Export menu, and for Claude as `export_html`.
 - A studio view: a key light that casts shadows, a floor with a soft shadow and a faint
   reflection, and parts drawn as metal, paint, plastic, rubber or glass. Scripts can name a
   part's material.
