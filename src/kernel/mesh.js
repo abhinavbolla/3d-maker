@@ -326,7 +326,11 @@ const EMPTY_MESH = () => ({ positions: new Float32Array(0), indices: new Uint32A
 // budget: about how many surface cells to aim for. maxCell: refine, even past
 // the budget, until cells are about this small (mm; cells halve each level,
 // so they end up at most 1.41x maxCell), so the big parts of a model are as
-// detailed as the small ones. maxCells: hard cap.
+// detailed as the small ones. maxCells: hard cap. grid: a whole number that
+// shifts the grid a little (none for 0): parts exported into one file with
+// different numbers never share a vertex, even where they touch on the same
+// surface with the same box (a hull and the deck on it), which would weld
+// them together, edges with four triangles, in a slicer.
 // A flat part (a blade, a wing, a plate) is thin along one axis only. Cells
 // fine enough for its thickness everywhere would cost far too many, and cells
 // sized by its area leave its thin edges thinner than a cell, where they come
@@ -362,7 +366,7 @@ export function meshSDF(f, box, opts = {}) {
   return stretched.incomplete || stretched.cellSize > probe.cellSize * 1.01 ? meshGrid(f, box, opts) : stretched;
 }
 
-function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = false, minCell = 0, maxCell = Infinity } = {}, stretch = null, probe = false) {
+function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = false, minCell = 0, maxCell = Infinity, grid = 0 } = {}, stretch = null, probe = false) {
   // Stretched (see stretchFor): the grid works on the shape stretched by S.
   // Distances are measured before the stretch, so they never exceed the
   // stretched ones: still a safe underestimate for the search.
@@ -375,9 +379,10 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
 
   // ---- 1. coarse-to-fine search ----
   const pad = L * 0.01 + 1e-6;
-  const O = [box[0] - pad, box[1] - pad, box[2] - pad];
+  const shift = grid ? L * 0.004 * ((grid * 0.6180339887498949) % 1) : 0;
+  const O = [box[0] - pad - shift, box[1] - pad - shift, box[2] - pad - shift];
   let c = (L + 2 * pad) / 8;
-  const n0 = ext.map((e) => Math.max(1, Math.ceil((e + 2 * pad) / c)));
+  const n0 = ext.map((e) => Math.max(1, Math.ceil((e + 2 * pad + shift) / c)));
   let cells = [];
   for (let i = 0; i < n0[0]; i++) for (let j = 0; j < n0[1]; j++) for (let k = 0; k < n0[2]; k++) cells.push(i, j, k);
 

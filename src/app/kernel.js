@@ -198,6 +198,8 @@ export function createKernel({ spawn = webWorker } = {}) {
 
   // Closed meshes of every visible part, meshed in parallel at one cell size
   // for the whole model (see exportDetail): [{ name, color, positions, indices }].
+  // Each on a grid of its own (grid: its place), so parts that touch on one
+  // surface never share vertices, which would weld them in one STL.
   // With normals, each also has normals, with its vertices split along sharp
   // edges, and its material and motion frames.
   async function exportMeshes(parts, { normals = false } = {}) {
@@ -208,7 +210,7 @@ export function createKernel({ spawn = webWorker } = {}) {
         name: p.name,
         color: p.color,
         ...(normals ? { material: p.material, frames: p.frames } : {}),
-        ...(await job({ type: "export", node: p.node, budget: budgets[i], maxCell: cell, what: `Part "${p.name}"`, ...(normals ? { normals } : {}) }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
+        ...(await job({ type: "export", node: p.node, budget: budgets[i], maxCell: cell, grid: i, what: `Part "${p.name}"`, ...(normals ? { normals } : {}) }, MESH_TIMEOUT_MS, `Exporting part "${p.name}" took too long.`)),
       })),
     );
   }

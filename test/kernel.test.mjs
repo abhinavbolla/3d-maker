@@ -38,9 +38,10 @@ const mesh = (node, budget = 40000) => {
   return meshSDF(f, box, { budget });
 };
 
-// Closedness the way slicers see it: by vertex position, not index.
+// Closedness the way slicers see it: by vertex position, not index. With
+// several meshes, as one STL file of them all.
 function closedByPosition(m) {
-  const stl = toSTL([m]);
+  const stl = toSTL(Array.isArray(m) ? m : [m]);
   const dv = new DataView(stl.buffer);
   const ids = new Map();
   const edges = new Map();
@@ -244,6 +245,21 @@ test("a union of many parts gives exactly the nearest part's distance", () => {
     const want = Math.min(...each.map((q) => q.f(...p)));
     assert.ok(Math.abs(u.f(...p) - want) < 1e-12, `at ${p} union gives ${u.f(...p)}, nearest part ${want}`);
   }
+});
+
+test("parts that touch on one surface never weld together in one STL", () => {
+  // A hull and the deck on it: one shape cut in two, so the same box, the
+  // same grid and the same vertices where they meet, and in one STL the
+  // edges there had four triangles (the 12 m yacht's STL was not closed).
+  // Exported, each part has a grid of its own.
+  const r = runScript('const hull = ellipsoid(100, 40, 30); const lower = box(400, 400, 200).at(0, 0, -100); part("Hull", hull.common(lower)); part("Deck", hull.cut(lower));');
+  const both = (grids) => r.parts.map((p, i) => meshPart(p.node, { budget: 6000, grid: grids[i] }));
+  assert.ok(!closedByPosition(both([0, 0])), "on one grid they share vertices");
+  const apart = both([0, 1]);
+  assert.ok(closedByPosition(apart), "on grids of their own, one STL of both is closed");
+  close(apart.reduce((v, m) => v + meshVolume(m), 0), (4 / 3) * Math.PI * 100 * 40 * 30, 0.01, "their volume");
+  // Grid 0 is the grid the view meshes on.
+  assert.deepEqual(meshPart(r.parts[0].node, { budget: 6000, grid: 0 }).positions, meshPart(r.parts[0].node, { budget: 6000 }).positions);
 });
 
 test("3MF export: a valid zip with one named, coloured, closed object per part", async () => {

@@ -48,7 +48,7 @@ export const SMALL = 1 / 8;
 
 // Meshes a part: { positions, indices, normals?, cellSize, incomplete, volume }.
 // Without small pieces this is exactly meshSDF of the whole part.
-export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals = false }) {
+export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals = false, grid = 0 }) {
   const whole = compile(node);
   const pieces = splitPieces(node);
   if (pieces.length > 1) {
@@ -60,7 +60,7 @@ export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals =
     const small = compiled.filter((p) => extent(p.box) < L * SMALL || (boxVolume(p.box) < room && isThin(p, L)));
     if (small.length) {
       const big = compiled.filter((p) => !small.includes(p));
-      const opts = { maxCells, normals };
+      const opts = { maxCells, normals, grid };
       // Meshed in this order: the body (the big pieces together), then each small piece.
       const order = [];
       const meshes = [];
@@ -86,7 +86,7 @@ export function meshPart(node, { budget, maxCell = Infinity, maxCells, normals =
       return out;
     }
   }
-  const m = meshSDF(whole.f, whole.box, { budget, maxCell, maxCells, normals });
+  const m = meshSDF(whole.f, whole.box, { budget, maxCell, maxCells, normals, grid });
   m.volume = meshVolume(m);
   return m;
 }

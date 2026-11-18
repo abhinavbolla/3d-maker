@@ -170,6 +170,10 @@ Notable changes to Draftsman. The format follows
   walls no cell could hold were drawn a cell thick, with vertices up to 1.3 cells off the surface
   and up to 19 times their volume. Such parts are now meshed from the shape grown by half a cell,
   with every vertex taken back onto the true surface.
+- An STL of parts that touch on one surface (a hull and the deck on it, cut from one shape) is
+  closed. Such parts have the same box, so they were meshed on the same grid with the same
+  vertices where they meet, and welded in one file those edges had four triangles. Each exported
+  part now has a grid of its own.
 - Parts that spin fast about an axis away from the origin stay on it in the view. Between the
   motion's samples a part used to move its position and its turn apart, which put the
   helicopter's 1200 rpm tail rotor up to 3.2 m off its axis; it now turns about the axis itself.
