@@ -88,6 +88,9 @@ export async function startHarness({ port = 5178 } = {}) {
       await send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code: key, windowsVirtualKeyCode: code, text }, sessionId);
       await send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: code }, sessionId);
     };
+    // Makes this the window in front, so Chrome does not slow its timers
+    // as it does for a tab behind others (a long film needs that).
+    evaluate.front = () => send("Page.bringToFront", {}, sessionId);
     evaluate.screenshot = async () => Buffer.from((await send("Page.captureScreenshot", { format: "png" }, sessionId)).data, "base64");
     evaluate.emulate = async ({ width = 1280, height = 800, dark = false } = {}) => {
       await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale ?? 1, mobile: false }, sessionId);

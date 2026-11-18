@@ -1188,10 +1188,11 @@ joint("Rod", "Piston", top);` });
   check((await v('document.getElementById("recording").hidden')) && JSON.stringify(await canvasSize()) === JSON.stringify(sizeBefore), "the progress line goes and the view is back at the window's size");
   check(/no longer here/.test((await vc("video_part", { id: (slow.result.id ?? 0) + 3, index: 0 })).error ?? ""), "nothing is left to fetch after a cancel");
   // Export > Video from the menu: one turn, three of the arm's 4 s loops, so
-  // 12 s. Small and at 6 frames a second, so software drawing films it in
+  // 12 s. Small and at 24 frames a second, so software drawing films it in
   // time; a person's film is 1920 x 1080 at 30.
   const vMenu = await menuTools(v);
-  await v("window.__draftsman.filmSize({ width: 160, height: 90, fps: 6 })");
+  await v.front();
+  await v("window.__draftsman.filmSize({ width: 160, height: 90, fps: 24 })");
   const filmStart = Date.now();
   const videoM = await vMenu.byMenu(null, "video", 300);
   await v("window.__draftsman.filmSize(undefined)");
