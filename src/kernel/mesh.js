@@ -153,9 +153,14 @@ const THIN_CAP = 6;
 const WALLS = 0.01;
 // Hidden in more than this share, a wall would go missing over much of the
 // part: refine on if cells fine enough for it fit in WALL_CAP times the
-// budget (and in maxCells), or else draw it thicker (see meshGrid).
+// budget (and in maxCells), or else grow the grid's shape (see meshGrid).
 const LOST = 0.05;
 const WALL_CAP = 16;
+// Where the finished grid still misses thin detail (more than SLIVERS of
+// its cells, below, or THIN_WALLS of them with a hidden wall), its signs come
+// from the shape grown by INFLATE cells, its vertices from the true surface.
+const THIN_WALLS = 0.002;
+const INFLATE = 0.5;
 
 // Fraction of cells with detail thinner than the cell that the mesh would
 // miss: the centre is on the other side of the surface from all eight
@@ -384,8 +389,10 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   // f at this level's grid corners: looking for missed detail fills it, and
   // dual contouring goes on from it at the last level.
   let levelVals;
+  let found = null; // what the last level was found to miss, walls included
   for (let level = 0; ; level++) {
     levelVals = new Corners(f, O, c);
+    found = null;
     kept = [];
     centres = [];
     const lim = LIP * c * HALF_DIAG;
@@ -412,8 +419,12 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
       // probe looks for slivers only: walls are what stretching is for).
       let md = missedDetail(f, O, c, kept, centres, over, levelVals);
       if (!over) {
-        if (md.slivers <= 0.002 && (probe || (md = missedDetail(f, O, c, kept, centres, true, levelVals)).walls <= WALLS)) break;
+        if (md.slivers <= 0.002 && (probe || (md = missedDetail(f, O, c, kept, centres, true, levelVals)).walls <= WALLS)) {
+          if (!probe) found = md;
+          break;
+        }
       } else {
+        found = md;
         // Past the cap, only for walls going missing over much of the part,
         // and only if cells fine enough for them fit under WALL_CAP.
         if (md.walls <= LOST) break;
@@ -437,26 +448,82 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
     return { slivers: md.slivers, walls: md.walls, cellSize: c };
   }
 
-  // Cells too coarse for a wall thinner than them (a thin tube, a tilted
-  // sheet, a shell, at a small budget) would leave it in shreds or leave it
-  // out. Then the surface is moved out just enough for the wall to be a bit
-  // more than a cell thick, so it comes out whole: thicker than it is, but
-  // there.
   if (capped) {
-    const md = missedDetail(f, O, c, kept, centres, true, levelVals);
+    const md = (found = missedDetail(f, O, c, kept, centres, true, levelVals));
     if (md.walls > LOST) lost = md;
   }
-  let thickened = 0;
+  // Detail thinner than the cells: a blade's or a sail's edge tapering to
+  // nothing, a rim, a sheet or a tube wall thinner than a cell. The grid
+  // corners fall on either side of it, so plain dual contouring bites it
+  // away wherever no corner happens to land inside: a sawtooth edge, or a
+  // wall in shreds. Then the grid's signs come from the shape grown by half a
+  // cell (or enough to make the thinnest wall a cell thick), which every
+  // such edge and wall is thick enough to show in whole, and each place the
+  // grown surface crosses a grid edge is taken back to the true surface
+  // along its normal: with an exact distance, f's gradient there points
+  // straight at the nearest true point, f away. So the vertices sit on the
+  // true surface, sharp edges included, and a tapering edge ends where it
+  // really ends. A stretched grid leaves such parts to the plain one.
+  let inflate = 0;
   if (lost) {
-    const fs = f;
-    thickened = Math.max(0.05 * c, (1.1 * c - (lost.thickness || 0)) / 2);
-    f = (x, y, z) => fs(x, y, z) - thickened;
+    if (stretch) return { ...EMPTY_MESH(), incomplete: true };
+    inflate = Math.max(INFLATE * c, (1.1 * c - (lost.thickness || 0)) / 2);
+  } else if (!stretch) {
+    const md = found ?? missedDetail(f, O, c, kept, centres, true, levelVals);
+    if (md.slivers > SLIVERS || md.walls > THIN_WALLS) inflate = INFLATE * c;
   }
+  const ft = f; // the true surface
+  if (inflate) f = (x, y, z) => ft(x, y, z) - inflate;
 
   // ---- 2. dual contouring at cell size c ----
   const O0 = O[0], O1 = O[1], O2 = O[2];
-  const cornerVals = lost ? new Corners(f, O, c) : levelVals;
-  const corner = (i, j, k) => cornerVals.at(i, j, k);
+  const cornerVals = levelVals;
+  // Grown, a corner counts as inside only if the true surface really is
+  // near: f is often a loose distance (smooth unions, lofts), with dips that
+  // never reach the surface, which growing would turn into bumps. Followed
+  // down f's gradient, the surface must turn up within 1.5 times the growth.
+  const near = new NumMap();
+  const nearSurface = (x, y, z, d) => {
+    let walked = 0;
+    const tol = 0.1 * c;
+    for (let it = 0; it < 3; it++) {
+      if (d <= tol) return true;
+      if (walked + d > 1.5 * inflate) return false;
+      gradientAt(ft, x, y, z, c * 0.01, G1);
+      (x -= G1[0] * d), (y -= G1[1] * d), (z -= G1[2] * d);
+      walked += d;
+      d = ft(x, y, z);
+    }
+    return d <= tol;
+  };
+  // A vertex the tangent planes left well off the surface (where f is a
+  // loose distance, its planes are loose too) is stepped onto it, if that
+  // brings it closer and moves it less than a cell.
+  const P3 = new Float64Array(3);
+  const polish = (V) => {
+    const d0 = ft(V[0], V[1], V[2]);
+    if (Math.abs(d0) <= 0.1 * c) return;
+    let d = d0;
+    (P3[0] = V[0]), (P3[1] = V[1]), (P3[2] = V[2]);
+    for (let it = 0; it < 4 && Math.abs(d) > 0.02 * c; it++) {
+      gradientAt(ft, P3[0], P3[1], P3[2], c * 0.01, G1);
+      for (let a = 0; a < 3; a++) P3[a] -= G1[a] * d;
+      d = ft(P3[0], P3[1], P3[2]);
+    }
+    if (Math.abs(d) < Math.abs(d0) && Math.hypot(P3[0] - V[0], P3[1] - V[1], P3[2] - V[2]) < c) (V[0] = P3[0]), (V[1] = P3[1]), (V[2] = P3[2]);
+  };
+  const corner = !inflate
+    ? (i, j, k) => cornerVals.at(i, j, k)
+    : (i, j, k) => {
+        const v = cornerVals.at(i, j, k);
+        if (v < 0 || v >= inflate) return v - inflate;
+        const key = key3(i, j, k);
+        const s = near.place(key);
+        if (near.keys[s] === key) return near.vals[s];
+        const w = nearSurface(O[0] + i * c, O[1] + j * c, O[2] + k * c, v) ? v - inflate : v;
+        near.put(s, key, w);
+        return w;
+      };
   const faceVals = new NumMap();
   const faceCentre = (I, J, Kk) => {
     const key = key3x2(I, J, Kk);
@@ -537,10 +604,11 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
     out[o] = nx / len;
     out[o + 1] = ny / len;
     out[o + 2] = nz / len;
+    return len / (4 * eps); // how fast f changes there
   };
   const grad = (x, y, z, out, o) => {
-    worldNormal(x, y, z, out, o);
-    if (!stretch) return;
+    const slope = worldNormal(x, y, z, out, o);
+    if (!stretch) return slope;
     const nx = out[o] / S[0], ny = out[o + 1] / S[1], nz = out[o + 2] / S[2], len = Math.hypot(nx, ny, nz) || 1;
     out[o] = nx / len;
     out[o + 1] = ny / len;
@@ -578,7 +646,28 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
     H[n * 6] = x;
     H[n * 6 + 1] = y;
     H[n * 6 + 2] = z;
-    grad(x, y, z, H, n * 6 + 3);
+    const slope = grad(x, y, z, H, n * 6 + 3);
+    if (inflate) {
+      // Back onto the true surface along the normal: f there is inflate, so
+      // it is inflate / slope away (slope 1 for an exact distance). Where f
+      // is not exact (outside the sharp edge of an intersection, f's grown
+      // surface stays sharp where the true one is round), that point can be
+      // off the surface: then it steps down f's own gradient there, which
+      // finds the edge. The normal stays the grown surface's, the face that
+      // this crossing belongs to.
+      const nx = H[n * 6 + 3], ny = H[n * 6 + 4], nz = H[n * 6 + 5];
+      const k = 1 / Math.min(2, Math.max(0.5, slope));
+      let qx = x - nx * inflate * k, qy = y - ny * inflate * k, qz = z - nz * inflate * k;
+      for (let it = 0; it < 3; it++) {
+        const d = ft(qx, qy, qz);
+        if (Math.abs(d) < 0.005 * c) break;
+        gradientAt(ft, qx, qy, qz, c * 0.01, G1);
+        (qx -= G1[0] * d), (qy -= G1[1] * d), (qz -= G1[2] * d);
+      }
+      H[n * 6] = qx;
+      H[n * 6 + 1] = qy;
+      H[n * 6 + 2] = qz;
+    }
   };
 
   // One vertex per surface patch in each active cell.
@@ -647,7 +736,8 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
         hitAt[m] = edgeOf[e] * 6;
         patchEdges[m++] = e;
       }
-      solveVertex(H, hitAt, m, lx, ly, lz, c, V);
+      solveVertex(H, hitAt, m, lx, ly, lz, c, V, inflate);
+      if (inflate) polish(V);
       // Two patches in one cell must not share a point.
       if (g && Math.hypot(V[0] - px, V[1] - py, V[2] - pz) < 0.01 * c) for (let a = 0; a < 3; a++) V[a] += (H[hitAt[0] + a] - V[a]) * 0.1;
       (px = V[0]), (py = V[1]), (pz = V[2]);
@@ -678,7 +768,6 @@ function meshGrid(fw, boxw, { budget = 40000, maxCells = 3_000_000, normals = fa
   splitPinches(pos, idx);
   const positions = Float32Array.from(pos);
   const out = { positions, indices: Uint32Array.from(idx), cellSize: c, incomplete: incomplete || missing > 0 };
-  if (thickened) out.thickened = thickened / Math.max(...S);
   if (normals) {
     const nrm = new Float32Array(positions.length);
     for (let n = 0; n < pos.length; n += 3) worldNormal(pos[n], pos[n + 1], pos[n + 2], nrm, n);
@@ -1077,10 +1166,12 @@ function splitPinches(pos, idx) {
 }
 
 // Least-squares point closest to all tangent planes, pulled gently towards
-// their average so flat patches stay well placed, then kept inside the cell.
+// their average so flat patches stay well placed, then kept inside the cell
+// (grown by grow on every side: on a grown grid the true surface can lie up
+// to that far outside the cells its grown surface crosses).
 // H holds the crossings (point, then normal); at[0..n) are the places in it
 // of this patch's; the cell's low corner is (lx, ly, lz); the point goes to out.
-function solveVertex(H, at, n, lx, ly, lz, c, out) {
+function solveVertex(H, at, n, lx, ly, lz, c, out, grow = 0) {
   let mx = 0, my = 0, mz = 0;
   for (let q = 0; q < n; q++) {
     const o = at[q];
@@ -1111,11 +1202,19 @@ function solveVertex(H, at, n, lx, ly, lz, c, out) {
   // A solution far outside the cell means the planes barely meet (thin or
   // nearly flat detail); the average point is the safe choice there. Keeping
   // vertices a hair inside their cell stops neighbours from coinciding.
-  const m = 0.02 * c;
-  if (!(x >= lx - c / 2 && x <= lx + c * 1.5 && y >= ly - c / 2 && y <= ly + c * 1.5 && z >= lz - c / 2 && z <= lz + c * 1.5)) (x = mx), (y = my), (z = mz);
+  const m = 0.02 * c - grow, w = c / 2 + grow;
+  if (!(x >= lx - w && x <= lx + c + w && y >= ly - w && y <= ly + c + w && z >= lz - w && z <= lz + c + w)) (x = mx), (y = my), (z = mz);
   out[0] = Math.min(Math.max(x, lx + m), lx + c - m);
   out[1] = Math.min(Math.max(y, ly + m), ly + c - m);
   out[2] = Math.min(Math.max(z, lz + m), lz + c - m);
+  if (grow) {
+    // Outside its own cell, a vertex leans a little towards it, so the
+    // cells around a corner never all put theirs on the corner itself.
+    const k = 0.02 * c, lean = 0.005;
+    out[0] += (Math.min(Math.max(out[0], lx + k), lx + c - k) - out[0]) * lean;
+    out[1] += (Math.min(Math.max(out[1], ly + k), ly + c - k) - out[1]) * lean;
+    out[2] += (Math.min(Math.max(out[2], lz + k), lz + c - k) - out[2]) * lean;
+  }
 }
 
 // ---- mesh helpers ----

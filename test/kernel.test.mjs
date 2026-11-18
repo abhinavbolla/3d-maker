@@ -469,6 +469,80 @@ test("thin edges and thin rods come out whole, not bitten or speckled", () => {
   assert.equal(openEdges(w), 0);
 });
 
+// Distance from point p to triangle abc.
+function pointToTriangle(p, a, b, c) {
+  const sub = (u, v) => [u[0] - v[0], u[1] - v[1], u[2] - v[2]];
+  const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+  const cross = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const n = cross(sub(b, a), sub(c, a)), nn = dot(n, n);
+  if (nn > 0) {
+    const t = dot(sub(p, a), n) / nn, q = [p[0] - n[0] * t, p[1] - n[1] * t, p[2] - n[2] * t];
+    if ([[a, b], [b, c], [c, a]].every(([u, v]) => dot(cross(sub(v, u), sub(q, u)), n) >= 0)) return Math.abs(t) * Math.sqrt(nn);
+  }
+  let best = Infinity;
+  for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+    const e = sub(v, u), l = dot(e, e), t = l > 0 ? Math.max(0, Math.min(1, dot(sub(p, u), e) / l)) : 0;
+    best = Math.min(best, Math.hypot(p[0] - u[0] - e[0] * t, p[1] - u[1] - e[1] * t, p[2] - u[2] - e[2] * t));
+  }
+  return best;
+}
+
+test("thin tapered edges come out as clean lines, on the surface: a blade, a sail and a rim", () => {
+  // Each tapers to a knife edge, tilted against the grid. Before, the mesh bit
+  // the edge away wherever no grid corner fell inside it (a sawtooth 1.5 to
+  // 3.5 cells deep), or drew the whole part a cell thick, its vertices up to
+  // 1.3 cells off the surface and its volume up to 2.8 times too big.
+  const T = [17, 9], rad = Math.PI / 180;
+  const turn = ([x, y, z]) => {
+    let c = Math.cos(T[0] * rad), s = Math.sin(T[0] * rad);
+    [y, z] = [y * c - z * s, y * s + z * c];
+    (c = Math.cos(T[1] * rad)), (s = Math.sin(T[1] * rad));
+    return [x * c + z * s, y, -x * s + z * c];
+  };
+  const foil = (code, chord) => volumeOf(`part("A", extrude(airfoil("${code}", ${chord}), 1))`);
+  const cases = [
+    // [what, shape, a point on its knife edge at t in 0..1, exact volume]
+    ["blade", 'extrude(airfoil("0012", 60), 240)', (t) => [60, 0, -120 + 240 * t], 240 * foil("0012", 60)],
+    // A cambered 3% sail lofted from a 300 mm section to a 150 mm one.
+    ["sail", 'loft([[0, airfoil("6403", 300)], [600, airfoil("6403", 150)]])', (t) => [300 - 150 * t, 0, 600 * t], 200 * 1.75 * foil("6403", 300)],
+    ["rim", "revolve(polygon([[30, -4], [120, 0], [30, 4]]))", (t) => [120 * Math.cos(2 * Math.PI * t), 120 * Math.sin(2 * Math.PI * t), 0], 2 * Math.PI * 60 * 360],
+  ];
+  for (const [what, shape, edge, exact] of cases) {
+    const r = runScript(`part("A", ${shape}.rotateX(${T[0]}).rotateY(${T[1]}));`);
+    const { f, box } = compile(r.parts[0].node);
+    const pts = Array.from({ length: 241 }, (_, k) => turn(edge(0.02 + (0.96 * k) / 240)));
+    assert.ok(pts.every((p) => Math.abs(f(...p)) < 1e-3), `${what}: the edge points are on its edge`);
+    for (const budget of [3000, 12000]) {
+      const m = meshSDF(f, box, { budget });
+      const c = m.cellSize, name = `${what} at budget ${budget} (cell ${c.toFixed(2)} mm)`;
+      assert.equal(openEdges(m), 0, `${name} is not closed`);
+      assert.ok(closedByPosition(m), `${name} is not closed by position`);
+      close(meshVolume(m), exact, 0.01, `${name} volume`);
+      // Every vertex on the surface.
+      let off = 0;
+      for (let i = 0; i < m.positions.length; i += 3) off = Math.max(off, Math.abs(f(m.positions[i], m.positions[i + 1], m.positions[i + 2])));
+      assert.ok(off < 0.2 * c, `${name}: a vertex ${(off / c).toFixed(2)} cells off the surface`);
+      // The edge is all there: every point on it is on the mesh, so the
+      // mesh is its true size too.
+      const P = m.positions, I = m.indices;
+      let gap = 0;
+      for (const p of pts) {
+        let best = Infinity;
+        for (let t = 0; t < I.length; t += 3) {
+          const a = I[t] * 3;
+          if (Math.abs(P[a] - p[0]) > 4 * c || Math.abs(P[a + 1] - p[1]) > 4 * c || Math.abs(P[a + 2] - p[2]) > 4 * c) continue;
+          const v = (k) => [P[I[t + k] * 3], P[I[t + k] * 3 + 1], P[I[t + k] * 3 + 2]];
+          best = Math.min(best, pointToTriangle(p, v(0), v(1), v(2)));
+        }
+        gap = Math.max(gap, best);
+      }
+      assert.ok(gap < 0.4 * c, `${name}: the edge is bitten ${(gap / c).toFixed(2)} cells deep`);
+      const b = meshBounds(m);
+      for (let a = 0; a < 3; a++) assert.ok(b[a] < Math.min(...pts.map((p) => p[a])) + 0.1 * c && b[a + 3] > Math.max(...pts.map((p) => p[a])) - 0.1 * c, `${name}: size`);
+    }
+  }
+});
+
 test("a part can name its material", () => {
   const r = runScript('part("Tyre", sphere(10), { material: "rubber" }); part("Rim", sphere(5));');
   assert.equal(r.error, undefined);
@@ -724,25 +798,28 @@ test("thin plates, tubes, blades and pins never mesh to nothing or lose a wall",
     assert.ok(m.indices.length > 0, `${what} is empty`);
     assert.equal(openEdges(m), 0, `${what} is not closed`);
     assert.ok(Math.abs(meshVolume(m) / exact - 1) < tol, `${what}: volume ${meshVolume(m).toFixed(0)} of ${exact.toFixed(0)}`);
-    assert.equal(m.thickened, undefined, `${what} was drawn thicker`);
   }
   // Walls far thinner than any cell the budget allows (a 0.5 mm tube 400 mm
-  // long, a 0.8 mm shell, a tilted 3 mm sheet at a small budget) are drawn a
-  // little more than a cell thick, whole, instead of in shreds or not at all.
-  for (const [node, budget, exact, wall] of [
-    [tube(20, 0.5, 400), 1500, Math.PI * (400 - 19.5 ** 2) * 400, 0.5],
-    [tube(100, 0.8, 300), 1500, Math.PI * (100 ** 2 - 99.2 ** 2) * 300, 0.8],
-    [{ t: "shell", th: 0.8, c: { t: "box", s: [200, 150, 100] } }, 1500, 200 * 150 * 100 - 198.4 * 148.4 * 98.4, 0.8],
-    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 1500, 900000, 3],
+  // long, a 0.8 mm shell, a tilted 3 mm sheet at a small budget) come out
+  // whole, instead of in shreds or not at all, and at their true thickness:
+  // every vertex on the surface. (They used to be drawn a cell thick, with
+  // up to 19 times their volume.)
+  for (const [node, budget, exact] of [
+    [tube(20, 0.5, 400), 1500, Math.PI * (400 - 19.5 ** 2) * 400],
+    [tube(100, 0.8, 300), 1500, Math.PI * (100 ** 2 - 99.2 ** 2) * 300],
+    [{ t: "shell", th: 0.8, c: { t: "box", s: [200, 150, 100] } }, 1500, 200 * 150 * 100 - 198.4 * 148.4 * 98.4],
+    [{ t: "rotate", deg: [20, 35, 10], c: { t: "box", s: [1000, 300, 3] } }, 1500, 900000],
   ]) {
     const m = mesh(node, budget);
-    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget}`;
-    assert.ok(m.thickened > 0, `${what} was not drawn thicker`);
+    const what = `${JSON.stringify(node).slice(0, 70)} at budget ${budget} (cell ${m.cellSize.toFixed(1)} mm)`;
     assert.equal(openEdges(m), 0, `${what} is not closed`);
-    // Every wall is there: no less than the true volume, and no more than
-    // walls a cell and a half thick would hold.
+    assert.ok(closedByPosition(m), `${what} is not closed by position`);
     const v = meshVolume(m);
-    assert.ok(v > exact && v < exact * ((1.5 * m.cellSize) / wall), `${what}: volume ${v.toFixed(0)} of ${exact.toFixed(0)}`);
+    assert.ok(Math.abs(v / exact - 1) < 0.15, `${what}: volume ${v.toFixed(0)} of ${exact.toFixed(0)}`);
+    const { f } = compile(node);
+    let worst = 0;
+    for (let i = 0; i < m.positions.length; i += 3) worst = Math.max(worst, Math.abs(f(m.positions[i], m.positions[i + 1], m.positions[i + 2])));
+    assert.ok(worst < 0.15 * m.cellSize, `${what}: a vertex ${worst.toFixed(2)} mm off the surface`);
   }
   // A part through meshPart, as the app meshes it, the same.
   const p = meshPart({ t: "box", s: [200, 120, 1] }, { budget: 20000, normals: true });
